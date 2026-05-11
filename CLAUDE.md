@@ -6,6 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 BriskaBlast is a multiplayer online game. The codebase is split into three top-level packages: `client`, `server`, and `shared`. Build tooling lives in `tools/`.
 
+## Technology Stack
+- windows
+- Ubunto
+- Linux
+- crossplatform play
+- godot 4 (c#)
+- Rust + go
+
 ## Architecture
 
 ### Client (`client/src/`)
