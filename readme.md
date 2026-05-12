@@ -25,3 +25,4 @@ The following docs are intended for contributors and developers working on the p
 | [`docs/setup.md`](docs/setup.md) | How to set up a local development environment and get the project running |
 | [`docs/testing.md`](docs/testing.md) | How to run tests across the client, server, and launcher |
 | [`docs/bugs.md`](docs/bugs.md) | Known issues and how to report bugs |
+| [`docs/workflows.md`](docs/workflows.md) | GitHub Actions CI and release workflows — what they do, how to enable them, and the tools used |
