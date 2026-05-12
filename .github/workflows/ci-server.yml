@@ -1,0 +1,43 @@
+# CI — Server (Go)
+# Temporarily disabled: trigger is manual only.
+# To re-enable, replace the `on` block with:
+#   on:
+#     push:
+#       branches: [main, experimental, dev]
+#       paths: [server/**]
+#     pull_request:
+#       paths: [server/**]
+
+name: CI — Server
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+        working-directory: server
+
+      - name: Vet
+        run: go vet ./...
+        working-directory: server
+
+      - name: Build
+        run: go build ./...
+        working-directory: server
+
+      - name: Test
+        run: go test ./...
+        working-directory: server

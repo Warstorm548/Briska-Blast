@@ -1,0 +1,50 @@
+# CI — Launcher (Rust + Iced)
+# Temporarily disabled: trigger is manual only.
+# To re-enable, replace the `on` block with:
+#   on:
+#     push:
+#       branches: [main, experimental, dev]
+#       paths: [launcher/**]
+#     pull_request:
+#       paths: [launcher/**]
+
+name: CI — Launcher
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher -> target
+
+      - name: Check formatting
+        run: cargo fmt --check
+        working-directory: launcher
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+        working-directory: launcher
+
+      - name: Build
+        run: cargo build --release
+        working-directory: launcher
+
+      - name: Test
+        run: cargo test
+        working-directory: launcher

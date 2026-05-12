@@ -1,0 +1,105 @@
+# Release — Client (Rust + Bevy)
+# Temporarily disabled: trigger is manual only.
+# To re-enable, replace the `on` block with:
+#   on:
+#     push:
+#       tags: ['v*.*.*']
+
+name: Release — Client
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    name: Build Linux (AppImage + tar.gz)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client -> target
+
+      - name: Build release binary
+        run: cargo build --release
+        working-directory: client
+
+      - name: Package tar.gz
+        run: |
+          mkdir -p dist
+          cp target/release/briskablast-client dist/
+          tar czf briskablast-client-linux.tar.gz -C dist briskablast-client
+        working-directory: client
+
+      - name: Download linuxdeploy
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+
+      - name: Build AppImage
+        # Requires: client/assets/briskablast-client.desktop and client/assets/icon.png
+        # Fill in these asset paths when the files exist.
+        run: |
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable client/target/release/briskablast-client \
+            --desktop-file client/assets/briskablast-client.desktop \
+            --icon-file client/assets/icon.png \
+            --output appimage
+        env:
+          OUTPUT: briskablast-client-linux.AppImage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-linux
+          path: |
+            client/briskablast-client-linux.tar.gz
+            briskablast-client-linux.AppImage
+
+  build-windows:
+    name: Build Windows (.exe installer)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client -> target
+
+      - name: Build release binary
+        run: cargo build --release
+        working-directory: client
+
+      - name: Install NSIS
+        run: choco install nsis --yes
+
+      - name: Build installer
+        run: makensis tools/installer/client.nsi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-windows
+          path: BriskaBlast-Client-Setup.exe
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

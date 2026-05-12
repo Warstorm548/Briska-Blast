@@ -1,0 +1,76 @@
+# Release — Server (Go)
+# Temporarily disabled: trigger is manual only.
+# To re-enable, replace the `on` block with:
+#   on:
+#     push:
+#       tags: ['v*.*.*']
+
+name: Release — Server
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    name: Build Linux (tar.gz)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Build release binary
+        run: go build -o briskablast-server ./...
+        working-directory: server
+
+      - name: Package tar.gz
+        run: tar czf briskablast-server-linux.tar.gz -C server briskablast-server
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-linux
+          path: briskablast-server-linux.tar.gz
+
+  build-windows:
+    name: Build Windows (.zip)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Build release binary
+        run: go build -o briskablast-server.exe ./...
+        working-directory: server
+
+      - name: Package zip
+        run: Compress-Archive -Path server/briskablast-server.exe -DestinationPath briskablast-server-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-windows
+          path: briskablast-server-windows.zip
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

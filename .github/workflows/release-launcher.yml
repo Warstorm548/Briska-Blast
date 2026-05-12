@@ -1,0 +1,105 @@
+# Release — Launcher (Rust + Iced)
+# Temporarily disabled: trigger is manual only.
+# To re-enable, replace the `on` block with:
+#   on:
+#     push:
+#       tags: ['v*.*.*']
+
+name: Release — Launcher
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    name: Build Linux (AppImage + tar.gz)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher -> target
+
+      - name: Build release binary
+        run: cargo build --release
+        working-directory: launcher
+
+      - name: Package tar.gz
+        run: |
+          mkdir -p dist
+          cp target/release/briskablast-launcher dist/
+          tar czf briskablast-launcher-linux.tar.gz -C dist briskablast-launcher
+        working-directory: launcher
+
+      - name: Download linuxdeploy
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+
+      - name: Build AppImage
+        # Requires: launcher/assets/briskablast-launcher.desktop and launcher/assets/icon.png
+        # Fill in these asset paths when the files exist.
+        run: |
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable launcher/target/release/briskablast-launcher \
+            --desktop-file launcher/assets/briskablast-launcher.desktop \
+            --icon-file launcher/assets/icon.png \
+            --output appimage
+        env:
+          OUTPUT: briskablast-launcher-linux.AppImage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher-linux
+          path: |
+            launcher/briskablast-launcher-linux.tar.gz
+            briskablast-launcher-linux.AppImage
+
+  build-windows:
+    name: Build Windows (.exe installer)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher -> target
+
+      - name: Build release binary
+        run: cargo build --release
+        working-directory: launcher
+
+      - name: Install NSIS
+        run: choco install nsis --yes
+
+      - name: Build installer
+        run: makensis tools/installer/launcher.nsi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher-windows
+          path: BriskaBlast-Launcher-Setup.exe
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
