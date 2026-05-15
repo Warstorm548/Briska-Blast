@@ -2,33 +2,53 @@
 
 BriskaBlast is split into four top-level packages plus build tooling.
 
-## Client (`client/src/`)
-Rust + Bevy project using ECS — game logic lives in systems and components, not OOP hierarchies.
-- `core/` — app lifecycle, bootstrapping
-- `game/` — game loop, entities, state
-- `rendering/` — draw calls, scene graph, shaders (GLSL in `assets/shaders/`)
-- `networking/` — connection to relay server, message handling
-- `input/` — keyboard/mouse/gamepad handling
-- `audio/` — sound playback, asset loading
-- `ui/` — menus, HUD, overlays
-- `assets/` — static assets: sprites, fonts, shaders, audio, config
+## Client (`client/`)
+Godot 4 + C# project using Godot's scene/node tree. Game logic lives in C# scripts attached to nodes.
+- `scenes/` — `.tscn` scene files (game, UI, menus, HUD)
+- `scripts/` — C# scripts mirroring the scene hierarchy
+  - `game/` — game loop, entities, state machines
+  - `networking/` — WebRTC peer connections, server message handling
+  - `input/` — keyboard/mouse/gamepad handling
+  - `audio/` — sound playback and audio bus management
+  - `ui/` — menu, HUD, and overlay logic
+- `assets/` — sprites, fonts, shaders, audio, config
+- `addons/` — Godot plugins and third-party addons
 
 ## Server (`server/src/`)
-Go server handling real-time relay and session management.
-- `relay/` — real-time message relay between players
-- `session/` — per-game session state management
+Rust + Axum server on Tokio. Handles player identity, session signaling, version enforcement, and the admin panel. Session state is backed by Redis.
+
+**Built:**
+- `main.rs` — entry point; wires router, state, middleware, startup seed logic
+- `config.rs` — environment variable loading with defaults
+- `error.rs` — unified `AppError` type implementing `IntoResponse`
+- `state.rs` — shared `AppState` holding Redis pool and rate limiters
+- `api/` — HTTP route handlers
+  - `register.rs` — `POST /register` — player identity issuance
+  - `host.rs` — `POST /host` — session creation and code generation
+  - `join.rs` — `POST /join` — session join and joiner endpoint exchange
+  - `session.rs` — `GET /session/{code}` and `DELETE /session/{code}`
+- `middleware/` — Tower middleware
+  - `version.rs` — `X-Launcher-Version` and `X-Game-Version` enforcement (HTTP 426)
+- `admin/` — password-protected web admin panel
+  - `auth.rs` — login, logout, bcrypt session handling
+  - `dashboard.rs` — dashboard display and all config update handlers
+  - `templates.rs` — HTML page functions (no template engine dependency)
+
+**Planned (future milestones):**
+- `relay/` — real-time message relay between players once P2P is established
+- `session/` — in-game session state management (scores, host promotion, reconnection)
 - `matchmaking/` — lobby and player matching logic
-- `api/` — HTTP endpoints (auth, stats, etc.)
-- `config/` — environment/runtime configuration
 
 ## Shared (`shared/`)
-Platform-agnostic code imported by both client and server — no browser APIs, no OS-specific built-ins.
-- `protocol/` — message types and serialization for client↔server communication
-- `types/` — shared domain types
-- `utils/` — pure utility functions
+Rust library crate shared between `server/` and `launcher/`. No OS-specific built-ins.
+The Godot client uses equivalent C# types defined in `client/scripts/`.
+- `src/protocol/messages.rs` — request/response types for all server endpoints
+- `src/types/player.rs` — `PlayerId` type with sequential formatting
+- `src/types/session.rs` — `SessionStatus` enum
+- `src/utils/` — pure utility functions
 
 ## Launcher (`launcher/`)
-Rust + Iced standalone app that runs before the game. See [`devtools.md`](devtools.md) for the dev branch channel.
+Rust + Iced standalone binary that runs before the game. See [`devtools.md`](devtools.md) for the dev branch channel.
 - `src/ui/` — launcher window, screens, layout components
 - `src/auth/` — login, account creation, token/session storage
 - `src/updater/` — core update engine
@@ -42,6 +62,14 @@ Rust + Iced standalone app that runs before the game. See [`devtools.md`](devtoo
 - `src/config/` — runtime config, env vars, launch flags
 - `assets/` — launcher-specific backgrounds, icons, fonts
 - `tests/` — launcher integration tests
+
+## Infrastructure
+- **Docker + Docker Compose** — server and Redis run in containers for portable redeployment
+- **Redis** — session storage, player registry, and runtime config with TTL auto-expiry; `appendonly yes` ensures the player counter survives restarts
+- **Portainer** — web GUI for container management (start/stop/logs/env vars)
+- **Admin Panel** — password-protected web UI at `/admin` for managing runtime config (version gates, bind address, password) without container restarts
+- **Systemd / Docker restart policies** — keeps containers alive across reboots
+- **GitHub Actions** — CI/CD: auto-build and deploy on push to main
 
 ## Tools (`tools/`)
 - `build/` — build scripts and bundler configuration

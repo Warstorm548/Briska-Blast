@@ -6,13 +6,46 @@
 
 ## Constraints
 
-- `shared/` must remain fully platform-agnostic: no browser APIs, no Node.js/OS built-ins.
-- Serialization format and message types are defined in `shared/protocol/` and imported by both sides.
+- `shared/` is a Rust library crate shared between `server/` and `launcher/`. It must remain fully platform-agnostic: no browser APIs, no OS-specific built-ins.
+- The Godot 4 + C# client uses equivalent types defined in `client/scripts/` — it cannot directly import the Rust shared crate.
+- Serialization format: JSON over HTTP for all signaling endpoints.
 
 ## Message Flow
 
 ```
-Client (Rust/Bevy)  <-->  shared/protocol/  <-->  Server (Go relay)
+Godot 4 + C# Client  <-->  Rust + Axum Server  <-->  Redis (session state)
+                                    ^
+                             shared/protocol/
+                        (Rust types: server + launcher)
 ```
 
-All relay messages pass through the Go relay server in `server/src/relay/`. Session state is managed in `server/src/session/`.
+After the signaling handshake completes, the server is not involved in game traffic. Both clients communicate directly via UDP hole-punch.
+
+## Signaling Endpoints
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/register` | POST | First-contact: issue player ID + secret token |
+| `/host` | POST | Host registers external IP:port, receives session code |
+| `/join` | POST | Joiner submits external IP:port + code, receives host IP:port |
+| `/session/{code}` | GET | Host polls to discover when joiner has arrived |
+| `/session/{code}` | DELETE | Explicit session teardown (frees code immediately) |
+
+## Hole-Punch Flow
+
+```
+Host                    Server                   Joiner
+  |-- POST /host -------->|                         |
+  |<-- {session_code} ----|                         |
+  |                        |<-- POST /join ----------|
+  |                        |    {code, joiner_ip}   |
+  |                        |--> {host_ip} ----------|
+  |-- GET /session/{code}->|                         |
+  |<-- {joiner_ip:port} ---|                         |
+  |<======= simultaneous UDP to each other =========>|
+  |<============= direct P2P connection =============>|
+```
+
+## Version Enforcement
+
+The server reads `X-Launcher-Version` on `/host` and `/join` requests. If the version is below `min_launcher_version` (stored in Redis), the server returns `426 Upgrade Required`. The minimum version is runtime-configurable — no redeploy needed.
