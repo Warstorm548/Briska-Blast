@@ -61,20 +61,20 @@ Redis (in Docker container)
 
 ### The Tens-Digit Pattern
 
-Ports are spaced by 10 between environments so the **tens digit identifies the environment**:
+Ports are allocated in per-environment pairs, with game/admin separated by +1:
 
-- 259**1**9 → prod
-- 259**2**9 → staging
-- 259**3**9 → dev
+- Prod: 25919 (game), 25920 (admin)
+- Staging: 25929 (game), 25930 (admin)
+- Dev: 25939 (game), 25940 (admin)
 
-This makes the port number self-documenting. When you see a port in a log or config file, you can tell which environment it belongs to at a glance.
+This keeps each environment in its own numeric block and makes environment ownership easy to spot in logs/config at a glance.
 
 ### Why This Range?
 
 Ports in the 25900s are:
 
-- Well above the IANA registered range (0–49151)
-- Unlikely to conflict with any standard service
+- Inside the IANA registered range (1024–49151), but outside commonly used defaults
+- Unlikely to conflict with standard services in most deployments
 - Memorable as a block
 
 If a port ever conflicts with another service on the dedi (a game-server panel, another project, etc.), pick the next free number in the same tens range. Example: if 25919 conflicts, try 25911 or 25917 — staying within the prod block so the tens digit still identifies the env.
@@ -283,9 +283,9 @@ sudo nano /etc/nginx/sites-available/briska-prod.conf
 # 3. Validate nginx config BEFORE reloading
 sudo nginx -t
 
-# 4. Restart the compose stack (server now binds to new port)
+# 4. Recreate the server container so new env values are applied
 cd ~/briska/prod
-docker compose restart server
+docker compose up -d --force-recreate server
 
 # 5. Reload nginx so it picks up the new config
 sudo nginx -s reload

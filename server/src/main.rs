@@ -95,6 +95,8 @@ async fn main() {
     // Two independent signal futures can't both receive SIGTERM (single-consumer),
     // so we use a broadcast channel so both servers drain cleanly.
     let (shutdown_tx, _sentinel) = tokio::sync::broadcast::channel::<()>(1);
+    let mut rx_game = shutdown_tx.subscribe();
+    let mut rx_admin = shutdown_tx.subscribe();
     let watcher_tx = shutdown_tx.clone();
     tokio::spawn(async move {
         let ctrl_c = tokio::signal::ctrl_c();
@@ -115,9 +117,6 @@ async fn main() {
         }
         watcher_tx.send(()).ok();
     });
-
-    let mut rx_game = shutdown_tx.subscribe();
-    let mut rx_admin = shutdown_tx.subscribe();
 
     let game_serve = axum::serve(
         game_listener,

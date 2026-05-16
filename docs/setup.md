@@ -90,7 +90,7 @@ MIN_GAME_VERSION=0.1.0
 ## First-Time Admin Setup
 
 1. Start the server via Docker Compose
-2. Visit `http://yourserver:25920/admin` in a browser
+2. Visit `http://localhost:25920/admin` from the host machine, or `https://your-domain/admin` if nginx is configured as the public entrypoint
 3. Log in with the default password: `@admin`
 4. The dashboard will show a warning banner — **change the password immediately** using the Change Password section
 5. Set your desired minimum versions for launcher and game

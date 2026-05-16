@@ -13,17 +13,24 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Self {
         dotenvy::dotenv().ok();
+        let game_port = match env::var("GAME_PORT") {
+            Ok(v) => v.parse::<u16>().unwrap_or_else(|_| {
+                panic!("invalid GAME_PORT '{v}': expected an integer in 0..=65535")
+            }),
+            Err(_) => 25919,
+        };
+        let admin_port = match env::var("ADMIN_PORT") {
+            Ok(v) => v.parse::<u16>().unwrap_or_else(|_| {
+                panic!("invalid ADMIN_PORT '{v}': expected an integer in 0..=65535")
+            }),
+            Err(_) => 25920,
+        };
+
         Self {
             redis_url: env::var("REDIS_URL")
                 .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
-            game_port: env::var("GAME_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(25919),
-            admin_port: env::var("ADMIN_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(25920),
+            game_port,
+            admin_port,
             session_ttl_secs: env::var("SESSION_TTL_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())

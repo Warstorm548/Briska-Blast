@@ -14,7 +14,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `ADMIN_PORT` (default `25920`) — serves all `/admin/*` endpoints exclusively
   - Requests to `/admin/*` on the game port return 404; requests to game endpoints on the admin port return 404 — route surfaces are physically separated
 - **Startup port logs** — server logs `INFO game listener bound to 0.0.0.0:{port}` and `INFO admin listener bound to 0.0.0.0:{port}` at startup
-- **Actionable bind-error messages** — if either port is already in use, the server logs the port, the error, and the env var to change (`GAME_PORT` or `ADMIN_PORT`), then exits non-zero
+- **Actionable bind-error messages** — once the process starts, if either in-process listener bind fails, the server logs the port, the error, and the env var to change (`GAME_PORT` or `ADMIN_PORT`), then exits non-zero
 - **Graceful shutdown on both listeners** — `SIGTERM` and Ctrl+C stop both listeners cleanly via a `tokio::sync::broadcast` channel (a single watcher task broadcasts to both servers so neither misses the signal)
 - **Server Ports section in admin dashboard** — read-only display of the game port and admin port the process started on, replacing the old runtime bind-address form
 - **`.env.example`** — template at repo root documenting `BIND_ADDR`, `GAME_PORT`, and `ADMIN_PORT` overrides
