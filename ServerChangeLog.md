@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.3.0] — 2026-05-16
+
+### Added
+
+- **`gamemode` field on sessions** — host sends `gamemode` in `POST /host`; server stores it in the Redis session object. Joiner receives `gamemode` in the `POST /join` response so the game client knows which mode to load, staying in sync with the host.
+  - `HostRequest` gains `gamemode: String`
+  - `Session` (Redis) gains `gamemode: String`
+  - `JoinResponse` gains `gamemode: String`
+
+---
+
 ## [0.2.0] — 2026-05-16
 
 ### Added
