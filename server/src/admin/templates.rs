@@ -1,8 +1,8 @@
 pub struct DashboardData {
     pub min_launcher_version: String,
     pub min_game_version: String,
-    pub active_bind_addr: String,
-    pub saved_bind_addr: String,
+    pub game_port: u16,
+    pub admin_port: u16,
     pub session_count: usize,
     pub player_count: u64,
     pub message: Option<(bool, String)>,
@@ -95,19 +95,10 @@ pub fn dashboard_page(data: &DashboardData) -> String {
         String::new()
     };
 
-    let bind_note = if data.active_bind_addr != data.saved_bind_addr {
-        format!(
-            r#"<p class="note">&#9888; Pending restart &mdash; will change to <strong>{}</strong> on next restart via Portainer.</p>"#,
-            escape(&data.saved_bind_addr)
-        )
-    } else {
-        String::new()
-    };
-
     let min_launcher = escape(&data.min_launcher_version);
     let min_game = escape(&data.min_game_version);
-    let active_bind = escape(&data.active_bind_addr);
-    let saved_bind = escape(&data.saved_bind_addr);
+    let game_port = data.game_port;
+    let admin_port = data.admin_port;
     let sessions = data.session_count;
     let players = data.player_count;
 
@@ -147,6 +138,21 @@ pub fn dashboard_page(data: &DashboardData) -> String {
     </div>
 
     <div class="section">
+      <p class="section-title">Server Ports</p>
+      <p class="section-sub">Fixed at startup — change via environment variable and restart.</p>
+      <div class="stats" style="margin-top:12px">
+        <div class="stat-box">
+          <div class="stat-num" style="font-size:1.2rem">{game_port}</div>
+          <div class="stat-lbl">Game Port (GAME_PORT)</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-num" style="font-size:1.2rem">{admin_port}</div>
+          <div class="stat-lbl">Admin Port (ADMIN_PORT)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
       <p class="section-title">Version Control</p>
       <p class="section-sub">Version Minimums to Join Game Sessions</p>
 
@@ -171,20 +177,6 @@ pub fn dashboard_page(data: &DashboardData) -> String {
           </div>
         </form>
       </div>
-    </div>
-
-    <div class="section">
-      <p class="section-title">Server Bind Address</p>
-      <p class="current" style="margin-top:10px">Active now: {active_bind}</p>
-      <p class="current">Saved: {saved_bind}</p>
-      {bind_note}
-      <form method="POST" action="/admin/update/bind-addr" style="margin-top:10px">
-        <div class="row">
-          <input type="text" name="bind_addr" placeholder="e.g. 0.0.0.0:8080" value="{saved_bind}" required>
-          <button type="submit" class="btn btn-sm">Save</button>
-        </div>
-      </form>
-      <p class="note">Takes effect after restarting the container in Portainer.</p>
     </div>
 
     <div class="section">

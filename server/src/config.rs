@@ -2,7 +2,8 @@ use std::env;
 
 pub struct Config {
     pub redis_url: String,
-    pub bind_addr: String,
+    pub game_port: u16,
+    pub admin_port: u16,
     pub session_ttl_secs: u64,
     pub min_launcher_version: String,
     pub min_game_version: String,
@@ -12,11 +13,24 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Self {
         dotenvy::dotenv().ok();
+        let game_port = match env::var("GAME_PORT") {
+            Ok(v) => v.parse::<u16>().unwrap_or_else(|_| {
+                panic!("invalid GAME_PORT '{v}': expected an integer in 0..=65535")
+            }),
+            Err(_) => 25919,
+        };
+        let admin_port = match env::var("ADMIN_PORT") {
+            Ok(v) => v.parse::<u16>().unwrap_or_else(|_| {
+                panic!("invalid ADMIN_PORT '{v}': expected an integer in 0..=65535")
+            }),
+            Err(_) => 25920,
+        };
+
         Self {
             redis_url: env::var("REDIS_URL")
                 .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
-            bind_addr: env::var("BIND_ADDR")
-                .unwrap_or_else(|_| "0.0.0.0:8080".to_string()),
+            game_port,
+            admin_port,
             session_ttl_secs: env::var("SESSION_TTL_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())

@@ -51,7 +51,8 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 
 - `shared/` is a Rust library crate — platform-agnostic, no OS-specific built-ins. See [`docs/protocol.md`](docs/protocol.md).
 - Dev tools ship on the `dev` branch only. See [`docs/devtools.md`](docs/devtools.md).
-- Server runtime config (`min_launcher_version`, `min_game_version`, bind address, admin password) lives in Redis and is managed via the admin panel — not hardcoded.
+- Server runtime config (`min_launcher_version`, `min_game_version`, admin password) lives in Redis and is managed via the admin panel — not hardcoded.
+- Bind address and ports (`GAME_PORT`, `ADMIN_PORT`) are deployment-time config via `.env` / `docker-compose.yml` — not managed at runtime.
 - Default admin password is `@admin` — seeded on first boot, must be changed immediately.
 - Player IDs are sequential and atomic (Redis `INCR`). Tokens use SHA-256. Admin password uses bcrypt.
 - Version comparisons always use the `semver` crate — never string comparison.

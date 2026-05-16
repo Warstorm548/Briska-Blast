@@ -44,11 +44,6 @@ pub struct VersionForm {
 }
 
 #[derive(Deserialize)]
-pub struct BindAddrForm {
-    pub bind_addr: String,
-}
-
-#[derive(Deserialize)]
 pub struct PasswordForm {
     pub current_password: String,
     pub new_password: String,

@@ -24,7 +24,6 @@ fn make_login_limiter() -> Arc<KeyedLimiter> {
 pub struct AppState {
     pub redis: Pool,
     pub config: Arc<Config>,
-    pub active_bind_addr: String,
     pub rl_register: Arc<KeyedLimiter>,
     pub rl_host: Arc<KeyedLimiter>,
     pub rl_join: Arc<KeyedLimiter>,
@@ -33,11 +32,10 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(redis: Pool, config: Config, active_bind_addr: String) -> Self {
+    pub fn new(redis: Pool, config: Config) -> Self {
         Self {
             redis,
             config: Arc::new(config),
-            active_bind_addr,
             rl_register: make_limiter(5),
             rl_host: make_limiter(10),
             rl_join: make_limiter(20),

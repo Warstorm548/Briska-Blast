@@ -5,6 +5,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.2.0] — 2026-05-16
+
+### Added
+
+- **Dual-port listeners** — game and admin endpoints now run as two independent Axum `TcpListener` instances inside the same process, sharing `AppState` and a broadcast-channel graceful shutdown
+  - `GAME_PORT` (default `25919`) — serves all player-facing endpoints: `/register`, `/host`, `/join`, `/session/{code}`
+  - `ADMIN_PORT` (default `25920`) — serves all `/admin/*` endpoints exclusively
+  - Requests to `/admin/*` on the game port return 404; requests to game endpoints on the admin port return 404 — route surfaces are physically separated
+- **Startup port logs** — server logs `INFO game listener bound to 0.0.0.0:{port}` and `INFO admin listener bound to 0.0.0.0:{port}` at startup
+- **Actionable bind-error messages** — once the process starts, if either in-process listener bind fails, the server logs the port, the error, and the env var to change (`GAME_PORT` or `ADMIN_PORT`), then exits non-zero
+- **Graceful shutdown on both listeners** — `SIGTERM` and Ctrl+C stop both listeners cleanly via a `tokio::sync::broadcast` channel (a single watcher task broadcasts to both servers so neither misses the signal)
+- **Server Ports section in admin dashboard** — read-only display of the game port and admin port the process started on, replacing the old runtime bind-address form
+- **`.env.example`** — template at repo root documenting `BIND_ADDR`, `GAME_PORT`, and `ADMIN_PORT` overrides
+
+### Changed
+
+- Docker port mappings now default to loopback-only (`127.0.0.1`) so ports are unreachable from other machines without a reverse proxy. Set `BIND_ADDR=0.0.0.0` in `.env` to expose directly (trusted dev environments only).
+- `docker-compose.yml` port entries parameterised: `${BIND_ADDR:-127.0.0.1}:${GAME_PORT:-25919}:${GAME_PORT:-25919}` and `${BIND_ADDR:-127.0.0.1}:${ADMIN_PORT:-25920}:${ADMIN_PORT:-25920}`
+- `server/Dockerfile` `EXPOSE` updated from `8080` to `25919` and `25920`
+
+### Removed
+
+- **Runtime bind-address toggle** — the admin dashboard form for changing `server:bind_addr` and the `/admin/update/bind-addr` endpoint are removed. Bind address is now deployment-time configuration (compose / `.env`), not runtime configuration.
+- `BIND_ADDR` environment variable removed from the container — Axum always binds `0.0.0.0` inside the container; host-side interface restriction is handled by Docker's port mapping.
+- `server:bind_addr` Redis key is no longer seeded or read.
+
+### Configuration
+
+| Environment Variable | Default | Purpose |
+|---|---|---|
+| `REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection string |
+| `GAME_PORT` | `25919` | Port for all player-facing game endpoints |
+| `ADMIN_PORT` | `25920` | Port for all `/admin/*` endpoints |
+| `SESSION_TTL_SECS` | `1800` | Game session TTL in seconds |
+| `MIN_LAUNCHER_VERSION` | `0.1.0` | Initial minimum launcher version (seeded to Redis on first boot) |
+| `MIN_GAME_VERSION` | `0.1.0` | Initial minimum game version (seeded to Redis on first boot) |
+| `ADMIN_PASSWORD` | `@admin` | Initial admin password (seeded to Redis on first boot as bcrypt hash) |
+| `RUST_LOG` | `info` | Tracing log level |
+
+> `BIND_ADDR` is a Docker Compose host-side variable (controls which host interface the ports are published on). It is **not** read by the server process.
+
+---
+
 ## [0.1.0] — 2026-05-15
 
 ### Added
@@ -57,7 +100,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 | Environment Variable | Default | Purpose |
 |---|---|---|
 | `REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection string |
-| `BIND_ADDR` | `0.0.0.0:8080` | Initial server bind address |
+| `BIND_ADDR` | `0.0.0.0:8080` | Server bind address (single listener, replaced in v0.2.0) |
 | `SESSION_TTL_SECS` | `1800` | Game session TTL in seconds |
 | `MIN_LAUNCHER_VERSION` | `0.1.0` | Initial minimum launcher version (seeded to Redis on first boot) |
 | `MIN_GAME_VERSION` | `0.1.0` | Initial minimum game version (seeded to Redis on first boot) |
