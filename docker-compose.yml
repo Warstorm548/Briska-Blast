@@ -4,13 +4,15 @@ services:
       context: .
       dockerfile: server/Dockerfile
     ports:
-      - "8080:8080"
+      - "${BIND_ADDR:-127.0.0.1}:${GAME_PORT:-25919}:${GAME_PORT:-25919}"
+      - "${BIND_ADDR:-127.0.0.1}:${ADMIN_PORT:-25920}:${ADMIN_PORT:-25920}"
     environment:
-      REDIS_URL: redis://redis:6379
-      BIND_ADDR: 0.0.0.0:8080
-      RUST_LOG: info
-      MIN_GAME_VERSION: 0.1.0
-      ADMIN_PASSWORD: "@admin"
+      - GAME_PORT=${GAME_PORT:-25919}
+      - ADMIN_PORT=${ADMIN_PORT:-25920}
+      - REDIS_URL=redis://redis:6379
+      - RUST_LOG=info
+      - MIN_GAME_VERSION=0.1.0
+      - ADMIN_PASSWORD=@admin
     depends_on:
       - redis
     restart: always

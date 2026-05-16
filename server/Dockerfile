@@ -13,5 +13,6 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/server /usr/local/bin/server
-EXPOSE 8080
+EXPOSE 25919
+EXPOSE 25920
 CMD ["server"]

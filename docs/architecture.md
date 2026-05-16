@@ -17,21 +17,25 @@ Godot 4 + C# project using Godot's scene/node tree. Game logic lives in C# scrip
 ## Server (`server/src/`)
 Rust + Axum server on Tokio. Handles player identity, session signaling, version enforcement, and the admin panel. Session state is backed by Redis.
 
+Two independent `TcpListener` instances run inside the same process and share `AppState`:
+- **Game listener** (`GAME_PORT`, default `25919`) — serves all player-facing endpoints
+- **Admin listener** (`ADMIN_PORT`, default `25920`) — serves all `/admin/*` endpoints exclusively
+
 **Built:**
-- `main.rs` — entry point; wires router, state, middleware, startup seed logic
-- `config.rs` — environment variable loading with defaults
+- `main.rs` — entry point; builds two independent routers, binds two listeners, wires graceful shutdown via broadcast channel
+- `config.rs` — environment variable loading with defaults (`GAME_PORT`, `ADMIN_PORT`, etc.)
 - `error.rs` — unified `AppError` type implementing `IntoResponse`
-- `state.rs` — shared `AppState` holding Redis pool and rate limiters
-- `api/` — HTTP route handlers
+- `state.rs` — shared `AppState` holding Redis pool and rate limiters (shared across both listeners)
+- `api/` — HTTP route handlers (game listener only)
   - `register.rs` — `POST /register` — player identity issuance
   - `host.rs` — `POST /host` — session creation and code generation
   - `join.rs` — `POST /join` — session join and joiner endpoint exchange
   - `session.rs` — `GET /session/{code}` and `DELETE /session/{code}`
 - `middleware/` — Tower middleware
   - `version.rs` — `X-Launcher-Version` and `X-Game-Version` enforcement (HTTP 426)
-- `admin/` — password-protected web admin panel
+- `admin/` — password-protected web admin panel (admin listener only)
   - `auth.rs` — login, logout, bcrypt session handling
-  - `dashboard.rs` — dashboard display and all config update handlers
+  - `dashboard.rs` — dashboard display and config update handlers
   - `templates.rs` — HTML page functions (no template engine dependency)
 
 **Planned (future milestones):**
@@ -67,7 +71,7 @@ Rust + Iced standalone binary that runs before the game. See [`devtools.md`](dev
 - **Docker + Docker Compose** — server and Redis run in containers for portable redeployment
 - **Redis** — session storage, player registry, and runtime config with TTL auto-expiry; `appendonly yes` ensures the player counter survives restarts
 - **Portainer** — web GUI for container management (start/stop/logs/env vars)
-- **Admin Panel** — password-protected web UI at `/admin` for managing runtime config (version gates, bind address, password) without container restarts
+- **Admin Panel** — password-protected web UI at `/admin` (admin port only) for managing runtime config (version gates, password) without container restarts
 - **Systemd / Docker restart policies** — keeps containers alive across reboots
 - **GitHub Actions** — CI/CD: auto-build and deploy on push to main
 

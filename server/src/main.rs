@@ -34,11 +34,12 @@ async fn main() {
 
     seed_defaults(&redis_pool, &cfg).await;
 
-    let bind_addr_str = resolve_bind_addr(&redis_pool, &cfg.bind_addr).await;
-    let bind_addr: SocketAddr = bind_addr_str.parse().expect("invalid bind address");
+    let game_port = cfg.game_port;
+    let admin_port = cfg.admin_port;
 
-    let state = state::AppState::new(redis_pool, cfg, bind_addr_str);
+    let state = state::AppState::new(redis_pool, cfg);
 
+    // Game router — no /admin routes
     let versioned = Router::new()
         .route("/host", post(api::host::host))
         .route("/join", post(api::join::join))
@@ -47,32 +48,90 @@ async fn main() {
             middleware::version::check_version,
         ));
 
-    let app = Router::new()
+    let game_router = Router::new()
         .route("/register", post(api::register::register))
         .route("/session/:code", get(api::session::get_session))
         .route("/session/:code", delete(api::session::close_session))
         .merge(versioned)
+        .layer(TraceLayer::new_for_http())
+        .with_state(state.clone());
+
+    // Admin router — no game routes
+    let admin_router = Router::new()
         .route("/admin", get(admin::auth::login_page))
         .route("/admin/login", post(admin::auth::login))
         .route("/admin/logout", post(admin::auth::logout))
         .route("/admin/dashboard", get(admin::dashboard::dashboard))
         .route("/admin/update/launcher-version", post(admin::dashboard::update_launcher_version))
         .route("/admin/update/game-version", post(admin::dashboard::update_game_version))
-        .route("/admin/update/bind-addr", post(admin::dashboard::update_bind_addr))
         .route("/admin/update/password", post(admin::dashboard::update_password))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    tracing::info!("listening on {}", bind_addr);
-    let listener = tokio::net::TcpListener::bind(bind_addr)
-        .await
-        .expect("failed to bind");
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
+    // Bind — fail fast with an actionable error message
+    let game_addr: SocketAddr = format!("0.0.0.0:{game_port}").parse().unwrap();
+    let game_listener = tokio::net::TcpListener::bind(game_addr).await
+        .unwrap_or_else(|e| {
+            tracing::error!(
+                "Failed to bind game listener to {game_addr}: {e}.\n      \
+                 HINT: set GAME_PORT in .env to a different value and restart."
+            );
+            std::process::exit(1);
+        });
+    tracing::info!("game listener bound to 0.0.0.0:{game_port}");
+
+    let admin_addr: SocketAddr = format!("0.0.0.0:{admin_port}").parse().unwrap();
+    let admin_listener = tokio::net::TcpListener::bind(admin_addr).await
+        .unwrap_or_else(|e| {
+            tracing::error!(
+                "Failed to bind admin listener to {admin_addr}: {e}.\n      \
+                 HINT: set ADMIN_PORT in .env to a different value and restart."
+            );
+            std::process::exit(1);
+        });
+    tracing::info!("admin listener bound to 0.0.0.0:{admin_port}");
+
+    // Graceful shutdown — one watcher task broadcasts () to both listeners.
+    // Two independent signal futures can't both receive SIGTERM (single-consumer),
+    // so we use a broadcast channel so both servers drain cleanly.
+    let (shutdown_tx, _sentinel) = tokio::sync::broadcast::channel::<()>(1);
+    let watcher_tx = shutdown_tx.clone();
+    tokio::spawn(async move {
+        let ctrl_c = tokio::signal::ctrl_c();
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate())
+                .expect("failed to install SIGTERM handler");
+            tokio::select! {
+                _ = ctrl_c => { tracing::info!("received Ctrl+C — shutting down"); }
+                _ = sigterm.recv() => { tracing::info!("received SIGTERM — shutting down"); }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            ctrl_c.await.ok();
+            tracing::info!("received Ctrl+C — shutting down");
+        }
+        watcher_tx.send(()).ok();
+    });
+
+    let mut rx_game = shutdown_tx.subscribe();
+    let mut rx_admin = shutdown_tx.subscribe();
+
+    let game_serve = axum::serve(
+        game_listener,
+        game_router.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .await
-    .unwrap();
+    .with_graceful_shutdown(async move { rx_game.recv().await.ok(); });
+
+    let admin_serve = axum::serve(
+        admin_listener,
+        admin_router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move { rx_admin.recv().await.ok(); });
+
+    tokio::try_join!(game_serve, admin_serve).unwrap();
 }
 
 async fn seed_defaults(pool: &deadpool_redis::Pool, cfg: &config::Config) {
@@ -84,10 +143,6 @@ async fn seed_defaults(pool: &deadpool_redis::Pool, cfg: &config::Config) {
         .unwrap_or(());
     let _: () = conn
         .set_nx("min_game_version", &cfg.min_game_version)
-        .await
-        .unwrap_or(());
-    let _: () = conn
-        .set_nx("server:bind_addr", &cfg.bind_addr)
         .await
         .unwrap_or(());
 
@@ -104,15 +159,4 @@ async fn seed_defaults(pool: &deadpool_redis::Pool, cfg: &config::Config) {
             let _: () = conn.set("admin:password_hash", hash).await.unwrap_or(());
         }
     }
-}
-
-async fn resolve_bind_addr(pool: &deadpool_redis::Pool, fallback: &str) -> String {
-    if let Ok(mut conn) = pool.get().await {
-        if let Ok(Some(addr)) = conn.get::<_, Option<String>>("server:bind_addr").await {
-            if !addr.is_empty() {
-                return addr;
-            }
-        }
-    }
-    fallback.to_string()
 }

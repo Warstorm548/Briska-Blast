@@ -5,13 +5,13 @@ use axum::{
 };
 use deadpool_redis::redis::AsyncCommands;
 use semver::Version;
-use std::{collections::HashMap, net::SocketAddr};
+use std::collections::HashMap;
 
 use crate::state::AppState;
 use super::{
     require_session,
     templates::{self, DashboardData},
-    BindAddrForm, PasswordForm, VersionForm,
+    PasswordForm, VersionForm,
 };
 
 pub async fn dashboard(
@@ -40,11 +40,6 @@ pub async fn dashboard(
         .await
         .unwrap_or_else(|_| state.config.min_game_version.clone());
 
-    let saved_bind: String = conn
-        .get("server:bind_addr")
-        .await
-        .unwrap_or_else(|_| state.active_bind_addr.clone());
-
     let player_count: u64 = conn.get("player:counter").await.unwrap_or(0u64);
 
     let session_keys: Vec<String> = redis::cmd("KEYS")
@@ -63,17 +58,15 @@ pub async fn dashboard(
 
     let message = if let Some(ok) = params.get("ok") {
         Some((true, ok.clone()))
-    } else if let Some(err) = params.get("err") {
-        Some((false, err.clone()))
     } else {
-        None
+        params.get("err").map(|err| (false, err.clone()))
     };
 
     let data = DashboardData {
         min_launcher_version: min_launcher,
         min_game_version: min_game,
-        active_bind_addr: state.active_bind_addr.clone(),
-        saved_bind_addr: saved_bind,
+        game_port: state.config.game_port,
+        admin_port: state.config.admin_port,
         session_count,
         player_count,
         message,
@@ -118,26 +111,6 @@ pub async fn update_game_version(
         Ok(mut conn) => {
             let _: () = conn.set("min_game_version", &form.version).await.unwrap_or(());
             Redirect::to(&format!("/admin/dashboard?ok=Game+version+set+to+{}", form.version)).into_response()
-        }
-        Err(_) => Redirect::to("/admin/dashboard?err=Redis+error").into_response(),
-    }
-}
-
-pub async fn update_bind_addr(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Form(form): Form<BindAddrForm>,
-) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
-    }
-    if form.bind_addr.parse::<SocketAddr>().is_err() {
-        return Redirect::to("/admin/dashboard?err=Invalid+address+format+%28use+0.0.0.0%3A8080%29").into_response();
-    }
-    match state.redis.get().await {
-        Ok(mut conn) => {
-            let _: () = conn.set("server:bind_addr", &form.bind_addr).await.unwrap_or(());
-            Redirect::to("/admin/dashboard?ok=Bind+address+saved.+Restart+container+in+Portainer+to+apply.").into_response()
         }
         Err(_) => Redirect::to("/admin/dashboard?err=Redis+error").into_response(),
     }

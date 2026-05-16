@@ -20,7 +20,7 @@
 docker compose up --build
 ```
 
-Server starts on `http://localhost:8080`. Redis starts alongside it with persistence enabled.
+Game server starts on `http://localhost:25919`. Admin panel starts on `http://localhost:25920`. Redis starts alongside both with persistence enabled.
 On first boot the server seeds all default config values into Redis automatically.
 
 To run in the background:
@@ -49,11 +49,12 @@ cargo run
 ```
 
 The server reads environment variables from a `.env` file in the project root if present.
-Create one to override defaults:
+Copy `.env.example` and edit as needed:
 
 ```
 REDIS_URL=redis://127.0.0.1:6379
-BIND_ADDR=0.0.0.0:8080
+GAME_PORT=25919
+ADMIN_PORT=25920
 RUST_LOG=debug
 ADMIN_PASSWORD=@admin
 MIN_LAUNCHER_VERSION=0.1.0
@@ -67,7 +68,8 @@ MIN_GAME_VERSION=0.1.0
 | Variable | Default | Description |
 |---|---|---|
 | `REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection string |
-| `BIND_ADDR` | `0.0.0.0:8080` | Address and port the server listens on |
+| `GAME_PORT` | `25919` | Port for all player-facing game endpoints |
+| `ADMIN_PORT` | `25920` | Port for all `/admin/*` endpoints |
 | `SESSION_TTL_SECS` | `1800` | How long a game session code lives in Redis (seconds) |
 | `MIN_LAUNCHER_VERSION` | `0.1.0` | Minimum launcher version to host or join a session (seeded to Redis on first boot) |
 | `MIN_GAME_VERSION` | `0.1.0` | Minimum game version to host or join a session (seeded to Redis on first boot) |
@@ -78,12 +80,17 @@ MIN_GAME_VERSION=0.1.0
 > to Redis on the very first boot (`SET NX`). After that, Redis is authoritative — use the
 > admin panel to change them. To reset, delete the Redis key and restart the container.
 
+> **Port binding:** Inside the container, Axum always binds `0.0.0.0`. The `BIND_ADDR` variable
+> in `docker-compose.yml` controls which host-side interface the ports are published on
+> (default: `127.0.0.1` — loopback only, safe behind a reverse proxy). Set `BIND_ADDR=0.0.0.0`
+> in `.env` to expose ports directly (trusted dev environments only).
+
 ---
 
 ## First-Time Admin Setup
 
 1. Start the server via Docker Compose
-2. Visit `http://yourserver:8080/admin` in a browser
+2. Visit `http://yourserver:25920/admin` in a browser
 3. Log in with the default password: `@admin`
 4. The dashboard will show a warning banner — **change the password immediately** using the Change Password section
 5. Set your desired minimum versions for launcher and game

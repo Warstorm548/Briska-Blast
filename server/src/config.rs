@@ -2,7 +2,8 @@ use std::env;
 
 pub struct Config {
     pub redis_url: String,
-    pub bind_addr: String,
+    pub game_port: u16,
+    pub admin_port: u16,
     pub session_ttl_secs: u64,
     pub min_launcher_version: String,
     pub min_game_version: String,
@@ -15,8 +16,14 @@ impl Config {
         Self {
             redis_url: env::var("REDIS_URL")
                 .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
-            bind_addr: env::var("BIND_ADDR")
-                .unwrap_or_else(|_| "0.0.0.0:8080".to_string()),
+            game_port: env::var("GAME_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(25919),
+            admin_port: env::var("ADMIN_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(25920),
             session_ttl_secs: env::var("SESSION_TTL_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())
