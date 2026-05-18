@@ -32,10 +32,21 @@ pub struct AppState {
     pub rl_session: Arc<KeyedLimiter>,
     pub rl_admin_login: Arc<KeyedLimiter>,
     pub update_tx: Arc<mpsc::Sender<UpdateCommand>>,
-    // Single-flight guard around `watchtower::trigger_update`. All apply
-    // paths (timer auto-apply, ApplyNow, scheduled apply, admin rollback)
-    // acquire this before triggering Watchtower so the Redis state writes
-    // around the trigger don't interleave. Watchtower itself is idempotent.
+    // Single-flight guard around the local Docker `:channel` ref AND
+    // `watchtower::trigger_update`. All paths that mutate the channel image
+    // tag — timer auto-apply, ApplyNow, scheduled apply, and admin rollback
+    // — acquire this before doing their Docker ops, so the registry pull in
+    // `pull_channel_image` cannot race the local retag in
+    // `retag_for_rollback`. Also keeps the Redis state writes around the
+    // Watchtower trigger from interleaving. Watchtower itself is idempotent.
+    //
+    // Single-writer assumption: this lock is sufficient only as long as this
+    // Rust process is the only writer to the daemon's `:channel` ref. If a
+    // second writer is ever introduced (manual `docker` CLI, Portainer,
+    // another launcher process), promote to a Redis-backed advisory lock
+    // keyed on the image ref — the Docker Engine API has no native
+    // tag/ref lock primitive (moby PR #37781 protects individual writes
+    // from corruption, not from last-write-wins ordering).
     pub update_apply_lock: Arc<Mutex<()>>,
 }
 

@@ -5,6 +5,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.4.3] — 2026-05-18
+
+Patch release — completes the rollback/auto-apply race fix that v0.4.2 started.
+v0.4.2 closed the READ side (auto-apply now re-reads Redis state under
+`update_apply_lock`); v0.4.3 closes the WRITE side (rollback's local Docker
+retag) plus a related fragility in the Watchtower-failure branch. No new
+admin-panel functionality; the rollback button's success path is unchanged,
+and the failure-path toast now reflects that auto-update is disabled.
+
+### Fixed — medium
+
+- **Rollback retag could be raced by an in-flight auto-apply
+  (`admin/dashboard.rs`)** — `retag_for_rollback` was called BEFORE acquiring
+  `update_apply_lock`. A concurrent `maybe_apply` (holding the lock) would
+  call `pull_channel_image`, which pulls `:channel` from the registry and
+  overwrites the local image ref that rollback just retagged. Depending on
+  interleaving the admin would see "Rollback triggered" with the new image
+  still live, or auto-apply would silently deploy the rollback image via the
+  wrong code path. Lock is now acquired before the retag, so both writers to
+  the local `:channel` ref serialise on the same mutex.
+
+### Fixed — smaller
+
+- **Watchtower-failure branch left a fragile state (`admin/dashboard.rs`)** —
+  when `watchtower::trigger_update` returned `false`, the local retag
+  persisted but the rollback safety lock was NOT set. The persisted retag
+  would be picked up correctly by a subsequent *Watchtower* trigger
+  (`WATCHTOWER_NO_PULL=true` means Watchtower itself never pulls — see
+  containrrr discussion #557), but our own auto-apply paths
+  (`maybe_apply` / `wait_and_apply` / `ApplyNow`) call `pull_channel_image`
+  from the registry before triggering Watchtower and WOULD overwrite the
+  persisted retag. The failure branch now sets `update:rollback_locked=true`
+  and `update:auto_enabled=false`, so subsequent auto-apply bails out under
+  `should_apply_after_lock`. `update:previous_version`, `available_version`,
+  and `found_at` are intentionally NOT deleted in the failure branch — the
+  rollback did not complete, so those values remain valid for a retry. The
+  failure toast now informs the admin that auto-update is disabled.
+- **Misleading comment on the Watchtower-failure branch
+  (`admin/dashboard.rs`)** — previously claimed "Watchtower's normal pull on
+  next attempt would handle the same operation"; this is wrong because
+  `WATCHTOWER_NO_PULL=true` was set in v0.4.1. Rewritten to describe the
+  actual reasoning behind the new safety lock.
+- **`update_apply_lock` doc comment broadened (`state.rs`)** — the lock now
+  serialises local Docker `:channel` ref mutations as well as Redis state
+  writes around the Watchtower trigger. Comment updated, and a note added
+  about the single-writer assumption (the lock is sufficient only as long as
+  this Rust process is the only writer to the daemon's `:channel` ref; the
+  Docker Engine API exposes no native tag/ref lock primitive — see moby
+  PR #37781).
+
+### Migration
+
+None. No new Redis keys, no new env vars, no new dependencies, no new admin
+endpoints. The rollback button's success-path behaviour is byte-identical;
+the failure-path now sets the same safety lock the success path does and
+the toast message communicates it. v0.4.2 can discover and apply v0.4.3
+through the existing GitHub Releases / Watchtower contract — neither was
+touched.
+
+---
+
 ## [0.4.2] — 2026-05-18
 
 Patch release — post-review correctness pass over the update system. Addresses

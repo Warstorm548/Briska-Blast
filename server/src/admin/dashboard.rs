@@ -401,6 +401,14 @@ pub async fn rollback_update(
 
     let versioned_tag = format!("v{}", version);
 
+    // Acquire the apply lock BEFORE retag_for_rollback. The retag mutates the
+    // local Docker `:channel` ref, and so does `maybe_apply` / `wait_and_apply`
+    // / `ApplyNow` via `pull_channel_image`. Both must serialise — v0.4.2
+    // closed the read side of this race (auto-apply re-reads state under the
+    // lock); v0.4.3 closes the write side by widening the lock to cover the
+    // retag itself.
+    let _guard = state.update_apply_lock.lock().await;
+
     match crate::update::docker::retag_for_rollback(&versioned_tag, channel).await {
         Ok(()) => {
             // Trigger Watchtower FIRST. Only commit Redis state changes if it
@@ -414,9 +422,6 @@ pub async fn rollback_update(
                 Ok(c) => c,
                 Err(_) => return Redirect::to("/admin/dashboard?err=Internal+HTTP+client+error").into_response(),
             };
-            // Serialise against the update task's apply paths so we don't race
-            // on update:previous_version / update:available_version writes.
-            let _guard = state.update_apply_lock.lock().await;
             let ok = crate::update::watchtower::trigger_update(
                 &client,
                 &state.config.watchtower_url,
@@ -434,11 +439,27 @@ pub async fn rollback_update(
                 let _ = state.update_tx.send(UpdateCommand::SettingsChanged).await;
                 Redirect::to("/admin/dashboard?ok=Rollback+triggered+%E2%80%94+auto-update+disabled").into_response()
             } else {
-                // Watchtower didn't accept the trigger. Redis state is
-                // untouched so the admin can retry.  The local Docker retag
-                // already happened, but that's harmless — Watchtower's normal
-                // pull on next attempt would handle the same operation.
-                Redirect::to("/admin/dashboard?err=Rollback+failed%3A+Watchtower+did+not+respond").into_response()
+                // Watchtower didn't accept the trigger. The local retag DOES
+                // persist (Watchtower runs with `WATCHTOWER_NO_PULL=true`, so
+                // Watchtower itself will never undo a local retag — see
+                // containrrr discussion #557), but our own auto-apply paths
+                // (`maybe_apply` / `wait_and_apply` / `ApplyNow`) call
+                // `pull_channel_image` from the registry before triggering
+                // Watchtower and WOULD overwrite the persisted retag. Set the
+                // rollback safety lock so the next auto-apply bails out under
+                // `should_apply_after_lock`. The admin can retry the rollback
+                // (handler is idempotent on the local retag) or roll forward
+                // by re-enabling auto-update.
+                //
+                // We intentionally do NOT delete `previous_version`,
+                // `available_version`, or `found_at` here — the rollback did
+                // not complete, so those values remain valid for a retry.
+                if let Ok(mut conn) = state.redis.get().await {
+                    let _: () = conn.set("update:auto_enabled", "false").await.unwrap_or(());
+                    let _: () = conn.set("update:rollback_locked", "true").await.unwrap_or(());
+                }
+                let _ = state.update_tx.send(UpdateCommand::SettingsChanged).await;
+                Redirect::to("/admin/dashboard?err=Rollback+failed%3A+Watchtower+did+not+respond+%E2%80%94+auto-update+disabled%2C+retry+rollback+or+re-enable+to+roll+forward").into_response()
             }
         }
         Err(e) => {
