@@ -8,7 +8,6 @@ use crate::state::AppState;
 use super::{github, watchtower};
 
 pub enum UpdateCommand {
-    CheckNow,
     ApplyNow,
     Schedule(i64),
     CancelSchedule,
@@ -73,9 +72,6 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
             cmd = rx.recv() => {
                 match cmd {
                     None => break,
-                    Some(UpdateCommand::CheckNow) => {
-                        do_check(&client, &state, channel).await;
-                    }
                     Some(UpdateCommand::ApplyNow) => {
                         store_previous_version(&state).await;
                         watchtower::trigger_update(

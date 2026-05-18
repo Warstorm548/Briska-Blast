@@ -205,14 +205,30 @@ pub async fn check_for_update(
     if require_session(&headers, &state.redis).await.is_none() {
         return Redirect::to("/admin").into_response();
     }
+    let client = reqwest::Client::new();
+    let channel = env!("RELEASE_CHANNEL");
+    let now = chrono::Utc::now().timestamp();
+
     if let Ok(mut conn) = state.redis.get().await {
-        let _: () = conn.set("update:manual_override", "true").await.unwrap_or(());
+        let _: () = conn.set("update:last_checked", now.to_string()).await.unwrap_or(());
     }
-    let _ = state.update_tx.send(UpdateCommand::CheckNow).await;
-    if let Ok(mut conn) = state.redis.get().await {
-        let _: () = conn.del("update:manual_override").await.unwrap_or(());
+
+    match crate::update::github::check_for_update(&client, channel).await {
+        Some(tag) => {
+            if let Ok(mut conn) = state.redis.get().await {
+                let _: () = conn.set("update:available_version", &tag).await.unwrap_or(());
+                let _: () = conn.set("update:found_at", now.to_string()).await.unwrap_or(());
+            }
+            Redirect::to(&format!("/admin/dashboard?ok=Update+available%3A+{}", tag)).into_response()
+        }
+        None => {
+            if let Ok(mut conn) = state.redis.get().await {
+                let _: () = conn.del("update:available_version").await.unwrap_or(());
+                let _: () = conn.del("update:found_at").await.unwrap_or(());
+            }
+            Redirect::to("/admin/dashboard?ok=Already+up+to+date").into_response()
+        }
     }
-    Redirect::to("/admin/dashboard").into_response()
 }
 
 pub async fn apply_update_now(
@@ -248,8 +264,6 @@ pub async fn schedule_update(
                 let available: String = conn.get("update:available_version").await.unwrap_or_default();
                 let _: () = conn.set("update:scheduled_at", ts.to_string()).await.unwrap_or(());
                 let _: () = conn.set("update:scheduled_version", &available).await.unwrap_or(());
-                let current = env!("CARGO_PKG_VERSION");
-                let _: () = conn.set("update:previous_version", current).await.unwrap_or(());
             }
             let _ = state.update_tx.send(UpdateCommand::Schedule(ts)).await;
             Redirect::to("/admin/dashboard?ok=Update+scheduled").into_response()
@@ -328,12 +342,21 @@ pub async fn rollback_update(
             let _ = state.update_tx.send(UpdateCommand::SettingsChanged).await;
             // trigger Watchtower to restart with the retagged image
             let client = reqwest::Client::new();
-            crate::update::watchtower::trigger_update(
+            let ok = crate::update::watchtower::trigger_update(
                 &client,
                 &state.config.watchtower_url,
                 &state.config.watchtower_token,
             ).await;
-            Redirect::to("/admin/dashboard?ok=Rollback+triggered+%E2%80%94+auto-update+disabled").into_response()
+            if ok {
+                Redirect::to("/admin/dashboard?ok=Rollback+triggered+%E2%80%94+auto-update+disabled").into_response()
+            } else {
+                // Watchtower failed — undo Redis state so nothing is left half-applied
+                if let Ok(mut conn) = state.redis.get().await {
+                    let _: () = conn.del("update:rollback_locked").await.unwrap_or(());
+                    let _: () = conn.set("update:auto_enabled", "false").await.unwrap_or(());
+                }
+                Redirect::to("/admin/dashboard?err=Rollback+failed%3A+Watchtower+did+not+respond").into_response()
+            }
         }
         Err(e) => {
             Redirect::to(&format!("/admin/dashboard?err=Rollback+failed%3A+{}", urlencoding(&e))).into_response()

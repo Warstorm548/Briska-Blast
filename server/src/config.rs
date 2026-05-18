@@ -44,7 +44,7 @@ impl Config {
             admin_password: env::var("ADMIN_PASSWORD")
                 .unwrap_or_else(|_| "@admin".to_string()),
             watchtower_url: env::var("WATCHTOWER_URL")
-                .unwrap_or_else(|_| "http://watchtower:8080".to_string()),
+                .unwrap_or_else(|_| "http://watchtower:25921".to_string()),
             watchtower_token: env::var("WATCHTOWER_TOKEN")
                 .unwrap_or_else(|_| "briska-watchtower-token".to_string()),
         }
