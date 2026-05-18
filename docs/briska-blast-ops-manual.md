@@ -71,6 +71,8 @@ This keeps each environment in its own numeric block and makes environment owner
 
 **Why not 8080 for Watchtower?** Port 8080 is an extremely common "alternative HTTP" port used by game server panels (Pterodactyl, AMP, etc.), web UIs, and proxies. Keeping Watchtower in the 25900s block eliminates any ambiguity and prevents conflicts on a shared dedi.
 
+**Watchtower port is internal-only.** The Watchtower port is published via `expose:` in compose, **not** `ports:`. It is reachable only from other containers on the same compose network — *not* from the host shell. `curl 127.0.0.1:25921/v1/update` on the dedi will fail with "connection refused" by design. If you need to test Watchtower's HTTP API during debugging, `docker exec` into the server container and `curl http://watchtower:25921/v1/update` from there.
+
 ### Why This Range?
 
 Ports in the 25900s are:
@@ -93,14 +95,22 @@ Each environment lives in its own folder with its own compose file and `.env`:
 ~/briska/
 ├── prod/
 │   ├── docker-compose.yml
-│   └── .env              (GAME_PORT=25919, ADMIN_PORT=25920, WATCHTOWER_PORT=25921)
+│   └── .env              (GAME_PORT=25919, ADMIN_PORT=25920, WATCHTOWER_PORT=25921, WATCHTOWER_TOKEN=…)
 ├── staging/
 │   ├── docker-compose.yml
-│   └── .env              (GAME_PORT=25929, ADMIN_PORT=25930, WATCHTOWER_PORT=25931)
+│   └── .env              (GAME_PORT=25929, ADMIN_PORT=25930, WATCHTOWER_PORT=25931, WATCHTOWER_TOKEN=…)
 └── dev/
     ├── docker-compose.yml
-    └── .env              (GAME_PORT=25939, ADMIN_PORT=25940, WATCHTOWER_PORT=25941)
+    └── .env              (GAME_PORT=25939, ADMIN_PORT=25940, WATCHTOWER_PORT=25941, WATCHTOWER_TOKEN=…)
 ```
+
+**`WATCHTOWER_TOKEN` is required** in every environment's `.env`. Compose uses `${WATCHTOWER_TOKEN:?...}`, so a missing or empty value causes `docker compose up` to abort with an error. No literal default exists — this is intentional so a missing `.env` cannot silently run with a public token. Generate one per environment with:
+
+```bash
+openssl rand -base64 32
+```
+
+Optionally set `GITHUB_TOKEN=<read-only PAT>` to raise the GitHub Releases API rate limit from 60/hr anon to 5000/hr authenticated. Absence is supported.
 
 ### Compose Project Isolation (`COMPOSE_PROJECT_NAME`)
 
@@ -539,7 +549,27 @@ Common causes:
 
 - Port conflict (see "Port Already in Use")
 - Bad env var in `.env` (compose validates these strictly)
+- **Missing `WATCHTOWER_TOKEN` in `.env`** — produces an error like `WATCHTOWER_TOKEN must be set in .env`. Add a strong random token and retry.
 - Image build failure (try `docker compose build --no-cache`)
+
+### "Apply Now" Succeeded but Server Version Didn't Change
+
+The admin panel says "Update triggered" but the running version stays the same. This usually means the server's **pre-pull step failed** — the server now owns image pulling (Watchtower is configured with `WATCHTOWER_NO_PULL=true`), so a pull failure is silent to Watchtower.
+
+```bash
+# Look for pre-pull failures in the server's logs:
+docker compose logs server | grep -iE "pre-pull|pre-pulled"
+```
+
+Expected on success: `INFO pre-pulled ghcr.io/warstorm548/briska-blast:<channel>`.
+On failure: `WARN ApplyNow pre-pull failed: <reason>` or similar.
+
+Common causes:
+
+- Outbound network blocked from the server container to `ghcr.io`
+- GHCR is rate-limiting unauthenticated pulls (rare for public images; if it happens, pre-authenticate the Docker daemon with `docker login ghcr.io`)
+- The channel tag doesn't exist on GHCR yet (race between the GitHub Release being created and the image being pushed by CI)
+- Docker socket is mounted but the server container can't reach the daemon (verify with `docker compose exec server ls -l /var/run/docker.sock`)
 
 ---
 

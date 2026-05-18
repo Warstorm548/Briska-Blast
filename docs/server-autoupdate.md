@@ -1,5 +1,8 @@
 # Server Auto-Update System
 
+> **About to change update-path code or `docker-compose.yml`?**
+> Read [`changing-the-update-system.md`](changing-the-update-system.md) first. The self-update system has a different risk profile from the rest of the codebase: a bug in the update path can strand the server permanently.
+
 ## Overview
 
 The BriskaBlast server supports self-managed updates via a combination of:
@@ -49,9 +52,16 @@ image: ghcr.io/warstorm548/briska-blast:ea
 
 ## Watchtower
 
-Watchtower runs as a sidecar in `docker-compose.yml`. It monitors the server container and performs the actual image pull and restart when triggered.
+Watchtower runs as a sidecar in `docker-compose.yml`. It restarts the server container when triggered. The image is **pinned to `containrrr/watchtower:1.7.1`** — never `:latest` — so an upstream Watchtower release cannot auto-deploy itself into the stack.
 
-Watchtower is configured in **HTTP API-only mode** — it does not poll automatically. The server controls when Watchtower fires via the HTTP API.
+Watchtower is configured in **HTTP API-only mode** with `WATCHTOWER_NO_PULL=true`. This means:
+- Watchtower never polls or pulls images on its own.
+- The **server** owns image pulling, via `bollard` inside `update/docker.rs`:
+  - The auto-apply path (`task.rs::ApplyNow` / `maybe_apply` / `wait_and_apply`) calls `pull_channel_image(channel)` before triggering Watchtower.
+  - The rollback path (`admin/dashboard.rs::rollback_update`) calls `retag_for_rollback` which pulls the pinned versioned image and retags it locally.
+- Watchtower's job is reduced to: compare the running container's image ID against the latest local image, recreate if different.
+
+This split exists because, without `NO_PULL`, Watchtower would pull the registry's newer channel image on every trigger — silently undoing the rollback flow's local retag.
 
 ### Port
 
@@ -69,13 +79,27 @@ Set `WATCHTOWER_PORT` in `.env` to match your environment's triplet:
 WATCHTOWER_PORT=25921
 ```
 
+The port is published via `expose:` (Docker network only), **not** `ports:`. The Watchtower HTTP API is reachable from the server container on the internal compose network, but **not** from the host shell. If you need to test Watchtower's API directly during debugging, `docker exec` into a container on the same compose network.
+
 ### Shared secret
 
-Set `WATCHTOWER_TOKEN` in `.env` to a strong random value. It must match between the server service and the watchtower service:
+Set `WATCHTOWER_TOKEN` in `.env` to a strong random value. It must match between the server service and the Watchtower service. **This variable is required** — `docker-compose.yml` uses `${WATCHTOWER_TOKEN:?...}`, so `docker compose up` fails fast if the variable is missing. There is no default token in compose, by design: a missing `.env` must never silently run with a known-public secret.
 
 ```env
 WATCHTOWER_TOKEN=your-secret-token-here
 ```
+
+Generate one with `openssl rand -base64 32`.
+
+### Optional: GitHub API token
+
+The update check polls the public GitHub Releases API. Anonymous calls share a 60 req/hr/IP rate-limit budget with everything else on the host. Setting `GITHUB_TOKEN` in `.env` raises that to 5000 req/hr authenticated — useful if you click "Check for Updates" frequently or run multiple environments behind the same egress IP. Any classic PAT with no scopes (or a read-only fine-grained token) works.
+
+```env
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+```
+
+Absence is fully supported — the server falls back to anonymous calls. The check also uses ETag conditional requests (`If-None-Match`) so unchanged responses (`304 Not Modified`) cost nothing against the rate limit either way.
 
 ---
 
@@ -85,11 +109,14 @@ The **Server Updates** section appears in the admin dashboard below Version Cont
 
 ### Always available
 - **Channel / Version / Last checked** — displayed at all times
-- **Check for Updates** button — queries the GitHub Releases API immediately and updates the displayed status. While running, the automatic schedule is paused.
+- **Check for Updates** button — queries the GitHub Releases API immediately and updates the displayed status. While running, the automatic schedule is paused. The button has three possible outcomes:
+  - *"Update available: vX.Y.Z"* — a newer matching release was found
+  - *"Already up to date"* — GitHub returned 200 OK and no candidate was newer than the running version
+  - *"No changes since last check"* — GitHub returned 304 Not Modified (the ETag matched); cached state preserved
 
 ### When an update is found (manual check)
 - Shows the available version
-- **Apply Now** — triggers Watchtower immediately (container restarts with new image)
+- **Apply Now** — pre-pulls the new channel image via the server's Docker socket, then triggers Watchtower to restart the container. Returns "Update triggered" immediately even though pulling continues in the background.
 - **Schedule** — pick a date/time via the datetime picker; the update applies automatically at that time. The scheduled time is shown with a **Cancel** button.
 
 ### Automatic Updates toggle
@@ -97,16 +124,28 @@ When enabled, two options appear:
 - **Check every** — how often the server polls GitHub Releases (6h / 12h / 24h / 48h)
 - **Apply after** — how long after an update is found before it is automatically applied (Immediately / 1 day / 3 days / 1 week / 2 weeks)
 
-When auto-update finds a version and the apply interval has elapsed, Watchtower is triggered automatically with no prompt.
+When auto-update finds a version and the apply interval has elapsed, the server pre-pulls the new image and triggers Watchtower automatically with no prompt.
 
 ### Rollback
 When a previous version is stored (set automatically before any update is applied), a **Rollback** button appears showing the previous version.
 
 Pressing it:
-1. Pulls the pinned versioned image (e.g. `:v0.3.0`) from GHCR
+1. Pulls the pinned versioned image (e.g. `:v0.3.0`) from GHCR via `bollard`
 2. Retags it locally as the channel tag (e.g. `:stable`)
 3. Triggers Watchtower to restart with the retagged image
 4. **Disables auto-update** as a safety lock — the toggle must be manually re-enabled once the rolled-back version is confirmed stable
+
+### Apply-path serialisation
+
+All paths that trigger Watchtower (`Apply Now`, scheduled apply, timer auto-apply, and rollback) acquire a single in-process `tokio::sync::Mutex` before firing. Watchtower itself is idempotent, but the Redis writes around the trigger (`update:previous_version`, `update:available_version`, `update:found_at`) must not interleave. A rollback request submitted while an auto-apply is mid-flight will briefly wait for the auto-apply's mutex guard to drop before proceeding.
+
+### Where update failures appear
+
+Because the server now owns image pulling, pull failures (network blip to GHCR, registry rate-limit, disk full) surface as `tracing::warn!` entries in the server's logs, not in Watchtower's logs. If "Apply Now" reports success but the running version doesn't change, the first thing to check is:
+
+```bash
+docker compose logs server | grep -i "pre-pull failed"
+```
 
 ---
 
@@ -128,6 +167,7 @@ All update state is stored in Redis (persisted to disk via the `redis_data` Dock
 | `update:scheduled_version` | Version queued for the scheduled apply |
 | `update:manual_override` | `"true"` while a manual check is in progress |
 | `update:rollback_locked` | `"true"` after a rollback — auto-update blocked until manually cleared |
+| `update:github_etag` | Last ETag returned by the GitHub Releases API — sent back as `If-None-Match` on subsequent polls so unchanged responses cost zero rate-limit quota |
 
 ---
 

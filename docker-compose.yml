@@ -17,7 +17,10 @@ services:
       - MIN_GAME_VERSION=0.1.0
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-@admin}
       - WATCHTOWER_URL=http://watchtower:${WATCHTOWER_PORT:-25921}
-      - WATCHTOWER_TOKEN=${WATCHTOWER_TOKEN:-briska-watchtower-token}
+      # No default token here — must be supplied via .env. Falling back to a
+      # known-literal token would mean a missing .env silently runs with a
+      # public secret. Fail-closed is safer.
+      - WATCHTOWER_TOKEN=${WATCHTOWER_TOKEN:?WATCHTOWER_TOKEN must be set in .env}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     labels:
@@ -34,18 +37,30 @@ services:
     restart: always
 
   watchtower:
-    image: containrrr/watchtower
+    # Pinned: never run :latest in production. A breaking or malicious
+    # upstream Watchtower release would otherwise auto-deploy on next pull.
+    image: containrrr/watchtower:1.7.1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_TOKEN:-briska-watchtower-token}
+      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_TOKEN:?WATCHTOWER_TOKEN must be set in .env}
       - WATCHTOWER_HTTP_API_UPDATE=true
       - WATCHTOWER_HTTP_API_PORT=${WATCHTOWER_PORT:-25921}
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_LABEL_ENABLE=true
+      # Required so the rollback flow's local retag in server/src/update/docker.rs
+      # is not silently overwritten by Watchtower pulling the registry's newer
+      # channel image on its next trigger. The server pre-pulls images itself
+      # via bollard on the auto-apply path to compensate.
+      - WATCHTOWER_NO_PULL=true
     command: --http-api-periodic-polls
-    ports:
-      - "127.0.0.1:${WATCHTOWER_PORT:-25921}:${WATCHTOWER_PORT:-25921}"
+    # Internal-network only — never `ports:`. Publishing the Watchtower HTTP
+    # API to the host (even loopback) is a privileged-endpoint exposure: the
+    # token is the only thing standing between an on-host attacker and a
+    # forced container restart. `expose:` keeps it reachable only from other
+    # containers on the same Docker network.
+    expose:
+      - "${WATCHTOWER_PORT:-25921}"
     restart: always
 
 volumes:

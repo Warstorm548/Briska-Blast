@@ -226,8 +226,9 @@ pub async fn check_for_update(
         let _: () = conn.set("update:last_checked", now.to_string()).await.unwrap_or(());
     }
 
-    match crate::update::github::check_for_update(&client, channel).await {
-        Ok(Some(tag)) => {
+    use crate::update::github::CheckOutcome;
+    match crate::update::github::check_for_update(&client, channel, &state.redis).await {
+        Ok(CheckOutcome::Update(tag)) => {
             if let Ok(mut conn) = state.redis.get().await {
                 // Only reset found_at when this is a new version we haven't seen before.
                 let prev: String = conn.get("update:available_version").await.unwrap_or_default();
@@ -238,12 +239,16 @@ pub async fn check_for_update(
             }
             Redirect::to(&format!("/admin/dashboard?ok=Update+available%3A+{}", tag)).into_response()
         }
-        Ok(None) => {
+        Ok(CheckOutcome::NoUpdate) => {
             if let Ok(mut conn) = state.redis.get().await {
                 let _: () = conn.del("update:available_version").await.unwrap_or(());
                 let _: () = conn.del("update:found_at").await.unwrap_or(());
             }
             Redirect::to("/admin/dashboard?ok=Already+up+to+date").into_response()
+        }
+        Ok(CheckOutcome::NotModified) => {
+            // GitHub returned 304 — cached state is still correct.
+            Redirect::to("/admin/dashboard?ok=No+changes+since+last+check").into_response()
         }
         Err(_) => {
             // Network/parse failure — preserve any previously detected update.
@@ -371,6 +376,9 @@ pub async fn rollback_update(
                 Ok(c) => c,
                 Err(_) => return Redirect::to("/admin/dashboard?err=Internal+HTTP+client+error").into_response(),
             };
+            // Serialise against the update task's apply paths so we don't race
+            // on update:previous_version / update:available_version writes.
+            let _guard = state.update_apply_lock.lock().await;
             let ok = crate::update::watchtower::trigger_update(
                 &client,
                 &state.config.watchtower_url,

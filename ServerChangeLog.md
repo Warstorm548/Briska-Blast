@@ -5,6 +5,86 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.4.1] — 2026-05-18
+
+Patch release — pre-deployment hardening pass over the update system. No
+behavioural surface change for clients (launcher/game); all changes are
+internal correctness, observability, and security improvements.
+
+### Fixed / Changed
+
+- **GitHub Releases check (`update/github.rs`)** — three changes to the polling logic:
+  - Conditional `If-None-Match: <etag>` on subsequent requests; ETag stored in Redis under `update:github_etag`. A 304 response now flows through a new `CheckOutcome::NotModified` arm that preserves all cached state.
+  - Optional `Authorization: Bearer <GITHUB_TOKEN>` header when the `GITHUB_TOKEN` env var is set; absence does not change behaviour. Raises the anonymous 60 req/hr/IP limit to 5000 req/hr authenticated.
+  - URL now requests `?per_page=100`; matching releases are collected, parsed via `semver::Version`, sorted descending, and the largest is returned if `> current`. Removes the implicit "GitHub returns newest-first" dependency.
+- **Update task error visibility (`update/task.rs`)** — every Redis call that previously hid errors behind `.unwrap_or(())` or `.unwrap_or_default()` now logs via `tracing::warn!` through an `.inspect_err(...)` chain. Control flow and fallback behaviour are unchanged; transient Redis blips now surface in operator logs instead of disappearing silently.
+- **Single-flight apply lock** — `AppState::update_apply_lock: Arc<tokio::sync::Mutex<()>>` added. Acquired by every code path that calls `watchtower::trigger_update`:
+  - `task.rs::run` — `UpdateCommand::ApplyNow` arm
+  - `task.rs::maybe_apply` — timer-driven auto-apply
+  - `task.rs::wait_and_apply` — scheduled apply
+  - `admin/dashboard.rs::rollback_update` — admin rollback path
+
+  Watchtower itself is idempotent; the lock prevents concurrent writes of `update:previous_version` / `update:available_version` / `update:found_at` from interleaving.
+- **30-day sanity cap on recovered schedules** — `task.rs::classify_recovered_schedule` is consulted on startup. A `scheduled_at` more than 30 days in the future is treated as corruption: a warning is logged and the Redis keys are cleared. Prevents a malformed value from spawning a `wait_and_apply` future that sleeps for years.
+- **Auto-apply pre-pull** — both auto-apply paths (`ApplyNow`, `maybe_apply`, `wait_and_apply`) now call `update::docker::pull_channel_image(channel)` before triggering Watchtower. Required because Watchtower is now configured with `WATCHTOWER_NO_PULL=true` (see Compose changes below).
+- **`docker-compose.yml`** — security and correctness updates:
+  - Watchtower image pinned from `:latest` (implicit) to `:1.7.1`.
+  - Watchtower service moved from `ports:` (host-published, even loopback-only) to `expose:` (internal Docker network only). The Watchtower HTTP API endpoint is no longer reachable from the host shell.
+  - `WATCHTOWER_NO_PULL=true` added to Watchtower env. Required so the rollback flow's local retag isn't silently overwritten by a registry pull on Watchtower's next trigger.
+  - `WATCHTOWER_TOKEN` default value removed from compose. Variable now uses the `${WATCHTOWER_TOKEN:?...}` interpolation guard; `docker compose up` fails fast with an error message if `.env` is missing the token, instead of silently running with the literal `briska-watchtower-token`.
+- **`.gitignore`** — was empty; now ignores `target/`, `.env*` (except `.env.example` is committed), and common IDE/OS junk. Belt-and-suspenders against committing future secrets.
+- **`.env.example`** — `WATCHTOWER_TOKEN` is now documented as required (with a placeholder, not a default). New `GITHUB_TOKEN` line documents the optional auth token.
+
+### Code documentation added (no behaviour change)
+
+- `update/docker.rs` — block comment on `retag_for_rollback` documenting the synchronous admin-handler call path (no `UpdateCommand::Rollback` variant exists) and the `WATCHTOWER_NO_PULL=true` requirement.
+- `update/docker.rs` — block comment on the `IMAGE_REPO` const explaining why it stays hardcoded (defense-in-depth against env-var redirection).
+- `state.rs` — comment on the new `update_apply_lock` field describing the invariant.
+
+### Tests added
+
+`server/src/update/github.rs::tests`:
+- `stable_channel_rejects_prereleases` — channel matching for `stable` rejects `-ea`, `-dev`, and any `prerelease=true` tag.
+- `ea_channel_accepts_only_ea` — only accepts `-ea` tags that are also marked `prerelease`.
+- `dev_channel_accepts_only_dev` — only accepts `-dev` tags that are also marked `prerelease`.
+- `unknown_channel_matches_nothing` — defensive: unknown channel names return no matches.
+- `semver_prerelease_ordering` — pins `1.2.3-ea.10 > 1.2.3-ea.2 > 1.2.3-ea.1` and `1.2.3 > 1.2.3-ea.10`, guarding the descending-sort path.
+
+`server/src/update/task.rs::tests`:
+- `found_at_only_resets_on_new_tag` — repeated polls returning the same tag must NOT reset `update:found_at`. Tests the extracted `should_reset_found_at` helper which now drives the live `do_check` decision.
+- `wait_and_apply_proceeds_only_on_exact_match` — a spawned `wait_and_apply` future no-ops if the stored `update:scheduled_at` is missing, different, or even one second off (cancel-then-reschedule). Tests the extracted `wait_and_apply_should_proceed` helper.
+- `recovered_schedule_classification` — 30-day-future cap, exact-now boundary, year-2099 corruption are each classified correctly.
+
+### Verified-as-already-fine (no change needed)
+
+- **Finding 1 (rollback wiring)**: `update::docker::retag_for_rollback` was suspected unwired. Reading `admin/dashboard.rs`, it is called synchronously from the `rollback_update` handler (`POST /admin/update/rollback`). Per the prompt's own instruction, code was left intact and a call-path comment was added in `docker.rs`.
+- **Finding 2 (`update:scheduled_version` inconsistency)**: the key IS set — but in the admin handler (`admin/dashboard.rs::schedule_update`), not in `task.rs`. The admin handler sets it immediately before sending `UpdateCommand::Schedule`. `task.rs::clear_schedule_conn` correctly deletes it on cancel / stale recovery. The system invariant holds; no change.
+- **Finding 14 (`WATCHTOWER_LABEL_ENABLE=true`)**: already correctly set on the Watchtower service. The server container correctly carries the `com.centurylinklabs.watchtower.enable=true` label. No change.
+
+### Declined
+
+- **Finding 9 (`IMAGE_REPO` to config)**: the prompt's literal request was to move `IMAGE_REPO` to a runtime env var with the current GHCR URL as default. After review with the project owner, this was declined for security reasons: making the update target runtime-configurable would let a compromised environment (`.env` tampering, container env injection) redirect the update / rollback path at a malicious registry. The const stays hardcoded in `docker.rs`; forks needing a different registry must rebuild. A comment on the const records this rationale.
+
+### Deferred (Security Notes)
+
+For tracking — items 11, 12, 13, 14, 15 from the audit prompt and their status:
+
+| # | Item | Status | Disposition |
+|---|---|---|---|
+| 11 | Server has direct Docker socket access via `bollard`; compromise == host root. | **Deferred** to follow-up branch `harden/docker-socket-proxy`. Mitigation: introduce `tecnativa/docker-socket-proxy` and restrict the server's permissions to only `images:read`, `images:create`, and `containers:write` — the minimum that rollback retag + pre-pull need. |
+| 12 | Watchtower HTTP API exposure. | **Fixed in this release**: `ports:` → `expose:`. |
+| 13 | Bearer token literal default in compose. | **Fixed in this release**: default removed, `${WATCHTOWER_TOKEN:?...}` interpolation guard added. `.gitignore` now covers `.env`. |
+| 14 | `WATCHTOWER_LABEL_ENABLE=true` + server label. | **Already correct.** |
+| 15 | Watchtower image pinned. | **Fixed in this release**: pinned to `containrrr/watchtower:1.7.1`. |
+
+### Risk notes for the human reviewer
+
+- The auto-apply path now requires the server container to have Docker socket access (already mounted for rollback). This is the same blast radius as before — `bollard` was already in use — but now an additional code path uses it. Strengthens the case for item 11.
+- `WATCHTOWER_NO_PULL=true` makes Watchtower's update behaviour entirely server-driven: Watchtower will never act on its own anymore. If `pull_channel_image` ever fails silently *and* the existing image is unchanged, the apply path becomes a no-op. The bollard error is logged at `warn` level — operators should alert on this.
+- `WATCHTOWER_TOKEN` is now a deploy-blocking required env var. Existing `.env` files without it will refuse to `docker compose up`. Document this in the deploy runbook.
+
+---
+
 ## [0.4.0] — 2026-05-18
 
 ### Added

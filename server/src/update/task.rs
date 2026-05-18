@@ -5,7 +5,12 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use crate::state::AppState;
-use super::{github, watchtower};
+use super::{docker, github, watchtower};
+
+// Anything farther than this in the future is treated as a corrupted
+// `update:scheduled_at` value on recovery. Picked at 30 days because no
+// legitimate manual schedule should ever exceed a month.
+const SCHEDULE_RECOVERY_MAX_FUTURE_SECS: i64 = 30 * 24 * 60 * 60;
 
 pub enum UpdateCommand {
     ApplyNow,
@@ -26,25 +31,39 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
         let _: () = conn
             .set("update:current_version", env!("CARGO_PKG_VERSION"))
             .await
+            .inspect_err(|e| tracing::warn!("redis seed current_version failed: {e}"))
             .unwrap_or(());
     }
 
     // recover any pending manual schedule that survived a restart
     if let Ok(mut conn) = state.redis.get().await {
-        let stored: String = conn.get("update:scheduled_at").await.unwrap_or_default();
+        let stored: String = conn
+            .get("update:scheduled_at")
+            .await
+            .inspect_err(|e| tracing::warn!("redis get scheduled_at failed: {e}"))
+            .unwrap_or_default();
         if let Ok(ts) = stored.parse::<i64>() {
-            if ts > chrono::Utc::now().timestamp() {
-                let state2 = state.clone();
-                let client2 = client.clone();
-                tokio::spawn(async move {
-                    wait_and_apply(ts, state2, client2).await;
-                });
-                tracing::info!("resumed pending scheduled update for ts={ts}");
-            } else {
-                // scheduled time already passed while server was down — clear stale keys
-                let _: () = conn.del("update:scheduled_at").await.unwrap_or(());
-                let _: () = conn.del("update:scheduled_version").await.unwrap_or(());
-                tracing::warn!("discarded stale scheduled update (scheduled time already passed)");
+            let now = chrono::Utc::now().timestamp();
+            match classify_recovered_schedule(ts, now) {
+                RecoveredSchedule::Corrupted => {
+                    tracing::warn!(
+                        "discarded scheduled_at={ts} on recovery: > {} days in the future (corrupted)",
+                        SCHEDULE_RECOVERY_MAX_FUTURE_SECS / 86400
+                    );
+                    clear_schedule_conn(&mut conn).await;
+                }
+                RecoveredSchedule::Usable => {
+                    let state2 = state.clone();
+                    let client2 = client.clone();
+                    tokio::spawn(async move {
+                        wait_and_apply(ts, state2, client2).await;
+                    });
+                    tracing::info!("resumed pending scheduled update for ts={ts}");
+                }
+                RecoveredSchedule::AlreadyPassed => {
+                    clear_schedule_conn(&mut conn).await;
+                    tracing::warn!("discarded stale scheduled update (scheduled time already passed)");
+                }
             }
         }
     }
@@ -59,13 +78,21 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
             _ = deadline => {
                 // auto-check cycle
                 if let Ok(mut conn) = state.redis.get().await {
-                    let enabled: String = conn.get("update:auto_enabled").await.unwrap_or_default();
+                    let enabled: String = conn
+                        .get("update:auto_enabled")
+                        .await
+                        .inspect_err(|e| tracing::warn!("redis get auto_enabled failed: {e}"))
+                        .unwrap_or_default();
                     if enabled == "true" {
                         do_check(&client, &state, channel).await;
                         maybe_apply(&client, &state, channel).await;
                     }
                     // refresh interval from Redis
-                    let secs: String = conn.get("update:check_interval_secs").await.unwrap_or_default();
+                    let secs: String = conn
+                        .get("update:check_interval_secs")
+                        .await
+                        .inspect_err(|e| tracing::warn!("redis get check_interval_secs failed: {e}"))
+                        .unwrap_or_default();
                     poll_secs = secs.parse().unwrap_or(21600);
                 }
                 next_poll = Instant::now() + Duration::from_secs(poll_secs);
@@ -75,7 +102,13 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
                 match cmd {
                     None => break,
                     Some(UpdateCommand::ApplyNow) => {
+                        let _guard = state.update_apply_lock.lock().await;
                         store_previous_version(&state).await;
+                        // Pre-pull the new image so Watchtower (NO_PULL=true)
+                        // has a newer local image to compare against.
+                        if let Err(e) = docker::pull_channel_image(channel).await {
+                            tracing::warn!("ApplyNow pre-pull failed: {e}");
+                        }
                         watchtower::trigger_update(
                             &client,
                             &state.config.watchtower_url,
@@ -84,7 +117,11 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
                     }
                     Some(UpdateCommand::Schedule(ts)) => {
                         if let Ok(mut conn) = state.redis.get().await {
-                            let _: () = conn.set("update:scheduled_at", ts.to_string()).await.unwrap_or(());
+                            let _: () = conn
+                                .set("update:scheduled_at", ts.to_string())
+                                .await
+                                .inspect_err(|e| tracing::warn!("redis set scheduled_at failed: {e}"))
+                                .unwrap_or(());
                         }
                         // spawn a one-shot task for this schedule
                         let state2 = state.clone();
@@ -98,7 +135,11 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
                     }
                     Some(UpdateCommand::SettingsChanged) => {
                         if let Ok(mut conn) = state.redis.get().await {
-                            let secs: String = conn.get("update:check_interval_secs").await.unwrap_or_default();
+                            let secs: String = conn
+                                .get("update:check_interval_secs")
+                                .await
+                                .inspect_err(|e| tracing::warn!("redis get check_interval_secs failed: {e}"))
+                                .unwrap_or_default();
                             poll_secs = secs.parse().unwrap_or(21600);
                         }
                         next_poll = Instant::now() + Duration::from_secs(poll_secs);
@@ -112,29 +153,57 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
 async fn do_check(client: &Client, state: &AppState, channel: &str) {
     let now = chrono::Utc::now().timestamp();
     if let Ok(mut conn) = state.redis.get().await {
-        let _: () = conn.set("update:last_checked", now.to_string()).await.unwrap_or(());
+        let _: () = conn
+            .set("update:last_checked", now.to_string())
+            .await
+            .inspect_err(|e| tracing::warn!("redis set last_checked failed: {e}"))
+            .unwrap_or(());
     }
 
-    match github::check_for_update(client, channel).await {
-        Ok(Some(tag)) => {
+    match github::check_for_update(client, channel, &state.redis).await {
+        Ok(github::CheckOutcome::Update(tag)) => {
             if let Ok(mut conn) = state.redis.get().await {
                 // Only reset found_at when this is a *new* version we haven't
                 // seen before — otherwise repeated polls would keep resetting
                 // the apply_interval window and auto-apply would never fire.
-                let prev: String = conn.get("update:available_version").await.unwrap_or_default();
-                let _: () = conn.set("update:available_version", &tag).await.unwrap_or(());
-                if prev != tag {
-                    let _: () = conn.set("update:found_at", now.to_string()).await.unwrap_or(());
+                let prev: String = conn
+                    .get("update:available_version")
+                    .await
+                    .inspect_err(|e| tracing::warn!("redis get available_version failed: {e}"))
+                    .unwrap_or_default();
+                let _: () = conn
+                    .set("update:available_version", &tag)
+                    .await
+                    .inspect_err(|e| tracing::warn!("redis set available_version failed: {e}"))
+                    .unwrap_or(());
+                if should_reset_found_at(&prev, &tag) {
+                    let _: () = conn
+                        .set("update:found_at", now.to_string())
+                        .await
+                        .inspect_err(|e| tracing::warn!("redis set found_at failed: {e}"))
+                        .unwrap_or(());
                 }
             }
             tracing::info!("update available: {tag}");
         }
-        Ok(None) => {
+        Ok(github::CheckOutcome::NoUpdate) => {
             if let Ok(mut conn) = state.redis.get().await {
-                let _: () = conn.del("update:available_version").await.unwrap_or(());
-                let _: () = conn.del("update:found_at").await.unwrap_or(());
+                let _: () = conn
+                    .del("update:available_version")
+                    .await
+                    .inspect_err(|e| tracing::warn!("redis del available_version failed: {e}"))
+                    .unwrap_or(());
+                let _: () = conn
+                    .del("update:found_at")
+                    .await
+                    .inspect_err(|e| tracing::warn!("redis del found_at failed: {e}"))
+                    .unwrap_or(());
             }
             tracing::debug!("no update available");
+        }
+        Ok(github::CheckOutcome::NotModified) => {
+            // GitHub confirmed nothing has changed — preserve cached state.
+            tracing::debug!("github 304 Not Modified — preserving cached state");
         }
         Err(e) => {
             // Network/parse failure — preserve any previously known state so
@@ -144,25 +213,41 @@ async fn do_check(client: &Client, state: &AppState, channel: &str) {
     }
 }
 
-async fn maybe_apply(client: &Client, state: &AppState, _channel: &str) {
+async fn maybe_apply(client: &Client, state: &AppState, channel: &str) {
     let mut conn = match state.redis.get().await {
         Ok(c) => c,
         Err(_) => return,
     };
 
     // Defer to any pending manual schedule — wait_and_apply owns that update.
-    let scheduled: String = conn.get("update:scheduled_at").await.unwrap_or_default();
+    let scheduled: String = conn
+        .get("update:scheduled_at")
+        .await
+        .inspect_err(|e| tracing::warn!("redis get scheduled_at failed: {e}"))
+        .unwrap_or_default();
     if !scheduled.is_empty() {
         return;
     }
 
-    let available: String = conn.get("update:available_version").await.unwrap_or_default();
+    let available: String = conn
+        .get("update:available_version")
+        .await
+        .inspect_err(|e| tracing::warn!("redis get available_version failed: {e}"))
+        .unwrap_or_default();
     if available.is_empty() {
         return;
     }
 
-    let found_at: String = conn.get("update:found_at").await.unwrap_or_default();
-    let apply_interval: String = conn.get("update:apply_interval_secs").await.unwrap_or_default();
+    let found_at: String = conn
+        .get("update:found_at")
+        .await
+        .inspect_err(|e| tracing::warn!("redis get found_at failed: {e}"))
+        .unwrap_or_default();
+    let apply_interval: String = conn
+        .get("update:apply_interval_secs")
+        .await
+        .inspect_err(|e| tracing::warn!("redis get apply_interval_secs failed: {e}"))
+        .unwrap_or_default();
 
     let ready = if apply_interval.is_empty() || apply_interval == "0" {
         true
@@ -173,8 +258,12 @@ async fn maybe_apply(client: &Client, state: &AppState, _channel: &str) {
     };
 
     if ready {
+        let _guard = state.update_apply_lock.lock().await;
         store_previous_version_conn(&mut conn).await;
         drop(conn);
+        if let Err(e) = docker::pull_channel_image(channel).await {
+            tracing::warn!("auto-apply pre-pull failed: {e}");
+        }
         watchtower::trigger_update(
             client,
             &state.config.watchtower_url,
@@ -188,16 +277,31 @@ async fn wait_and_apply(ts: i64, state: AppState, client: Client) {
     let delay = (ts - now).max(0) as u64;
     tokio::time::sleep(Duration::from_secs(delay)).await;
 
-    // confirm schedule wasn't cancelled while we waited
-    if let Ok(mut conn) = state.redis.get().await {
-        let stored: String = conn.get("update:scheduled_at").await.unwrap_or_default();
-        if stored.parse::<i64>().unwrap_or(0) != ts {
-            return;
+    // confirm schedule wasn't cancelled or rescheduled while we waited
+    let stored_ts: Option<i64> = match state.redis.get().await {
+        Ok(mut conn) => {
+            let raw: String = conn
+                .get("update:scheduled_at")
+                .await
+                .inspect_err(|e| tracing::warn!("redis get scheduled_at failed: {e}"))
+                .unwrap_or_default();
+            raw.parse::<i64>().ok()
         }
+        Err(_) => None,
+    };
+    if !wait_and_apply_should_proceed(ts, stored_ts) {
+        return;
+    }
+
+    let channel = env!("RELEASE_CHANNEL");
+    let _guard = state.update_apply_lock.lock().await;
+    if let Ok(mut conn) = state.redis.get().await {
         store_previous_version_conn(&mut conn).await;
         clear_schedule_conn(&mut conn).await;
     }
-
+    if let Err(e) = docker::pull_channel_image(channel).await {
+        tracing::warn!("scheduled apply pre-pull failed: {e}");
+    }
     watchtower::trigger_update(
         &client,
         &state.config.watchtower_url,
@@ -213,7 +317,11 @@ async fn store_previous_version(state: &AppState) {
 
 async fn store_previous_version_conn(conn: &mut deadpool_redis::Connection) {
     let current = env!("CARGO_PKG_VERSION");
-    let _: () = conn.set("update:previous_version", current).await.unwrap_or(());
+    let _: () = conn
+        .set("update:previous_version", current)
+        .await
+        .inspect_err(|e| tracing::warn!("redis set previous_version failed: {e}"))
+        .unwrap_or(());
 }
 
 async fn clear_schedule(state: &AppState) {
@@ -223,6 +331,95 @@ async fn clear_schedule(state: &AppState) {
 }
 
 async fn clear_schedule_conn(conn: &mut deadpool_redis::Connection) {
-    let _: () = conn.del("update:scheduled_at").await.unwrap_or(());
-    let _: () = conn.del("update:scheduled_version").await.unwrap_or(());
+    let _: () = conn
+        .del("update:scheduled_at")
+        .await
+        .inspect_err(|e| tracing::warn!("redis del scheduled_at failed: {e}"))
+        .unwrap_or(());
+    let _: () = conn
+        .del("update:scheduled_version")
+        .await
+        .inspect_err(|e| tracing::warn!("redis del scheduled_version failed: {e}"))
+        .unwrap_or(());
+}
+
+/// Decide whether a `do_check` cycle should reset `update:found_at` for a
+/// newly-observed tag, given the tag that was previously cached.
+///
+/// Returns true iff the tag is genuinely new — repeated polls returning the
+/// same tag must NOT reset found_at, otherwise the apply_interval window
+/// would keep sliding forward and auto-apply would never fire.
+fn should_reset_found_at(prev_tag: &str, new_tag: &str) -> bool {
+    prev_tag != new_tag
+}
+
+/// Decide whether a previously-spawned `wait_and_apply` future should still
+/// proceed with its update, given the `scheduled_at` value currently in
+/// Redis. Returns true iff the stored timestamp still matches the one this
+/// future was spawned for — any mismatch (cancel, reschedule, corruption)
+/// means a newer task owns the update and this one must no-op.
+fn wait_and_apply_should_proceed(spawned_for: i64, stored_in_redis: Option<i64>) -> bool {
+    stored_in_redis == Some(spawned_for)
+}
+
+/// Decide whether a recovered `update:scheduled_at` timestamp on startup is
+/// usable, expired, or corrupted (too far in the future).
+#[derive(Debug, PartialEq, Eq)]
+enum RecoveredSchedule {
+    Usable,
+    AlreadyPassed,
+    Corrupted,
+}
+
+fn classify_recovered_schedule(scheduled_at: i64, now: i64) -> RecoveredSchedule {
+    if scheduled_at > now + SCHEDULE_RECOVERY_MAX_FUTURE_SECS {
+        RecoveredSchedule::Corrupted
+    } else if scheduled_at <= now {
+        RecoveredSchedule::AlreadyPassed
+    } else {
+        RecoveredSchedule::Usable
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn found_at_only_resets_on_new_tag() {
+        // First poll: nothing was cached.
+        assert!(should_reset_found_at("", "v0.5.0"));
+        // Same tag observed again — must not reset (regression guard for
+        // the apply-interval-never-fires bug).
+        assert!(!should_reset_found_at("v0.5.0", "v0.5.0"));
+        // Truly new tag arrives — reset.
+        assert!(should_reset_found_at("v0.5.0", "v0.5.1"));
+    }
+
+    #[test]
+    fn wait_and_apply_proceeds_only_on_exact_match() {
+        // Stored ts matches what we were spawned for — go.
+        assert!(wait_and_apply_should_proceed(1_700_000_000, Some(1_700_000_000)));
+        // Cancelled while we slept — the key was deleted.
+        assert!(!wait_and_apply_should_proceed(1_700_000_000, None));
+        // Rescheduled while we slept — a different ts is now stored.
+        assert!(!wait_and_apply_should_proceed(1_700_000_000, Some(1_700_003_600)));
+        // Even a 1-second drift is a cancel-then-reschedule — must not proceed.
+        assert!(!wait_and_apply_should_proceed(1_700_000_000, Some(1_700_000_001)));
+    }
+
+    #[test]
+    fn recovered_schedule_classification() {
+        let now = 1_700_000_000_i64;
+        let day = 86_400_i64;
+
+        assert_eq!(classify_recovered_schedule(now - day, now), RecoveredSchedule::AlreadyPassed);
+        assert_eq!(classify_recovered_schedule(now, now), RecoveredSchedule::AlreadyPassed);
+        assert_eq!(classify_recovered_schedule(now + day, now), RecoveredSchedule::Usable);
+        assert_eq!(classify_recovered_schedule(now + 29 * day, now), RecoveredSchedule::Usable);
+        // 31 days out — definitely corruption (datetime-local UI can't reach this).
+        assert_eq!(classify_recovered_schedule(now + 31 * day, now), RecoveredSchedule::Corrupted);
+        // Year 2099 timestamp — absurdly corrupted.
+        assert_eq!(classify_recovered_schedule(4_070_908_800, now), RecoveredSchedule::Corrupted);
+    }
 }
