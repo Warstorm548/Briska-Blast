@@ -159,7 +159,8 @@ Visit `http://localhost:25920/admin` in a browser.
 |---|---|
 | Dashboard loads | Updates section shows channel, version, and "Last checked: Never" initially |
 | Press "Check for Updates" — no update available | `update:available_version` key absent in Redis; no update banner shown |
-| Press "Check for Updates" — update available (mock by setting `SET update:available_version v9.9.9` in redis-cli) | Green banner shows "Update available: v9.9.9" with Apply Now and Schedule options |
+| Press "Check for Updates" — update available | If the configured `RELEASE_CHANNEL` has a newer release on GitHub for the running version, redirect message reads "Update available: vX.Y.Z" and the banner appears with Apply Now and Schedule options. The handler now calls GitHub directly; pre-setting `update:available_version` via `redis-cli` will NOT cause a fake "update available" — only a real newer GitHub release will. |
+| Press "Check for Updates" — GitHub unreachable | Redirect message reads "Check failed: could not reach GitHub". Existing `update:available_version` is preserved (transient network failure does not clear cached state). |
 | Press "Apply Now" | `update:previous_version` set in Redis; Watchtower API called |
 | Schedule an update with a past datetime | Update applied immediately (delay is 0 or negative) |
 | Schedule an update with a future datetime | `update:scheduled_at` set in Redis; scheduled datetime shown with Cancel button |

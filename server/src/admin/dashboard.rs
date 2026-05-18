@@ -10,6 +10,13 @@ use std::collections::HashMap;
 
 use crate::state::AppState;
 use crate::update::UpdateCommand;
+
+// Allowed values for the auto-update interval dropdowns. Anything outside
+// these sets is rejected — prevents tampered POSTs from setting e.g.
+// check_interval=1s (would DoS GitHub) or apply_interval to a malformed
+// value that parses to "apply immediately".
+const ALLOWED_CHECK_INTERVALS: &[u64] = &[21600, 43200, 86400, 172800];
+const ALLOWED_APPLY_INTERVALS: &[u64] = &[0, 86400, 259200, 604800, 1209600];
 use super::{
     require_session,
     templates::{self, DashboardData},
@@ -205,7 +212,13 @@ pub async fn check_for_update(
     if require_session(&headers, &state.redis).await.is_none() {
         return Redirect::to("/admin").into_response();
     }
-    let client = reqwest::Client::new();
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Redirect::to("/admin/dashboard?err=Internal+HTTP+client+error").into_response(),
+    };
     let channel = env!("RELEASE_CHANNEL");
     let now = chrono::Utc::now().timestamp();
 
@@ -214,19 +227,27 @@ pub async fn check_for_update(
     }
 
     match crate::update::github::check_for_update(&client, channel).await {
-        Some(tag) => {
+        Ok(Some(tag)) => {
             if let Ok(mut conn) = state.redis.get().await {
+                // Only reset found_at when this is a new version we haven't seen before.
+                let prev: String = conn.get("update:available_version").await.unwrap_or_default();
                 let _: () = conn.set("update:available_version", &tag).await.unwrap_or(());
-                let _: () = conn.set("update:found_at", now.to_string()).await.unwrap_or(());
+                if prev != tag {
+                    let _: () = conn.set("update:found_at", now.to_string()).await.unwrap_or(());
+                }
             }
             Redirect::to(&format!("/admin/dashboard?ok=Update+available%3A+{}", tag)).into_response()
         }
-        None => {
+        Ok(None) => {
             if let Ok(mut conn) = state.redis.get().await {
                 let _: () = conn.del("update:available_version").await.unwrap_or(());
                 let _: () = conn.del("update:found_at").await.unwrap_or(());
             }
             Redirect::to("/admin/dashboard?ok=Already+up+to+date").into_response()
+        }
+        Err(_) => {
+            // Network/parse failure — preserve any previously detected update.
+            Redirect::to("/admin/dashboard?err=Check+failed%3A+could+not+reach+GitHub").into_response()
         }
     }
 }
@@ -283,7 +304,9 @@ pub async fn cancel_update(
     if let Ok(mut conn) = state.redis.get().await {
         let _: () = conn.del("update:scheduled_at").await.unwrap_or(());
         let _: () = conn.del("update:scheduled_version").await.unwrap_or(());
-        let _: () = conn.del("update:previous_version").await.unwrap_or(());
+        // NOTE: do NOT delete update:previous_version here — it is the rollback
+        // target from the last actually-applied update, not state owned by the
+        // pending schedule.
     }
     Redirect::to("/admin/dashboard?ok=Scheduled+update+cancelled").into_response()
 }
@@ -304,12 +327,18 @@ pub async fn save_update_settings(
             let _: () = conn.del("update:rollback_locked").await.unwrap_or(());
         }
         if let Some(v) = &form.check_interval_secs {
-            if v.parse::<u64>().is_ok() {
-                let _: () = conn.set("update:check_interval_secs", v).await.unwrap_or(());
+            if let Ok(n) = v.parse::<u64>() {
+                if ALLOWED_CHECK_INTERVALS.contains(&n) {
+                    let _: () = conn.set("update:check_interval_secs", v).await.unwrap_or(());
+                }
             }
         }
         if let Some(v) = &form.apply_interval_secs {
-            let _: () = conn.set("update:apply_interval_secs", v).await.unwrap_or(());
+            if let Ok(n) = v.parse::<u64>() {
+                if ALLOWED_APPLY_INTERVALS.contains(&n) {
+                    let _: () = conn.set("update:apply_interval_secs", v).await.unwrap_or(());
+                }
+            }
         }
     }
     let _ = state.update_tx.send(UpdateCommand::SettingsChanged).await;
@@ -331,30 +360,38 @@ pub async fn rollback_update(
 
     match crate::update::docker::retag_for_rollback(&versioned_tag, channel).await {
         Ok(()) => {
-            if let Ok(mut conn) = state.redis.get().await {
-                // safety lock: disable auto-update after rollback
-                let _: () = conn.set("update:auto_enabled", "false").await.unwrap_or(());
-                let _: () = conn.set("update:rollback_locked", "true").await.unwrap_or(());
-                let _: () = conn.del("update:previous_version").await.unwrap_or(());
-                let _: () = conn.del("update:available_version").await.unwrap_or(());
-                let _: () = conn.del("update:found_at").await.unwrap_or(());
-            }
-            let _ = state.update_tx.send(UpdateCommand::SettingsChanged).await;
-            // trigger Watchtower to restart with the retagged image
-            let client = reqwest::Client::new();
+            // Trigger Watchtower FIRST. Only commit Redis state changes if it
+            // actually succeeds — otherwise we'd lose the rollback target
+            // (previous_version) and the cached "update available" state
+            // while the rollback never actually happened.
+            let client = match reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+            {
+                Ok(c) => c,
+                Err(_) => return Redirect::to("/admin/dashboard?err=Internal+HTTP+client+error").into_response(),
+            };
             let ok = crate::update::watchtower::trigger_update(
                 &client,
                 &state.config.watchtower_url,
                 &state.config.watchtower_token,
             ).await;
             if ok {
+                if let Ok(mut conn) = state.redis.get().await {
+                    // safety lock: disable auto-update after rollback
+                    let _: () = conn.set("update:auto_enabled", "false").await.unwrap_or(());
+                    let _: () = conn.set("update:rollback_locked", "true").await.unwrap_or(());
+                    let _: () = conn.del("update:previous_version").await.unwrap_or(());
+                    let _: () = conn.del("update:available_version").await.unwrap_or(());
+                    let _: () = conn.del("update:found_at").await.unwrap_or(());
+                }
+                let _ = state.update_tx.send(UpdateCommand::SettingsChanged).await;
                 Redirect::to("/admin/dashboard?ok=Rollback+triggered+%E2%80%94+auto-update+disabled").into_response()
             } else {
-                // Watchtower failed — undo Redis state so nothing is left half-applied
-                if let Ok(mut conn) = state.redis.get().await {
-                    let _: () = conn.del("update:rollback_locked").await.unwrap_or(());
-                    let _: () = conn.set("update:auto_enabled", "false").await.unwrap_or(());
-                }
+                // Watchtower didn't accept the trigger. Redis state is
+                // untouched so the admin can retry.  The local Docker retag
+                // already happened, but that's harmless — Watchtower's normal
+                // pull on next attempt would handle the same operation.
                 Redirect::to("/admin/dashboard?err=Rollback+failed%3A+Watchtower+did+not+respond").into_response()
             }
         }

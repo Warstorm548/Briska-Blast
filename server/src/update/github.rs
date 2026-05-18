@@ -11,18 +11,32 @@ struct Release {
     prerelease: bool,
 }
 
-pub async fn check_for_update(client: &Client, channel: &str) -> Option<String> {
-    let releases: Vec<Release> = client
+/// Check GitHub for a newer release matching the configured channel.
+///
+/// Returns:
+/// - `Ok(Some(tag))` — a newer matching version was found
+/// - `Ok(None)` — no newer release exists (truly up to date)
+/// - `Err(msg)` — the check itself failed (network/parse error); caller must not
+///   treat this as "up to date" and must not clear cached state
+pub async fn check_for_update(client: &Client, channel: &str) -> Result<Option<String>, String> {
+    let response = client
         .get(RELEASES_URL)
         .header("User-Agent", "briska-blast-server")
         .send()
         .await
-        .ok()?
+        .map_err(|e| format!("github request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("github returned {}", response.status()));
+    }
+
+    let releases: Vec<Release> = response
         .json()
         .await
-        .ok()?;
+        .map_err(|e| format!("github response parse failed: {e}"))?;
 
-    let current = Version::parse(env!("CARGO_PKG_VERSION")).ok()?;
+    let current = Version::parse(env!("CARGO_PKG_VERSION"))
+        .map_err(|e| format!("current version unparseable: {e}"))?;
 
     for release in releases {
         let tag = &release.tag_name;
@@ -37,19 +51,15 @@ pub async fn check_for_update(client: &Client, channel: &str) -> Option<String> 
             continue;
         }
 
+        // Parse the full semver including prerelease identifiers so the semver
+        // crate can correctly compare "v1.2.3-ea.2" vs "v1.2.3-ea.1".
         let version_str = tag.trim_start_matches('v');
-        let version_str = if let Some(idx) = version_str.find('-') {
-            &version_str[..idx]
-        } else {
-            version_str
-        };
-
         if let Ok(latest) = Version::parse(version_str) {
             if latest > current {
-                return Some(tag.clone());
+                return Ok(Some(tag.clone()));
             }
         }
     }
 
-    None
+    Ok(None)
 }

@@ -101,7 +101,7 @@ WATCHTOWER_TOKEN=briska-watchtower-token
 3. Log in with the default password: `@admin`
 4. The dashboard will show a warning banner — **change the password immediately** using the Change Password section
 5. Set your desired minimum versions for launcher and game
-6. Configure the **Server Updates** section — set your release channel and optionally enable automatic updates
+6. The **Server Updates** section shows the compile-time release channel of your binary — you cannot change it from the panel. To switch channels, redeploy with a different `RELEASE_CHANNEL` build arg. Use this section to enable automatic updates, set check/apply intervals, or trigger a manual update.
 
 ---
 

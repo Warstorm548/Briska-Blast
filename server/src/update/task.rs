@@ -15,7 +15,10 @@ pub enum UpdateCommand {
 }
 
 pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("failed to build reqwest client for update task");
     let channel = env!("RELEASE_CHANNEL");
 
     // seed current version into Redis on startup
@@ -57,8 +60,7 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
                 // auto-check cycle
                 if let Ok(mut conn) = state.redis.get().await {
                     let enabled: String = conn.get("update:auto_enabled").await.unwrap_or_default();
-                    let manual: String = conn.get("update:manual_override").await.unwrap_or_default();
-                    if enabled == "true" && manual != "true" {
+                    if enabled == "true" {
                         do_check(&client, &state, channel).await;
                         maybe_apply(&client, &state, channel).await;
                     }
@@ -114,19 +116,30 @@ async fn do_check(client: &Client, state: &AppState, channel: &str) {
     }
 
     match github::check_for_update(client, channel).await {
-        Some(tag) => {
+        Ok(Some(tag)) => {
             if let Ok(mut conn) = state.redis.get().await {
+                // Only reset found_at when this is a *new* version we haven't
+                // seen before — otherwise repeated polls would keep resetting
+                // the apply_interval window and auto-apply would never fire.
+                let prev: String = conn.get("update:available_version").await.unwrap_or_default();
                 let _: () = conn.set("update:available_version", &tag).await.unwrap_or(());
-                let _: () = conn.set("update:found_at", now.to_string()).await.unwrap_or(());
+                if prev != tag {
+                    let _: () = conn.set("update:found_at", now.to_string()).await.unwrap_or(());
+                }
             }
             tracing::info!("update available: {tag}");
         }
-        None => {
+        Ok(None) => {
             if let Ok(mut conn) = state.redis.get().await {
                 let _: () = conn.del("update:available_version").await.unwrap_or(());
                 let _: () = conn.del("update:found_at").await.unwrap_or(());
             }
             tracing::debug!("no update available");
+        }
+        Err(e) => {
+            // Network/parse failure — preserve any previously known state so
+            // a transient blip doesn't make an existing update "disappear".
+            tracing::warn!("update check failed (state preserved): {e}");
         }
     }
 }
@@ -136,6 +149,12 @@ async fn maybe_apply(client: &Client, state: &AppState, _channel: &str) {
         Ok(c) => c,
         Err(_) => return,
     };
+
+    // Defer to any pending manual schedule — wait_and_apply owns that update.
+    let scheduled: String = conn.get("update:scheduled_at").await.unwrap_or_default();
+    if !scheduled.is_empty() {
+        return;
+    }
 
     let available: String = conn.get("update:available_version").await.unwrap_or_default();
     if available.is_empty() {

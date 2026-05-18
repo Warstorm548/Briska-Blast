@@ -8,7 +8,16 @@ pub async fn trigger_update(client: &Client, url: &str, token: &str) -> bool {
         .await;
 
     match result {
-        Ok(r) => r.status().is_success(),
+        Ok(r) => {
+            let status = r.status();
+            if status.is_success() {
+                true
+            } else {
+                let body = r.text().await.unwrap_or_default();
+                tracing::error!("watchtower returned {status}: {body}");
+                false
+            }
+        }
         Err(e) => {
             tracing::error!("watchtower trigger failed: {e}");
             false

@@ -147,10 +147,12 @@ fn build_update_section(data: &DashboardData) -> String {
                       <button type="submit" class="btn btn-primary btn-sm">Apply Now</button>
                     </form>
                     <form method="POST" action="/admin/update/schedule" style="margin:0;display:flex;gap:6px;align-items:center">
-                      <input type="datetime-local" name="scheduled_at" required>
+                      <input type="datetime-local" name="scheduled_at" required title="Enter time in UTC">
+                      <span style="font-size:0.72rem;color:#6e7681">UTC</span>
                       <button type="submit" class="btn btn-sm">Schedule</button>
                     </form>
                   </div>
+                  <div class="note">Scheduled time is interpreted as UTC — convert from your local timezone before entering.</div>
                 </div>"#,
                 escape(available)
             )
