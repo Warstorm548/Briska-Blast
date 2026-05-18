@@ -1,11 +1,13 @@
 FROM rust:1.77-slim AS builder
 WORKDIR /app
 
+ARG RELEASE_CHANNEL=dev
+
 COPY Cargo.toml Cargo.lock* ./
 COPY server/ ./server/
 COPY shared/ ./shared/
 
-RUN cargo build --release -p server
+RUN RELEASE_CHANNEL=${RELEASE_CHANNEL} cargo build --release -p server
 
 FROM debian:bookworm-slim
 RUN apt-get update \

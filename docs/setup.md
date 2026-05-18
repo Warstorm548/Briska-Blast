@@ -20,7 +20,7 @@
 docker compose up --build
 ```
 
-Game server starts on `http://localhost:25919`. Admin panel starts on `http://localhost:25920`. Redis starts alongside both with persistence enabled.
+Game server starts on `http://localhost:25919`. Admin panel starts on `http://localhost:25920`. Redis and Watchtower start alongside both with persistence enabled.
 On first boot the server seeds all default config values into Redis automatically.
 
 To run in the background:
@@ -59,6 +59,9 @@ RUST_LOG=debug
 ADMIN_PASSWORD=@admin
 MIN_LAUNCHER_VERSION=0.1.0
 MIN_GAME_VERSION=0.1.0
+RELEASE_CHANNEL=dev
+WATCHTOWER_PORT=25921
+WATCHTOWER_TOKEN=briska-watchtower-token
 ```
 
 ---
@@ -75,6 +78,10 @@ MIN_GAME_VERSION=0.1.0
 | `MIN_GAME_VERSION` | `0.1.0` | Minimum game version to host or join a session (seeded to Redis on first boot) |
 | `ADMIN_PASSWORD` | `@admin` | Initial admin panel password (seeded as bcrypt hash on first boot) |
 | `RUST_LOG` | `info` | Log level: `error`, `warn`, `info`, `debug`, `trace` |
+| `RELEASE_CHANNEL` | `dev` | Release channel baked into the binary at compile time: `stable`, `ea`, or `dev`. Determines which GitHub Releases the update system monitors. |
+| `WATCHTOWER_PORT` | `25921` | Port for Watchtower's HTTP API. Follows the project's 25900s port range (prod: 25921, staging: 25931, dev: 25941). |
+| `WATCHTOWER_TOKEN` | `briska-watchtower-token` | Shared secret between the server and Watchtower. Change this before deploying. |
+| `WATCHTOWER_URL` | `http://watchtower:25921` | Internal Docker network address of Watchtower. Set automatically from `WATCHTOWER_PORT` in docker-compose. |
 
 > **Note:** `MIN_LAUNCHER_VERSION`, `MIN_GAME_VERSION`, and `ADMIN_PASSWORD` are only written
 > to Redis on the very first boot (`SET NX`). After that, Redis is authoritative — use the
@@ -94,6 +101,7 @@ MIN_GAME_VERSION=0.1.0
 3. Log in with the default password: `@admin`
 4. The dashboard will show a warning banner — **change the password immediately** using the Change Password section
 5. Set your desired minimum versions for launcher and game
+6. Configure the **Server Updates** section — set your release channel and optionally enable automatic updates
 
 ---
 

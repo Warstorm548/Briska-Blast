@@ -153,6 +153,22 @@ Visit `http://localhost:25920/admin` in a browser.
 | Change password (passwords don't match) | Red error banner: "New passwords do not match" |
 | Successful password change → logout → login with new password | Access granted |
 
+**Server Updates section:**
+
+| Action | Expected result |
+|---|---|
+| Dashboard loads | Updates section shows channel, version, and "Last checked: Never" initially |
+| Press "Check for Updates" — no update available | `update:available_version` key absent in Redis; no update banner shown |
+| Press "Check for Updates" — update available (mock by setting `SET update:available_version v9.9.9` in redis-cli) | Green banner shows "Update available: v9.9.9" with Apply Now and Schedule options |
+| Press "Apply Now" | `update:previous_version` set in Redis; Watchtower API called |
+| Schedule an update with a past datetime | Update applied immediately (delay is 0 or negative) |
+| Schedule an update with a future datetime | `update:scheduled_at` set in Redis; scheduled datetime shown with Cancel button |
+| Press Cancel on a scheduled update | `update:scheduled_at` and `update:scheduled_version` cleared; auto-update resumes if enabled |
+| Enable Auto-update toggle | `update:auto_enabled = "true"` in Redis; interval dropdowns appear |
+| Change check interval dropdown | `update:check_interval_secs` updated in Redis |
+| Simulate rollback (set `SET update:previous_version v0.2.0` in redis-cli) | Rollback button appears showing "Rollback to v0.2.0" |
+| Press Rollback | `update:auto_enabled` forced to `"false"`; `update:rollback_locked = "true"`; rollback locked notice appears |
+
 **Verify version gate responds to admin changes:**
 ```bash
 # 1. In admin panel (localhost:25920/admin), set Min Launcher Version to 1.0.0
@@ -187,4 +203,17 @@ GET min_game_version
 
 # Check admin password hash is set
 EXISTS admin:password_hash
+
+# Check update system state
+GET update:current_version       # version the running binary reports
+GET update:previous_version      # version before last update (rollback source)
+GET update:auto_enabled          # "true" / "false"
+GET update:check_interval_secs   # e.g. "21600"
+GET update:apply_interval_secs   # e.g. "259200" or "" (immediate)
+GET update:available_version     # latest version found on GitHub, if any
+GET update:found_at              # unix timestamp when update was discovered
+GET update:last_checked          # unix timestamp of last GitHub API poll
+GET update:scheduled_at          # unix timestamp for pending manual schedule
+GET update:scheduled_version     # version queued for scheduled apply
+GET update:rollback_locked       # "true" when auto-update disabled after rollback
 ```

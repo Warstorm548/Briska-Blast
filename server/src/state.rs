@@ -2,8 +2,10 @@ use std::{net::IpAddr, num::NonZeroU32, sync::Arc, time::Duration};
 
 use deadpool_redis::Pool;
 use governor::{clock::DefaultClock, state::keyed::DefaultKeyedStateStore, Quota, RateLimiter};
+use tokio::sync::mpsc;
 
 use crate::config::Config;
+use crate::update::UpdateCommand;
 
 pub type KeyedLimiter = RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>;
 
@@ -29,10 +31,11 @@ pub struct AppState {
     pub rl_join: Arc<KeyedLimiter>,
     pub rl_session: Arc<KeyedLimiter>,
     pub rl_admin_login: Arc<KeyedLimiter>,
+    pub update_tx: Arc<mpsc::Sender<UpdateCommand>>,
 }
 
 impl AppState {
-    pub fn new(redis: Pool, config: Config) -> Self {
+    pub fn new(redis: Pool, config: Config, update_tx: Arc<mpsc::Sender<UpdateCommand>>) -> Self {
         Self {
             redis,
             config: Arc::new(config),
@@ -41,6 +44,7 @@ impl AppState {
             rl_join: make_limiter(20),
             rl_session: make_limiter(60),
             rl_admin_login: make_login_limiter(),
+            update_tx,
         }
     }
 }

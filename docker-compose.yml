@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: server/Dockerfile
+      args:
+        - RELEASE_CHANNEL=${RELEASE_CHANNEL:-dev}
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${GAME_PORT:-25919}:${GAME_PORT:-25919}"
       - "${BIND_ADDR:-127.0.0.1}:${ADMIN_PORT:-25920}:${ADMIN_PORT:-25920}"
@@ -13,6 +15,12 @@ services:
       - RUST_LOG=info
       - MIN_GAME_VERSION=0.1.0
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-@admin}
+      - WATCHTOWER_URL=http://watchtower:${WATCHTOWER_PORT:-25921}
+      - WATCHTOWER_TOKEN=${WATCHTOWER_TOKEN:-briska-watchtower-token}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     depends_on:
       - redis
     restart: always
@@ -22,6 +30,21 @@ services:
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
+    restart: always
+
+  watchtower:
+    image: containrrr/watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_TOKEN:-briska-watchtower-token}
+      - WATCHTOWER_HTTP_API_UPDATE=true
+      - WATCHTOWER_HTTP_API_PORT=${WATCHTOWER_PORT:-25921}
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_LABEL_ENABLE=true
+    command: --http-api-periodic-polls
+    ports:
+      - "127.0.0.1:${WATCHTOWER_PORT:-25921}:${WATCHTOWER_PORT:-25921}"
     restart: always
 
 volumes:
