@@ -46,6 +46,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Launcher self-update and version enforcement | [`docs/launcher-update-and-version-validation.md`](docs/launcher-update-and-version-validation.md) |
 | Dev branch and release channel rules | [`docs/devtools.md`](docs/devtools.md) |
 | Server change history | [`ServerChangeLog.md`](../ServerChangeLog.md) |
+| Deferred work and post-deployment follow-ups | [`docs/roadmap.md`](docs/roadmap.md) |
 
 ## Key Design Constraints
 

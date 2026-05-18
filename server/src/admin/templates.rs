@@ -17,7 +17,6 @@ pub struct DashboardData {
     pub update_apply_interval_secs: Option<u64>,
     pub update_scheduled_at: Option<String>,
     pub update_scheduled_version: Option<String>,
-    pub _update_manual_override: bool,
     pub update_previous_version: Option<String>,
     pub update_rollback_locked: bool,
 }

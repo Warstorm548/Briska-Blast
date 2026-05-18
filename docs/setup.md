@@ -61,7 +61,10 @@ MIN_LAUNCHER_VERSION=0.1.0
 MIN_GAME_VERSION=0.1.0
 RELEASE_CHANNEL=dev
 WATCHTOWER_PORT=25921
-WATCHTOWER_TOKEN=briska-watchtower-token
+# REQUIRED — no default in docker-compose.yml. Generate with `openssl rand -base64 32`.
+WATCHTOWER_TOKEN=replace-with-your-own-random-token
+# Optional — raises GitHub Releases API rate limit from 60/hr anon to 5000/hr.
+# GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 ```
 
 ---
@@ -79,9 +82,10 @@ WATCHTOWER_TOKEN=briska-watchtower-token
 | `ADMIN_PASSWORD` | `@admin` | Initial admin panel password (seeded as bcrypt hash on first boot) |
 | `RUST_LOG` | `info` | Log level: `error`, `warn`, `info`, `debug`, `trace` |
 | `RELEASE_CHANNEL` | `dev` | Release channel baked into the binary at compile time: `stable`, `ea`, or `dev`. Determines which GitHub Releases the update system monitors. |
-| `WATCHTOWER_PORT` | `25921` | Port for Watchtower's HTTP API. Follows the project's 25900s port range (prod: 25921, staging: 25931, dev: 25941). |
-| `WATCHTOWER_TOKEN` | `briska-watchtower-token` | Shared secret between the server and Watchtower. Change this before deploying. |
+| `WATCHTOWER_PORT` | `25921` | Internal Docker network port for Watchtower's HTTP API (published via `expose:`, not reachable from the host). Follows the 25900s port range (prod: 25921, staging: 25931, dev: 25941). |
+| `WATCHTOWER_TOKEN` | **(required, no default)** | Shared secret between the server and Watchtower. `docker compose up` fails fast if missing. Generate with `openssl rand -base64 32`. |
 | `WATCHTOWER_URL` | `http://watchtower:25921` | Internal Docker network address of Watchtower. Set automatically from `WATCHTOWER_PORT` in docker-compose. |
+| `GITHUB_TOKEN` | *(unset)* | **Optional.** When set, the update check authenticates to the GitHub Releases API, raising the rate limit from 60 req/hr/IP to 5000 req/hr. Any classic PAT with no scopes works. |
 
 > **Note:** `MIN_LAUNCHER_VERSION`, `MIN_GAME_VERSION`, and `ADMIN_PASSWORD` are only written
 > to Redis on the very first boot (`SET NX`). After that, Redis is authoritative — use the

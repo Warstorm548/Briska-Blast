@@ -26,7 +26,7 @@ Two independent `TcpListener` instances run inside the same process and share `A
 - `build.rs` — compile-time script that bakes `RELEASE_CHANNEL` into the binary via `env!("RELEASE_CHANNEL")`
 - `config.rs` — environment variable loading with defaults (`GAME_PORT`, `ADMIN_PORT`, `WATCHTOWER_URL`, `WATCHTOWER_TOKEN`, etc.)
 - `error.rs` — unified `AppError` type implementing `IntoResponse`
-- `state.rs` — shared `AppState` holding Redis pool, rate limiters, and `update_tx` channel sender (shared across both listeners)
+- `state.rs` — shared `AppState` holding Redis pool, rate limiters, `update_tx` channel sender, and `update_apply_lock` (single-flight mutex serialising every code path that triggers Watchtower); shared across both listeners
 - `api/` — HTTP route handlers (game listener only)
   - `register.rs` — `POST /register` — player identity issuance
   - `host.rs` — `POST /host` — session creation and code generation
@@ -39,10 +39,10 @@ Two independent `TcpListener` instances run inside the same process and share `A
   - `dashboard.rs` — dashboard display, config update handlers, and all update system handlers (check, apply, schedule, cancel, settings, rollback)
   - `templates.rs` — HTML page functions (no template engine dependency)
 - `update/` — server self-update system
-  - `github.rs` — GitHub Releases API version check (compares against `env!("CARGO_PKG_VERSION")` using `semver`)
-  - `watchtower.rs` — Watchtower HTTP API client (triggers container pull + restart)
-  - `docker.rs` — bollard Docker client (pulls pinned versioned image and retags for rollback)
-  - `task.rs` — long-running tokio background task; drives auto-check intervals, apply intervals, and scheduled updates via `UpdateCommand` channel
+  - `github.rs` — GitHub Releases API version check; uses `semver` to compare against `env!("CARGO_PKG_VERSION")`; supports ETag conditional requests (`update:github_etag` in Redis) and optional `GITHUB_TOKEN` Bearer auth
+  - `watchtower.rs` — Watchtower HTTP API client (triggers container restart; Watchtower runs with `WATCHTOWER_NO_PULL=true`, so it no longer pulls on its own)
+  - `docker.rs` — bollard Docker client; two entry points: `pull_channel_image(channel)` used by the auto-apply path, and `retag_for_rollback(versioned_tag, channel)` used by the admin rollback handler. `IMAGE_REPO` is a hardcoded const for defense-in-depth.
+  - `task.rs` — long-running tokio background task; drives auto-check intervals, apply intervals, and scheduled updates via `UpdateCommand` channel. Every apply path acquires `AppState::update_apply_lock` before triggering Watchtower.
 
 **Planned (future milestones):**
 - `relay/` — real-time message relay between players once P2P is established

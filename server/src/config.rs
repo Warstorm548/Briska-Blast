@@ -45,8 +45,19 @@ impl Config {
                 .unwrap_or_else(|_| "@admin".to_string()),
             watchtower_url: env::var("WATCHTOWER_URL")
                 .unwrap_or_else(|_| "http://watchtower:25921".to_string()),
-            watchtower_token: env::var("WATCHTOWER_TOKEN")
-                .unwrap_or_else(|_| "briska-watchtower-token".to_string()),
+            // No fallback: docker-compose.yml already enforces this via
+            // `${WATCHTOWER_TOKEN:?...}`, and the binary must enforce the
+            // same fail-closed posture for non-compose runs (dev shell,
+            // manual deploy, custom orchestrator). A hardcoded literal
+            // here would otherwise let a missing .env silently boot with
+            // a publicly-known token.
+            watchtower_token: env::var("WATCHTOWER_TOKEN").unwrap_or_else(|_| {
+                panic!(
+                    "WATCHTOWER_TOKEN must be set — set it in .env or your container environment. \
+                     There is no fallback because that would let a missing config silently run \
+                     with a known-literal token."
+                )
+            }),
         }
     }
 }

@@ -160,8 +160,9 @@ Visit `http://localhost:25920/admin` in a browser.
 | Dashboard loads | Updates section shows channel, version, and "Last checked: Never" initially |
 | Press "Check for Updates" — no update available | `update:available_version` key absent in Redis; no update banner shown |
 | Press "Check for Updates" — update available | If the configured `RELEASE_CHANNEL` has a newer release on GitHub for the running version, redirect message reads "Update available: vX.Y.Z" and the banner appears with Apply Now and Schedule options. The handler now calls GitHub directly; pre-setting `update:available_version` via `redis-cli` will NOT cause a fake "update available" — only a real newer GitHub release will. |
+| Press "Check for Updates" — second click within a few minutes | GitHub returns `304 Not Modified` (the cached `update:github_etag` matches). Redirect message reads "No changes since last check". Existing `update:available_version` / `update:found_at` preserved. |
 | Press "Check for Updates" — GitHub unreachable | Redirect message reads "Check failed: could not reach GitHub". Existing `update:available_version` is preserved (transient network failure does not clear cached state). |
-| Press "Apply Now" | `update:previous_version` set in Redis; Watchtower API called |
+| Press "Apply Now" | `update:previous_version` set in Redis; the server pre-pulls the channel image via `bollard`, then calls the Watchtower API. Watch `docker compose logs server` for `pre-pulled ghcr.io/...:CHANNEL` — pull failures appear here as `tracing::warn!`, not in Watchtower's logs. |
 | Schedule an update with a past datetime | Update applied immediately (delay is 0 or negative) |
 | Schedule an update with a future datetime | `update:scheduled_at` set in Redis; scheduled datetime shown with Cancel button |
 | Press Cancel on a scheduled update | `update:scheduled_at` and `update:scheduled_version` cleared; auto-update resumes if enabled |
@@ -217,4 +218,5 @@ GET update:last_checked          # unix timestamp of last GitHub API poll
 GET update:scheduled_at          # unix timestamp for pending manual schedule
 GET update:scheduled_version     # version queued for scheduled apply
 GET update:rollback_locked       # "true" when auto-update disabled after rollback
+GET update:github_etag           # last ETag from GitHub Releases API (set on 200; sent as If-None-Match)
 ```
