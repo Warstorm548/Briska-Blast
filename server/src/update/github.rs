@@ -85,6 +85,18 @@ pub async fn check_for_update(
         .await
         .map_err(|e| format!("github response parse failed: {e}"))?;
 
+    // Defensive guard: per_page=100 with no pagination means a project that
+    // ever accumulates >100 channel-matching releases could hide the newest
+    // tag off the first page. Log a warning when we hit the page boundary so
+    // ops sees it before it becomes "auto-update mysteriously stopped".
+    if releases.len() >= 100 {
+        tracing::warn!(
+            "github returned {} releases (per_page cap) — newer releases may be off-page; \
+             consider pagination if this persists",
+            releases.len()
+        );
+    }
+
     // Persist the new ETag (best-effort; missing pool / Redis error is logged
     // but not fatal — we still want to return the parsed update outcome).
     if let Some(ref etag) = new_etag {
@@ -126,11 +138,22 @@ pub async fn check_for_update(
 }
 
 fn channel_matches(channel: &str, release: &Release) -> bool {
-    let tag = &release.tag_name;
+    // Parse the tag's semver and inspect the pre-release identifier directly.
+    // The previous implementation used substring matching against literal
+    // "-ea" / "-dev", which let tags like v1.2.3-beta.1 or v1.2.3-rc.1 slip
+    // through onto the stable channel whenever GitHub's `prerelease` flag was
+    // misconfigured. Using `Version::pre.is_empty()` for stable rejects every
+    // pre-release identifier regardless of its name. Unparseable tags match
+    // nothing — the candidate sort in `check_for_update` would reject them
+    // anyway, but failing fast keeps the predicate truthful.
+    let Ok(parsed) = Version::parse(release.tag_name.trim_start_matches('v')) else {
+        return false;
+    };
+    let pre = parsed.pre.as_str();
     match channel {
-        "stable" => !release.prerelease && !tag.contains("-ea") && !tag.contains("-dev"),
-        "ea"     => release.prerelease && tag.contains("-ea"),
-        "dev"    => release.prerelease && tag.contains("-dev"),
+        "stable" => !release.prerelease && pre.is_empty(),
+        "ea"     => release.prerelease && pre.starts_with("ea"),
+        "dev"    => release.prerelease && pre.starts_with("dev"),
         _        => false,
     }
 }
@@ -171,6 +194,27 @@ mod tests {
         assert!(channel_matches("dev", &rel("v1.2.3-dev.1", true)));
         assert!(!channel_matches("dev", &rel("v1.2.3", false)));
         assert!(!channel_matches("dev", &rel("v1.2.3-ea.1", true)));
+    }
+
+    #[test]
+    fn stable_channel_rejects_arbitrary_prereleases() {
+        // v0.4.2 regression guard: pre-release identifiers other than "ea"
+        // and "dev" must NOT slip onto stable, even if the GitHub `prerelease`
+        // flag is misconfigured as false.
+        assert!(!channel_matches("stable", &rel("v1.2.3-beta.1", false)));
+        assert!(!channel_matches("stable", &rel("v1.2.3-rc.1", false)));
+        assert!(!channel_matches("stable", &rel("v1.2.3-alpha", false)));
+        assert!(!channel_matches("stable", &rel("v1.2.3-beta.1", true)));
+        assert!(!channel_matches("stable", &rel("v1.2.3-rc.1", true)));
+    }
+
+    #[test]
+    fn unparseable_tags_match_nothing() {
+        // Malformed tags must not crash the filter and must not accidentally
+        // match the stable channel via the "pre is empty" fallback.
+        assert!(!channel_matches("stable", &rel("not-a-version", false)));
+        assert!(!channel_matches("stable", &rel("v1.2", false)));
+        assert!(!channel_matches("ea", &rel("garbage", true)));
     }
 
     #[test]

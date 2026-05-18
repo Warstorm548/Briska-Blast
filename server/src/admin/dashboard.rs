@@ -79,7 +79,6 @@ pub async fn dashboard(
     let update_last_checked: String = conn.get("update:last_checked").await.unwrap_or_default();
     let update_scheduled_at: String = conn.get("update:scheduled_at").await.unwrap_or_default();
     let update_scheduled_version: String = conn.get("update:scheduled_version").await.unwrap_or_default();
-    let update_manual_override: String = conn.get("update:manual_override").await.unwrap_or_default();
     let update_previous_version: String = conn.get("update:previous_version").await.unwrap_or_default();
     let update_rollback_locked: String = conn.get("update:rollback_locked").await.unwrap_or_default();
 
@@ -108,7 +107,6 @@ pub async fn dashboard(
         update_apply_interval_secs: update_apply_interval.parse().ok().filter(|&v| v > 0u64),
         update_scheduled_at: fmt_ts(&update_scheduled_at),
         update_scheduled_version: if update_scheduled_version.is_empty() { None } else { Some(update_scheduled_version) },
-        _update_manual_override: update_manual_override == "true",
         update_previous_version: if update_previous_version.is_empty() { None } else { Some(update_previous_version) },
         update_rollback_locked: update_rollback_locked == "true",
     };
@@ -222,10 +220,6 @@ pub async fn check_for_update(
     let channel = env!("RELEASE_CHANNEL");
     let now = chrono::Utc::now().timestamp();
 
-    if let Ok(mut conn) = state.redis.get().await {
-        let _: () = conn.set("update:last_checked", now.to_string()).await.unwrap_or(());
-    }
-
     use crate::update::github::CheckOutcome;
     match crate::update::github::check_for_update(&client, channel, &state.redis).await {
         Ok(CheckOutcome::Update(tag)) => {
@@ -236,22 +230,30 @@ pub async fn check_for_update(
                 if prev != tag {
                     let _: () = conn.set("update:found_at", now.to_string()).await.unwrap_or(());
                 }
+                let _: () = conn.set("update:last_checked", now.to_string()).await.unwrap_or(());
             }
-            Redirect::to(&format!("/admin/dashboard?ok=Update+available%3A+{}", tag)).into_response()
+            Redirect::to(&format!("/admin/dashboard?ok=Update+available%3A+{}", urlencoding::encode(&tag))).into_response()
         }
         Ok(CheckOutcome::NoUpdate) => {
             if let Ok(mut conn) = state.redis.get().await {
                 let _: () = conn.del("update:available_version").await.unwrap_or(());
                 let _: () = conn.del("update:found_at").await.unwrap_or(());
+                let _: () = conn.set("update:last_checked", now.to_string()).await.unwrap_or(());
             }
             Redirect::to("/admin/dashboard?ok=Already+up+to+date").into_response()
         }
         Ok(CheckOutcome::NotModified) => {
-            // GitHub returned 304 — cached state is still correct.
+            // GitHub returned 304 — cached state is still correct, but the
+            // check itself did happen so the timestamp is accurate.
+            if let Ok(mut conn) = state.redis.get().await {
+                let _: () = conn.set("update:last_checked", now.to_string()).await.unwrap_or(());
+            }
             Redirect::to("/admin/dashboard?ok=No+changes+since+last+check").into_response()
         }
         Err(_) => {
-            // Network/parse failure — preserve any previously detected update.
+            // Network/parse failure — preserve previously detected update AND
+            // leave last_checked untouched so the dashboard doesn't show a
+            // fresh timestamp for a check that never actually succeeded.
             Redirect::to("/admin/dashboard?err=Check+failed%3A+could+not+reach+GitHub").into_response()
         }
     }
@@ -264,10 +266,24 @@ pub async fn apply_update_now(
     if require_session(&headers, &state.redis).await.is_none() {
         return Redirect::to("/admin").into_response();
     }
+    // Precondition: there must actually be an update available. The UI hides
+    // the button otherwise, but a tampered POST would otherwise re-trigger
+    // Watchtower against the same channel image.
     if let Ok(mut conn) = state.redis.get().await {
-        let current = env!("CARGO_PKG_VERSION");
-        let _: () = conn.set("update:previous_version", current).await.unwrap_or(());
+        let available: String = conn.get("update:available_version").await.unwrap_or_default();
+        if available.is_empty() {
+            return Redirect::to("/admin/dashboard?err=No+update+available").into_response();
+        }
+        // Also bail if a rollback safety lock is in place — re-enabling
+        // auto-update (which clears the lock) is the documented unlock path.
+        let rb: String = conn.get("update:rollback_locked").await.unwrap_or_default();
+        if rb == "true" {
+            return Redirect::to("/admin/dashboard?err=Rollback+lock+is+set+%E2%80%94+re-enable+auto-update+to+clear+it").into_response();
+        }
     }
+    // NOTE: `update:previous_version` is now written by the update task only
+    // after Watchtower actually accepts the trigger. Writing it eagerly here
+    // left a stale rollback target if the trigger failed.
     let _ = state.update_tx.send(UpdateCommand::ApplyNow).await;
     Redirect::to("/admin/dashboard?ok=Update+triggered").into_response()
 }
@@ -360,7 +376,29 @@ pub async fn rollback_update(
     }
 
     let channel = env!("RELEASE_CHANNEL");
-    let version = form.version.trim_start_matches('v');
+    let version = form.version.trim_start_matches('v').to_string();
+
+    // Validate as semver — the hidden form field is cosmetic; the value lands
+    // in a Docker image tag, so it MUST parse. Rejects arbitrary tag input
+    // (e.g. "latest", "main", malicious-tag-with-dotdot).
+    if Version::parse(&version).is_err() {
+        return Redirect::to("/admin/dashboard?err=Invalid+rollback+version+format").into_response();
+    }
+
+    // Cross-check against the authoritative rollback target in Redis. A
+    // tampered POST that asks to deploy some other historical tag is rejected
+    // even though the admin session is valid — Redis is the source of truth,
+    // not the form field.
+    if let Ok(mut conn) = state.redis.get().await {
+        let stored: String = conn.get("update:previous_version").await.unwrap_or_default();
+        let stored_trim = stored.trim_start_matches('v').to_string();
+        if stored_trim.is_empty() || stored_trim != version {
+            return Redirect::to("/admin/dashboard?err=Rollback+target+does+not+match+stored+previous+version").into_response();
+        }
+    } else {
+        return Redirect::to("/admin/dashboard?err=Redis+error").into_response();
+    }
+
     let versioned_tag = format!("v{}", version);
 
     match crate::update::docker::retag_for_rollback(&versioned_tag, channel).await {
@@ -404,11 +442,7 @@ pub async fn rollback_update(
             }
         }
         Err(e) => {
-            Redirect::to(&format!("/admin/dashboard?err=Rollback+failed%3A+{}", urlencoding(&e))).into_response()
+            Redirect::to(&format!("/admin/dashboard?err=Rollback+failed%3A+{}", urlencoding::encode(&e))).into_response()
         }
     }
-}
-
-fn urlencoding(s: &str) -> String {
-    s.replace(' ', "+").replace(':', "%3A")
 }

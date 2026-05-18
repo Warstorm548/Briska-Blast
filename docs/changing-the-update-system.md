@@ -128,7 +128,30 @@ A practical convention:
 
 Operators reading release notes for a minor bump know to plan the extra command. Operators reading patch-release notes know they can let it ride.
 
-### 5. Keep a manual recovery path in the repo
+### 5. Lock first, then read state — never the reverse
+
+Any code path that decides "should we trigger Watchtower?" based on Redis
+state MUST acquire `update_apply_lock` **before** reading that state, not
+after. A read-then-lock ordering creates a window in which a rollback (or
+any other concurrent mutator) can complete between the read and the lock
+acquisition — the original code path then resumes, makes its decision on
+stale data, and triggers Watchtower against state that no longer matches
+reality. This is exactly the v0.4.2 fix; the pattern is now codified in
+`task.rs::should_apply_after_lock` and `decide_should_apply`.
+
+Symptoms when this rule is violated:
+- Rollback "works" briefly, then the next auto-apply cycle re-deploys the
+  version you just rolled back from.
+- `update:rollback_locked` is set in Redis, yet Watchtower restarts the
+  server anyway.
+- Schedule cancellation appears to work, but the cancelled update fires
+  anyway a few seconds later.
+
+When adding a new apply path, write a unit test that calls
+`decide_should_apply` with `rollback_locked="true"` and asserts `false`.
+That single test guards the most subtle bug in this subsystem.
+
+### 6. Keep a manual recovery path in the repo
 
 `tools/manual-deploy.sh` (or its equivalent) should exist and be tested. If self-update ever strands a server, the operator SSHes in and runs:
 

@@ -127,17 +127,36 @@ When enabled, two options appear:
 When auto-update finds a version and the apply interval has elapsed, the server pre-pulls the new image and triggers Watchtower automatically with no prompt.
 
 ### Rollback
-When a previous version is stored (set automatically before any update is applied), a **Rollback** button appears showing the previous version.
+When a previous version is stored (recorded automatically after each
+successful apply), a **Rollback** button appears showing the previous version.
 
 Pressing it:
-1. Pulls the pinned versioned image (e.g. `:v0.3.0`) from GHCR via `bollard`
-2. Retags it locally as the channel tag (e.g. `:stable`)
-3. Triggers Watchtower to restart with the retagged image
-4. **Disables auto-update** as a safety lock — the toggle must be manually re-enabled once the rolled-back version is confirmed stable
+1. Validates the submitted version parses as semver (as of v0.4.2)
+2. Cross-checks it against `update:previous_version` in Redis — mismatch is
+   rejected with an error (as of v0.4.2). The hidden form field is cosmetic;
+   Redis is the source of truth, so a tampered POST cannot deploy an
+   arbitrary historical tag.
+3. Pulls the pinned versioned image (e.g. `:v0.3.0`) from GHCR via `bollard`
+4. Retags it locally as the channel tag (e.g. `:stable`)
+5. Triggers Watchtower to restart with the retagged image
+6. **Disables auto-update** as a safety lock (`update:rollback_locked="true"`,
+   `update:auto_enabled="false"`) — the toggle must be manually re-enabled
+   once the rolled-back version is confirmed stable. As of v0.4.2, the apply
+   paths additionally re-check `rollback_locked` *after* acquiring the apply
+   mutex, so an auto-apply that was already queued cannot silently overwrite
+   a fresh rollback.
 
 ### Apply-path serialisation
 
 All paths that trigger Watchtower (`Apply Now`, scheduled apply, timer auto-apply, and rollback) acquire a single in-process `tokio::sync::Mutex` before firing. Watchtower itself is idempotent, but the Redis writes around the trigger (`update:previous_version`, `update:available_version`, `update:found_at`) must not interleave. A rollback request submitted while an auto-apply is mid-flight will briefly wait for the auto-apply's mutex guard to drop before proceeding.
+
+As of v0.4.2, the apply paths follow a **lock-then-read** discipline:
+authoritative state (`auto_enabled`, `rollback_locked`, `scheduled_at`,
+`available_version`) is re-read from Redis *after* the mutex has been
+acquired, and the decision to call `watchtower::trigger_update` is made on
+that fresh read. This closes a race where a rollback could complete during
+the window between an auto-apply's state read and its lock acquisition — the
+auto-apply would otherwise resume and silently re-overwrite the rollback.
 
 ### Where update failures appear
 
@@ -165,7 +184,6 @@ All update state is stored in Redis (persisted to disk via the `redis_data` Dock
 | `update:last_checked` | Unix timestamp of the last GitHub Releases API poll |
 | `update:scheduled_at` | Unix timestamp for a pending manually scheduled update |
 | `update:scheduled_version` | Version queued for the scheduled apply |
-| `update:manual_override` | `"true"` while a manual check is in progress |
 | `update:rollback_locked` | `"true"` after a rollback — auto-update blocked until manually cleared |
 | `update:github_etag` | Last ETag returned by the GitHub Releases API — sent back as `If-None-Match` on subsequent polls so unchanged responses cost zero rate-limit quota |
 

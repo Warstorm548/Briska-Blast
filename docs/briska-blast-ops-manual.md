@@ -104,7 +104,14 @@ Each environment lives in its own folder with its own compose file and `.env`:
     └── .env              (GAME_PORT=25939, ADMIN_PORT=25940, WATCHTOWER_PORT=25941, WATCHTOWER_TOKEN=…)
 ```
 
-**`WATCHTOWER_TOKEN` is required** in every environment's `.env`. Compose uses `${WATCHTOWER_TOKEN:?...}`, so a missing or empty value causes `docker compose up` to abort with an error. No literal default exists — this is intentional so a missing `.env` cannot silently run with a public token. Generate one per environment with:
+**`WATCHTOWER_TOKEN` is required** in every environment's `.env`. Compose
+uses `${WATCHTOWER_TOKEN:?...}`, so a missing or empty value causes
+`docker compose up` to abort with an error. **As of server v0.4.2 the binary
+itself also enforces this** — `Config::from_env` panics on startup if
+`WATCHTOWER_TOKEN` is unset, with no literal-default fallback. This closes a
+non-compose-run gap where a dev shell or manual orchestrator could
+previously boot the binary against a hardcoded public token. Generate one
+per environment with:
 
 ```bash
 openssl rand -base64 32

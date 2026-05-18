@@ -5,6 +5,106 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.4.2] — 2026-05-18
+
+Patch release — post-review correctness pass over the update system. Addresses
+findings from the in-branch review of v0.4.1 before first production deploy.
+No new admin-panel functionality; existing buttons (check / apply / schedule /
+cancel / settings / rollback / auto-toggle) behave identically on the happy
+path. The fixes are all on the failure / concurrent / tampered-input edges.
+
+`RELEASE_CHANNEL` remains baked at compile time via `build.rs` — unchanged on
+purpose. Defense-in-depth against runtime env tampering.
+
+### Fixed — critical
+
+- **Rollback-defeating race in auto-apply (`update/task.rs`)** — `maybe_apply`
+  previously read `update:scheduled_at`, `update:available_version`, etc.
+  *before* acquiring `update_apply_lock`. A rollback that completed inside
+  that window (acquiring the lock first, setting `auto_enabled=false` /
+  `rollback_locked=true`, retagging the local image) could be silently undone
+  by the auto-apply path resuming, re-pulling the registry's `:channel` image,
+  and re-triggering Watchtower. Lock is now acquired first; authoritative
+  state is re-read inside the lock via the new `decide_should_apply` predicate
+  (auto_enabled / rollback_locked / scheduled_at / available_version). Same
+  fix applied to `wait_and_apply` and `UpdateCommand::ApplyNow`.
+- **Stable channel accepted non-`-ea`/`-dev` prereleases (`update/github.rs`)** —
+  the previous `channel_matches` used substring matching for `-ea` and `-dev`.
+  Tags like `v1.2.3-beta.1` or `v1.2.3-rc.1` slipped through onto stable
+  whenever GitHub's `prerelease` flag was misconfigured as false. Filter now
+  parses the tag via `semver::Version` and inspects `Version::pre.is_empty()`
+  for stable; ea/dev still require the `prerelease` flag *and* the matching
+  pre-release identifier prefix. Unparseable tags now match nothing.
+
+### Fixed — high
+
+- **Rollback handler trusted the form field (`admin/dashboard.rs`)** —
+  `rollback_update` formatted `form.version` directly into a Docker image tag
+  with no validation. A tampered POST (admin session required, but the hidden
+  field is cosmetic) could deploy any tag that exists in GHCR. Now validates
+  the value as semver and cross-checks it against `update:previous_version`
+  read from Redis; mismatch redirects with an error. Redis is the source of
+  truth, not the form.
+- **`WATCHTOWER_TOKEN` had a hardcoded fallback (`config.rs`)** — compose
+  enforces `${WATCHTOWER_TOKEN:?...}` fail-closed, but the binary itself fell
+  back to the literal `"briska-watchtower-token"` when the env var was unset.
+  Non-compose runs (dev shell, manual deploy, custom orchestrator) silently
+  booted with a publicly-known token. Fallback removed; missing env var now
+  panics on startup with an actionable message.
+- **`apply_update_now` had no precondition (`admin/dashboard.rs`)** — sent
+  `UpdateCommand::ApplyNow` regardless of whether an update was actually
+  available. The UI hides the button, but a crafted POST would still trigger
+  a no-op Watchtower call. Now reads `update:available_version` and refuses
+  if empty; also refuses if `update:rollback_locked == "true"`.
+
+### Fixed — smaller
+
+- **`wait_and_apply` cleared the schedule before the apply succeeded
+  (`update/task.rs`)** — `clear_schedule_conn` now runs only after
+  `watchtower::trigger_update` returns `true`. A failed apply no longer
+  silently drops the schedule.
+- **`update:previous_version` was written before Watchtower accepted the
+  trigger (`update/task.rs`, `admin/dashboard.rs`)** — could leave a stale
+  rollback target equal to the still-running version. Moved to the success
+  branch in every apply path. The rollback handler already wrote on success;
+  the other three paths now match.
+- **`update:last_checked` was written before the GitHub call (`admin/dashboard.rs`,
+  `update/task.rs`)** — a failed check still advanced the dashboard timestamp,
+  misleading operators. Now written only on `Ok(...)` outcomes; `Err(...)`
+  leaves the previous value intact.
+- **Hand-rolled `urlencoding` in `admin/dashboard.rs`** — only escaped space
+  and colon; any error message containing `&`, `=`, `?`, `#`, `+`, or `%`
+  produced malformed redirect URLs. Replaced with the `urlencoding` crate.
+- **`update:manual_override` was dead state (`admin/dashboard.rs`,
+  `admin/templates.rs`)** — read on every dashboard render, threaded into
+  `DashboardData` as `_update_manual_override`, never written anywhere, never
+  consumed. Removed.
+- **GitHub pagination boundary warning (`update/github.rs`)** — when the
+  releases response returns exactly 100 entries (the `per_page` cap), log a
+  `tracing::warn!` flagging that newer releases may be off-page. No behaviour
+  change; just operator visibility before "auto-update mysteriously stopped"
+  hits the field.
+
+### Added
+
+- **Unit tests for the new predicates** — `decide_should_apply` exercised
+  across the four bail-out conditions; `channel_matches` regression-tested
+  against `-beta`, `-rc`, `-alpha`, and unparseable tags. 14 update-module
+  tests pass; previous 6 still pass.
+
+### Dependencies
+
+- Added `urlencoding = "2"`.
+
+### Migration
+
+None. All `update:*` Redis key names and meanings are preserved. v0.4.1 can
+discover and apply v0.4.2 through the existing GitHub Releases / Watchtower
+contract — neither was touched. The pre-merge checklist in
+`docs/changing-the-update-system.md` was walked end-to-end.
+
+---
+
 ## [0.4.1] — 2026-05-18
 
 Patch release — pre-deployment hardening pass over the update system. No

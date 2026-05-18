@@ -103,17 +103,24 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
                     None => break,
                     Some(UpdateCommand::ApplyNow) => {
                         let _guard = state.update_apply_lock.lock().await;
-                        store_previous_version(&state).await;
-                        // Pre-pull the new image so Watchtower (NO_PULL=true)
-                        // has a newer local image to compare against.
+                        // Re-check rollback lock *after* acquiring the apply
+                        // lock — a rollback that completed while this command
+                        // was queued must not be undone by a stale ApplyNow.
+                        if rollback_locked(&state).await {
+                            tracing::warn!("ApplyNow ignored: rollback_locked is set");
+                            continue;
+                        }
                         if let Err(e) = docker::pull_channel_image(channel).await {
                             tracing::warn!("ApplyNow pre-pull failed: {e}");
                         }
-                        watchtower::trigger_update(
+                        let ok = watchtower::trigger_update(
                             &client,
                             &state.config.watchtower_url,
                             &state.config.watchtower_token,
                         ).await;
+                        if ok {
+                            store_previous_version(&state).await;
+                        }
                     }
                     Some(UpdateCommand::Schedule(ts)) => {
                         if let Ok(mut conn) = state.redis.get().await {
@@ -152,14 +159,11 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
 
 async fn do_check(client: &Client, state: &AppState, channel: &str) {
     let now = chrono::Utc::now().timestamp();
-    if let Ok(mut conn) = state.redis.get().await {
-        let _: () = conn
-            .set("update:last_checked", now.to_string())
-            .await
-            .inspect_err(|e| tracing::warn!("redis set last_checked failed: {e}"))
-            .unwrap_or(());
-    }
 
+    // `update:last_checked` is now written only on a successful round-trip
+    // (Update / NoUpdate / NotModified). On Err we leave the previous value
+    // alone — a network blip should not advance the timestamp to "now" and
+    // mislead the dashboard into showing a fresh check that never happened.
     match github::check_for_update(client, channel, &state.redis).await {
         Ok(github::CheckOutcome::Update(tag)) => {
             if let Ok(mut conn) = state.redis.get().await {
@@ -183,6 +187,7 @@ async fn do_check(client: &Client, state: &AppState, channel: &str) {
                         .inspect_err(|e| tracing::warn!("redis set found_at failed: {e}"))
                         .unwrap_or(());
                 }
+                set_last_checked(&mut conn, now).await;
             }
             tracing::info!("update available: {tag}");
         }
@@ -198,43 +203,49 @@ async fn do_check(client: &Client, state: &AppState, channel: &str) {
                     .await
                     .inspect_err(|e| tracing::warn!("redis del found_at failed: {e}"))
                     .unwrap_or(());
+                set_last_checked(&mut conn, now).await;
             }
             tracing::debug!("no update available");
         }
         Ok(github::CheckOutcome::NotModified) => {
-            // GitHub confirmed nothing has changed — preserve cached state.
+            // GitHub confirmed nothing has changed — preserve cached state but
+            // still advance the last-checked timestamp; the check itself
+            // succeeded.
+            if let Ok(mut conn) = state.redis.get().await {
+                set_last_checked(&mut conn, now).await;
+            }
             tracing::debug!("github 304 Not Modified — preserving cached state");
         }
         Err(e) => {
             // Network/parse failure — preserve any previously known state so
-            // a transient blip doesn't make an existing update "disappear".
+            // a transient blip doesn't make an existing update "disappear",
+            // and leave last_checked untouched.
             tracing::warn!("update check failed (state preserved): {e}");
         }
     }
 }
 
+async fn set_last_checked(conn: &mut deadpool_redis::Connection, now: i64) {
+    let _: () = conn
+        .set("update:last_checked", now.to_string())
+        .await
+        .inspect_err(|e| tracing::warn!("redis set last_checked failed: {e}"))
+        .unwrap_or(());
+}
+
 async fn maybe_apply(client: &Client, state: &AppState, channel: &str) {
+    // Acquire the apply lock FIRST, then re-read state. Any rollback or
+    // settings change that completed while we were pending must be visible
+    // to our "should we apply?" decision — otherwise a concurrent rollback
+    // can be silently re-overwritten by a stale auto-apply (see v0.4.2).
+    let _guard = state.update_apply_lock.lock().await;
+
     let mut conn = match state.redis.get().await {
         Ok(c) => c,
         Err(_) => return,
     };
 
-    // Defer to any pending manual schedule — wait_and_apply owns that update.
-    let scheduled: String = conn
-        .get("update:scheduled_at")
-        .await
-        .inspect_err(|e| tracing::warn!("redis get scheduled_at failed: {e}"))
-        .unwrap_or_default();
-    if !scheduled.is_empty() {
-        return;
-    }
-
-    let available: String = conn
-        .get("update:available_version")
-        .await
-        .inspect_err(|e| tracing::warn!("redis get available_version failed: {e}"))
-        .unwrap_or_default();
-    if available.is_empty() {
+    if !should_apply_after_lock(&mut conn).await {
         return;
     }
 
@@ -258,18 +269,76 @@ async fn maybe_apply(client: &Client, state: &AppState, channel: &str) {
     };
 
     if ready {
-        let _guard = state.update_apply_lock.lock().await;
-        store_previous_version_conn(&mut conn).await;
         drop(conn);
         if let Err(e) = docker::pull_channel_image(channel).await {
             tracing::warn!("auto-apply pre-pull failed: {e}");
         }
-        watchtower::trigger_update(
+        let ok = watchtower::trigger_update(
             client,
             &state.config.watchtower_url,
             &state.config.watchtower_token,
         ).await;
+        if ok {
+            store_previous_version(state).await;
+        }
     }
+}
+
+/// Re-read authoritative apply state from Redis *after* the apply lock has
+/// been acquired, and decide whether the auto-apply path should proceed.
+///
+/// All four bail-out conditions are checked together so rollback (which sets
+/// `rollback_locked` + `auto_enabled=false`) wins decisively over any
+/// auto-apply that was pending when the rollback completed.
+async fn should_apply_after_lock(conn: &mut deadpool_redis::Connection) -> bool {
+    let auto_enabled: String = conn
+        .get("update:auto_enabled")
+        .await
+        .inspect_err(|e| tracing::warn!("redis get auto_enabled failed: {e}"))
+        .unwrap_or_default();
+    let rollback_locked: String = conn
+        .get("update:rollback_locked")
+        .await
+        .inspect_err(|e| tracing::warn!("redis get rollback_locked failed: {e}"))
+        .unwrap_or_default();
+    let scheduled: String = conn
+        .get("update:scheduled_at")
+        .await
+        .inspect_err(|e| tracing::warn!("redis get scheduled_at failed: {e}"))
+        .unwrap_or_default();
+    let available: String = conn
+        .get("update:available_version")
+        .await
+        .inspect_err(|e| tracing::warn!("redis get available_version failed: {e}"))
+        .unwrap_or_default();
+    decide_should_apply(&auto_enabled, &rollback_locked, &scheduled, &available)
+}
+
+/// Pure decision predicate for `should_apply_after_lock` — extracted so it
+/// can be unit-tested without standing up a Redis instance.
+fn decide_should_apply(
+    auto_enabled: &str,
+    rollback_locked: &str,
+    scheduled_at: &str,
+    available_version: &str,
+) -> bool {
+    auto_enabled == "true"
+        && rollback_locked != "true"
+        && scheduled_at.is_empty()
+        && !available_version.is_empty()
+}
+
+/// Read `update:rollback_locked` and return true iff it is set to "true".
+/// Used by the `ApplyNow` command handler to bail out on a stale command
+/// that was queued before a rollback completed.
+async fn rollback_locked(state: &AppState) -> bool {
+    let Ok(mut conn) = state.redis.get().await else { return false };
+    let v: String = conn
+        .get("update:rollback_locked")
+        .await
+        .inspect_err(|e| tracing::warn!("redis get rollback_locked failed: {e}"))
+        .unwrap_or_default();
+    v == "true"
 }
 
 async fn wait_and_apply(ts: i64, state: AppState, client: Client) {
@@ -277,7 +346,13 @@ async fn wait_and_apply(ts: i64, state: AppState, client: Client) {
     let delay = (ts - now).max(0) as u64;
     tokio::time::sleep(Duration::from_secs(delay)).await;
 
-    // confirm schedule wasn't cancelled or rescheduled while we waited
+    let channel = env!("RELEASE_CHANNEL");
+
+    // Acquire the apply lock FIRST, then re-validate the schedule and check
+    // rollback state. A rollback that completed during our sleep must win
+    // over this stale schedule (see v0.4.2 race-condition fix).
+    let _guard = state.update_apply_lock.lock().await;
+
     let stored_ts: Option<i64> = match state.redis.get().await {
         Ok(mut conn) => {
             let raw: String = conn
@@ -292,21 +367,28 @@ async fn wait_and_apply(ts: i64, state: AppState, client: Client) {
     if !wait_and_apply_should_proceed(ts, stored_ts) {
         return;
     }
-
-    let channel = env!("RELEASE_CHANNEL");
-    let _guard = state.update_apply_lock.lock().await;
-    if let Ok(mut conn) = state.redis.get().await {
-        store_previous_version_conn(&mut conn).await;
-        clear_schedule_conn(&mut conn).await;
+    if rollback_locked(&state).await {
+        tracing::warn!("scheduled apply ignored: rollback_locked is set");
+        return;
     }
+
     if let Err(e) = docker::pull_channel_image(channel).await {
         tracing::warn!("scheduled apply pre-pull failed: {e}");
     }
-    watchtower::trigger_update(
+    let ok = watchtower::trigger_update(
         &client,
         &state.config.watchtower_url,
         &state.config.watchtower_token,
     ).await;
+    // Only mutate Redis state once Watchtower has actually accepted the
+    // trigger — a failed apply must not silently drop the schedule or the
+    // rollback target.
+    if ok {
+        if let Ok(mut conn) = state.redis.get().await {
+            store_previous_version_conn(&mut conn).await;
+            clear_schedule_conn(&mut conn).await;
+        }
+    }
 }
 
 async fn store_previous_version(state: &AppState) {
@@ -406,6 +488,36 @@ mod tests {
         assert!(!wait_and_apply_should_proceed(1_700_000_000, Some(1_700_003_600)));
         // Even a 1-second drift is a cancel-then-reschedule — must not proceed.
         assert!(!wait_and_apply_should_proceed(1_700_000_000, Some(1_700_000_001)));
+    }
+
+    #[test]
+    fn decide_should_apply_requires_auto_enabled() {
+        // Happy path: auto on, no rollback, no schedule, version available.
+        assert!(decide_should_apply("true", "", "", "v0.5.0"));
+
+        // Auto disabled (the rollback handler sets this to "false") — never apply.
+        assert!(!decide_should_apply("false", "", "", "v0.5.0"));
+        assert!(!decide_should_apply("", "", "", "v0.5.0"));
+    }
+
+    #[test]
+    fn decide_should_apply_blocks_on_rollback_lock() {
+        // Regression guard for the v0.4.2 race: a rollback that completed
+        // while auto-apply was pending must keep auto-apply from firing
+        // even if auto_enabled hadn't yet been re-read as "false".
+        assert!(!decide_should_apply("true", "true", "", "v0.5.0"));
+    }
+
+    #[test]
+    fn decide_should_apply_defers_to_pending_schedule() {
+        // wait_and_apply owns the update when a schedule is pending.
+        assert!(!decide_should_apply("true", "", "1700000000", "v0.5.0"));
+    }
+
+    #[test]
+    fn decide_should_apply_requires_available_version() {
+        // No update was found — nothing to do.
+        assert!(!decide_should_apply("true", "", "", ""));
     }
 
     #[test]
