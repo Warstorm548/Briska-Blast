@@ -26,8 +26,8 @@ After the signaling handshake completes, the server is not involved in game traf
 | Endpoint | Method | Purpose |
 |---|---|---|
 | `/register` | POST | First-contact: issue player ID + secret token |
-| `/host` | POST | Host registers external IP:port, receives session code |
-| `/join` | POST | Joiner submits external IP:port + code, receives host IP:port |
+| `/host` | POST | Host registers external IP:port and gamemode, receives session code |
+| `/join` | POST | Joiner submits external IP:port + code, receives host IP:port and gamemode |
 | `/session/{code}` | GET | Host polls to discover when joiner has arrived |
 | `/session/{code}` | DELETE | Explicit session teardown (frees code immediately) |
 
@@ -36,10 +36,13 @@ After the signaling handshake completes, the server is not involved in game traf
 ```
 Host                    Server                   Joiner
   |-- POST /host -------->|                         |
+  |    {ip, port,          |                         |
+  |     gamemode}          |                         |
   |<-- {session_code} ----|                         |
   |                        |<-- POST /join ----------|
   |                        |    {code, joiner_ip}   |
-  |                        |--> {host_ip} ----------|
+  |                        |--> {host_ip,           |
+  |                        |    gamemode} ---------->|
   |-- GET /session/{code}->|                         |
   |<-- {joiner_ip:port} ---|                         |
   |<======= simultaneous UDP to each other =========>|

@@ -53,21 +53,23 @@ Redis (in Docker container)
 
 ### The Allocation Table
 
-| Environment | Game Port | Admin Port |
-|-------------|-----------|------------|
-| Prod        | 25919     | 25920      |
-| Staging     | 25929     | 25930      |
-| Dev         | 25939     | 25940      |
+| Environment | Game Port | Admin Port | Watchtower Port |
+|-------------|-----------|------------|-----------------|
+| Prod        | 25919     | 25920      | 25921           |
+| Staging     | 25929     | 25930      | 25931           |
+| Dev         | 25939     | 25940      | 25941           |
 
 ### The Tens-Digit Pattern
 
-Ports are allocated in per-environment pairs, with game/admin separated by +1:
+Ports are allocated in per-environment triplets, with game/admin/watchtower separated by +1:
 
-- Prod: 25919 (game), 25920 (admin)
-- Staging: 25929 (game), 25930 (admin)
-- Dev: 25939 (game), 25940 (admin)
+- Prod: 25919 (game), 25920 (admin), 25921 (watchtower)
+- Staging: 25929 (game), 25930 (admin), 25931 (watchtower)
+- Dev: 25939 (game), 25940 (admin), 25941 (watchtower)
 
 This keeps each environment in its own numeric block and makes environment ownership easy to spot in logs/config at a glance.
+
+**Why not 8080 for Watchtower?** Port 8080 is an extremely common "alternative HTTP" port used by game server panels (Pterodactyl, AMP, etc.), web UIs, and proxies. Keeping Watchtower in the 25900s block eliminates any ambiguity and prevents conflicts on a shared dedi.
 
 ### Why This Range?
 
@@ -91,13 +93,13 @@ Each environment lives in its own folder with its own compose file and `.env`:
 ~/briska/
 ├── prod/
 │   ├── docker-compose.yml
-│   └── .env              (GAME_PORT=25919, ADMIN_PORT=25920)
+│   └── .env              (GAME_PORT=25919, ADMIN_PORT=25920, WATCHTOWER_PORT=25921)
 ├── staging/
 │   ├── docker-compose.yml
-│   └── .env              (GAME_PORT=25929, ADMIN_PORT=25930)
+│   └── .env              (GAME_PORT=25929, ADMIN_PORT=25930, WATCHTOWER_PORT=25931)
 └── dev/
     ├── docker-compose.yml
-    └── .env              (GAME_PORT=25939, ADMIN_PORT=25940)
+    └── .env              (GAME_PORT=25939, ADMIN_PORT=25940, WATCHTOWER_PORT=25941)
 ```
 
 ### nginx Configuration
@@ -300,7 +302,7 @@ curl http://127.0.0.1:25927/   # should reach the game server
 
 To add a new env (e.g., a "beta" branch):
 
-1. Pick port numbers following the tens-digit pattern (beta could be 25949 / 25950).
+1. Pick port numbers following the tens-digit pattern (beta could be 25949 / 25950 / 25951 for game / admin / watchtower).
 2. Create directory: `mkdir -p ~/briska/beta`
 3. Create `docker-compose.yml` and `.env` in that directory.
 4. Add DNS A record: `beta.briska-blast.com` → dedi public IP.
@@ -401,7 +403,7 @@ Set it in `.env` rather than hardcoding in `docker-compose.yml`, so it doesn't a
 
 ### Future Hardening: Passkey Auth via Pocket ID
 
-Pocket ID is a self-hosted OIDC provider supporting passkey-only authentication. Integrating it would replace `ADMIN_PASSWORD` as the third-layer auth with phishing-resistant, origin-bound passkeys. Treat this as a planned enhancement — not currently implemented.
+Pocket ID is a self-hosted OIDC provider supporting passkey-only authentication. Integrating it would replace `ADMIN_PASSWORD` as the third-layer auth with phishing-resistant, origin-bound passkeys. Full integration design documented in [`docs/pocket-id-integration.md`](pocket-id-integration.md) — not yet implemented.
 
 ---
 
@@ -521,8 +523,10 @@ sudo journalctl -u nginx -f              # Live log tail
 docker compose up -d                     # Start in background
 docker compose down                      # Stop and remove containers
 docker compose restart server            # Restart just the server service
+docker compose restart watchtower        # Restart Watchtower if it gets stuck
 docker compose ps                        # Show containers
 docker compose logs -f server            # Tail server logs
+docker compose logs -f watchtower        # Tail Watchtower logs (useful when debugging updates)
 docker compose pull                      # Pull updated images
 docker compose build --no-cache          # Force full rebuild
 ```

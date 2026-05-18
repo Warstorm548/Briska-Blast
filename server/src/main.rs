@@ -4,6 +4,7 @@ mod config;
 mod error;
 mod middleware;
 mod state;
+mod update;
 
 use axum::{
     middleware as axum_middleware,
@@ -37,7 +38,14 @@ async fn main() {
     let game_port = cfg.game_port;
     let admin_port = cfg.admin_port;
 
-    let state = state::AppState::new(redis_pool, cfg);
+    // bootstrap update task before AppState so the sender is ready
+    let (update_tx_inner, update_rx) = tokio::sync::mpsc::channel::<update::UpdateCommand>(32);
+    let update_tx = std::sync::Arc::new(update_tx_inner);
+
+    let state = state::AppState::new(redis_pool, cfg, update_tx.clone());
+
+    // spawn update background task
+    tokio::spawn(update::task::run(state.clone(), update_rx));
 
     // Game router — no /admin routes
     let versioned = Router::new()
@@ -65,6 +73,12 @@ async fn main() {
         .route("/admin/update/launcher-version", post(admin::dashboard::update_launcher_version))
         .route("/admin/update/game-version", post(admin::dashboard::update_game_version))
         .route("/admin/update/password", post(admin::dashboard::update_password))
+        .route("/admin/update/check", post(admin::dashboard::check_for_update))
+        .route("/admin/update/apply-now", post(admin::dashboard::apply_update_now))
+        .route("/admin/update/schedule", post(admin::dashboard::schedule_update))
+        .route("/admin/update/cancel", post(admin::dashboard::cancel_update))
+        .route("/admin/update/settings", post(admin::dashboard::save_update_settings))
+        .route("/admin/update/rollback", post(admin::dashboard::rollback_update))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

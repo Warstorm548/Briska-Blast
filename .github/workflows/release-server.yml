@@ -1,76 +1,80 @@
-# Release — Server (Go)
-# Temporarily disabled: trigger is manual only.
-# To re-enable, replace the `on` block with:
-#   on:
-#     push:
-#       tags: ['v*.*.*']
-
 name: Release — Server
 
 on:
-  workflow_dispatch:
+  push:
+    tags: ["v*"]
 
 jobs:
-  build-linux:
-    name: Build Linux (tar.gz)
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-          cache: true
-
-      - name: Build release binary
-        run: go build -o briskablast-server ./...
-        working-directory: server
-
-      - name: Package tar.gz
-        run: tar czf briskablast-server-linux.tar.gz -C server briskablast-server
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: server-linux
-          path: briskablast-server-linux.tar.gz
-
-  build-windows:
-    name: Build Windows (.zip)
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-          cache: true
-
-      - name: Build release binary
-        run: go build -o briskablast-server.exe ./...
-        working-directory: server
-
-      - name: Package zip
-        run: Compress-Archive -Path server/briskablast-server.exe -DestinationPath briskablast-server-windows.zip
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: server-windows
-          path: briskablast-server-windows.zip
-
   release:
-    name: Publish GitHub Release
-    needs: [build-linux, build-windows]
+    name: Build & Push Docker Image
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
 
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
+      - uses: actions/checkout@v4
 
-      - uses: softprops/action-gh-release@v2
+      - name: Detect release channel from tag
+        id: channel
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if echo "$TAG" | grep -q "\-ea"; then
+            echo "channel=ea" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          elif echo "$TAG" | grep -q "\-dev"; then
+            echo "channel=dev" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate tag matches Cargo.toml version
+        run: |
+          # The base version is everything between leading 'v' and an optional
+          # '-ea.N' / '-dev.N' suffix.  This must equal server/Cargo.toml so the
+          # running binary reports a matching version — otherwise auto-update
+          # would keep "finding" the just-installed release forever.
+          TAG_BASE=$(echo "${GITHUB_REF_NAME#v}" | sed 's/-.*//')
+          CRATE_VERSION=$(grep '^version' server/Cargo.toml | head -1 | cut -d'"' -f2)
+          if [ "$TAG_BASE" != "$CRATE_VERSION" ]; then
+            echo "::error::Tag base version ($TAG_BASE) does not match server/Cargo.toml version ($CRATE_VERSION). Bump server/Cargo.toml before tagging."
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          files: artifacts/**/*
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Lowercase image owner
+        id: owner
+        run: echo "name=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: server/Dockerfile
+          push: true
+          build-args: |
+            RELEASE_CHANNEL=${{ steps.channel.outputs.channel }}
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.name }}/briska-blast:${{ steps.channel.outputs.channel }}
+            ghcr.io/${{ steps.owner.outputs.name }}/briska-blast:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ steps.channel.outputs.prerelease }}
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

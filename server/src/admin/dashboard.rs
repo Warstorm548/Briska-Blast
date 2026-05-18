@@ -3,15 +3,24 @@ use axum::{
     http::HeaderMap,
     response::{Html, IntoResponse, Redirect, Response},
 };
+use chrono::NaiveDateTime;
 use deadpool_redis::redis::AsyncCommands;
 use semver::Version;
 use std::collections::HashMap;
 
 use crate::state::AppState;
+use crate::update::UpdateCommand;
+
+// Allowed values for the auto-update interval dropdowns. Anything outside
+// these sets is rejected — prevents tampered POSTs from setting e.g.
+// check_interval=1s (would DoS GitHub) or apply_interval to a malformed
+// value that parses to "apply immediately".
+const ALLOWED_CHECK_INTERVALS: &[u64] = &[21600, 43200, 86400, 172800];
+const ALLOWED_APPLY_INTERVALS: &[u64] = &[0, 86400, 259200, 604800, 1209600];
 use super::{
     require_session,
     templates::{self, DashboardData},
-    PasswordForm, VersionForm,
+    PasswordForm, RollbackForm, ScheduleUpdateForm, UpdateSettingsForm, VersionForm,
 };
 
 pub async fn dashboard(
@@ -62,6 +71,25 @@ pub async fn dashboard(
         params.get("err").map(|err| (false, err.clone()))
     };
 
+    // update state
+    let update_auto_enabled: String = conn.get("update:auto_enabled").await.unwrap_or_default();
+    let update_check_interval: String = conn.get("update:check_interval_secs").await.unwrap_or_default();
+    let update_apply_interval: String = conn.get("update:apply_interval_secs").await.unwrap_or_default();
+    let update_available: String = conn.get("update:available_version").await.unwrap_or_default();
+    let update_last_checked: String = conn.get("update:last_checked").await.unwrap_or_default();
+    let update_scheduled_at: String = conn.get("update:scheduled_at").await.unwrap_or_default();
+    let update_scheduled_version: String = conn.get("update:scheduled_version").await.unwrap_or_default();
+    let update_manual_override: String = conn.get("update:manual_override").await.unwrap_or_default();
+    let update_previous_version: String = conn.get("update:previous_version").await.unwrap_or_default();
+    let update_rollback_locked: String = conn.get("update:rollback_locked").await.unwrap_or_default();
+
+    let fmt_ts = |ts: &str| -> Option<String> {
+        ts.parse::<i64>().ok().and_then(|t| {
+            chrono::DateTime::from_timestamp(t, 0)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+        })
+    };
+
     let data = DashboardData {
         min_launcher_version: min_launcher,
         min_game_version: min_game,
@@ -71,10 +99,21 @@ pub async fn dashboard(
         player_count,
         message,
         using_default_password: using_default,
+        release_channel: env!("RELEASE_CHANNEL"),
+        server_version: env!("CARGO_PKG_VERSION"),
+        update_last_checked: fmt_ts(&update_last_checked),
+        update_available: if update_available.is_empty() { None } else { Some(update_available) },
+        update_auto_enabled: update_auto_enabled == "true",
+        update_check_interval_secs: update_check_interval.parse().unwrap_or(21600),
+        update_apply_interval_secs: update_apply_interval.parse().ok().filter(|&v| v > 0u64),
+        update_scheduled_at: fmt_ts(&update_scheduled_at),
+        update_scheduled_version: if update_scheduled_version.is_empty() { None } else { Some(update_scheduled_version) },
+        _update_manual_override: update_manual_override == "true",
+        update_previous_version: if update_previous_version.is_empty() { None } else { Some(update_previous_version) },
+        update_rollback_locked: update_rollback_locked == "true",
     };
 
-    Html(templates::dashboard_page(&data)).into_response()
-}
+    Html(templates::dashboard_page(&data)).into_response()}
 
 pub async fn update_launcher_version(
     State(state): State<AppState>,
@@ -164,4 +203,204 @@ pub async fn update_password(
 
     let _: () = conn.set("admin:password_hash", &new_hash).await.unwrap_or(());
     Redirect::to("/admin/dashboard?ok=Password+updated+successfully").into_response()
+}
+
+pub async fn check_for_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if require_session(&headers, &state.redis).await.is_none() {
+        return Redirect::to("/admin").into_response();
+    }
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Redirect::to("/admin/dashboard?err=Internal+HTTP+client+error").into_response(),
+    };
+    let channel = env!("RELEASE_CHANNEL");
+    let now = chrono::Utc::now().timestamp();
+
+    if let Ok(mut conn) = state.redis.get().await {
+        let _: () = conn.set("update:last_checked", now.to_string()).await.unwrap_or(());
+    }
+
+    match crate::update::github::check_for_update(&client, channel).await {
+        Ok(Some(tag)) => {
+            if let Ok(mut conn) = state.redis.get().await {
+                // Only reset found_at when this is a new version we haven't seen before.
+                let prev: String = conn.get("update:available_version").await.unwrap_or_default();
+                let _: () = conn.set("update:available_version", &tag).await.unwrap_or(());
+                if prev != tag {
+                    let _: () = conn.set("update:found_at", now.to_string()).await.unwrap_or(());
+                }
+            }
+            Redirect::to(&format!("/admin/dashboard?ok=Update+available%3A+{}", tag)).into_response()
+        }
+        Ok(None) => {
+            if let Ok(mut conn) = state.redis.get().await {
+                let _: () = conn.del("update:available_version").await.unwrap_or(());
+                let _: () = conn.del("update:found_at").await.unwrap_or(());
+            }
+            Redirect::to("/admin/dashboard?ok=Already+up+to+date").into_response()
+        }
+        Err(_) => {
+            // Network/parse failure — preserve any previously detected update.
+            Redirect::to("/admin/dashboard?err=Check+failed%3A+could+not+reach+GitHub").into_response()
+        }
+    }
+}
+
+pub async fn apply_update_now(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if require_session(&headers, &state.redis).await.is_none() {
+        return Redirect::to("/admin").into_response();
+    }
+    if let Ok(mut conn) = state.redis.get().await {
+        let current = env!("CARGO_PKG_VERSION");
+        let _: () = conn.set("update:previous_version", current).await.unwrap_or(());
+    }
+    let _ = state.update_tx.send(UpdateCommand::ApplyNow).await;
+    Redirect::to("/admin/dashboard?ok=Update+triggered").into_response()
+}
+
+pub async fn schedule_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<ScheduleUpdateForm>,
+) -> Response {
+    if require_session(&headers, &state.redis).await.is_none() {
+        return Redirect::to("/admin").into_response();
+    }
+    // parse "2026-05-20T03:00" from datetime-local
+    let ts = NaiveDateTime::parse_from_str(&form.scheduled_at, "%Y-%m-%dT%H:%M")
+        .map(|dt| dt.and_utc().timestamp());
+
+    match ts {
+        Ok(ts) => {
+            if let Ok(mut conn) = state.redis.get().await {
+                let available: String = conn.get("update:available_version").await.unwrap_or_default();
+                let _: () = conn.set("update:scheduled_at", ts.to_string()).await.unwrap_or(());
+                let _: () = conn.set("update:scheduled_version", &available).await.unwrap_or(());
+            }
+            let _ = state.update_tx.send(UpdateCommand::Schedule(ts)).await;
+            Redirect::to("/admin/dashboard?ok=Update+scheduled").into_response()
+        }
+        Err(_) => Redirect::to("/admin/dashboard?err=Invalid+date+format").into_response(),
+    }
+}
+
+pub async fn cancel_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if require_session(&headers, &state.redis).await.is_none() {
+        return Redirect::to("/admin").into_response();
+    }
+    let _ = state.update_tx.send(UpdateCommand::CancelSchedule).await;
+    if let Ok(mut conn) = state.redis.get().await {
+        let _: () = conn.del("update:scheduled_at").await.unwrap_or(());
+        let _: () = conn.del("update:scheduled_version").await.unwrap_or(());
+        // NOTE: do NOT delete update:previous_version here — it is the rollback
+        // target from the last actually-applied update, not state owned by the
+        // pending schedule.
+    }
+    Redirect::to("/admin/dashboard?ok=Scheduled+update+cancelled").into_response()
+}
+
+pub async fn save_update_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<UpdateSettingsForm>,
+) -> Response {
+    if require_session(&headers, &state.redis).await.is_none() {
+        return Redirect::to("/admin").into_response();
+    }
+    let auto_enabled = form.auto_enabled.as_deref() == Some("on");
+    if let Ok(mut conn) = state.redis.get().await {
+        let _: () = conn.set("update:auto_enabled", if auto_enabled { "true" } else { "false" }).await.unwrap_or(());
+        if auto_enabled {
+            // re-enabling auto-update clears the rollback safety lock
+            let _: () = conn.del("update:rollback_locked").await.unwrap_or(());
+        }
+        if let Some(v) = &form.check_interval_secs {
+            if let Ok(n) = v.parse::<u64>() {
+                if ALLOWED_CHECK_INTERVALS.contains(&n) {
+                    let _: () = conn.set("update:check_interval_secs", v).await.unwrap_or(());
+                }
+            }
+        }
+        if let Some(v) = &form.apply_interval_secs {
+            if let Ok(n) = v.parse::<u64>() {
+                if ALLOWED_APPLY_INTERVALS.contains(&n) {
+                    let _: () = conn.set("update:apply_interval_secs", v).await.unwrap_or(());
+                }
+            }
+        }
+    }
+    let _ = state.update_tx.send(UpdateCommand::SettingsChanged).await;
+    Redirect::to("/admin/dashboard?ok=Update+settings+saved").into_response()
+}
+
+pub async fn rollback_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<RollbackForm>,
+) -> Response {
+    if require_session(&headers, &state.redis).await.is_none() {
+        return Redirect::to("/admin").into_response();
+    }
+
+    let channel = env!("RELEASE_CHANNEL");
+    let version = form.version.trim_start_matches('v');
+    let versioned_tag = format!("v{}", version);
+
+    match crate::update::docker::retag_for_rollback(&versioned_tag, channel).await {
+        Ok(()) => {
+            // Trigger Watchtower FIRST. Only commit Redis state changes if it
+            // actually succeeds — otherwise we'd lose the rollback target
+            // (previous_version) and the cached "update available" state
+            // while the rollback never actually happened.
+            let client = match reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+            {
+                Ok(c) => c,
+                Err(_) => return Redirect::to("/admin/dashboard?err=Internal+HTTP+client+error").into_response(),
+            };
+            let ok = crate::update::watchtower::trigger_update(
+                &client,
+                &state.config.watchtower_url,
+                &state.config.watchtower_token,
+            ).await;
+            if ok {
+                if let Ok(mut conn) = state.redis.get().await {
+                    // safety lock: disable auto-update after rollback
+                    let _: () = conn.set("update:auto_enabled", "false").await.unwrap_or(());
+                    let _: () = conn.set("update:rollback_locked", "true").await.unwrap_or(());
+                    let _: () = conn.del("update:previous_version").await.unwrap_or(());
+                    let _: () = conn.del("update:available_version").await.unwrap_or(());
+                    let _: () = conn.del("update:found_at").await.unwrap_or(());
+                }
+                let _ = state.update_tx.send(UpdateCommand::SettingsChanged).await;
+                Redirect::to("/admin/dashboard?ok=Rollback+triggered+%E2%80%94+auto-update+disabled").into_response()
+            } else {
+                // Watchtower didn't accept the trigger. Redis state is
+                // untouched so the admin can retry.  The local Docker retag
+                // already happened, but that's harmless — Watchtower's normal
+                // pull on next attempt would handle the same operation.
+                Redirect::to("/admin/dashboard?err=Rollback+failed%3A+Watchtower+did+not+respond").into_response()
+            }
+        }
+        Err(e) => {
+            Redirect::to(&format!("/admin/dashboard?err=Rollback+failed%3A+{}", urlencoding(&e))).into_response()
+        }
+    }
+}
+
+fn urlencoding(s: &str) -> String {
+    s.replace(' ', "+").replace(':', "%3A")
 }

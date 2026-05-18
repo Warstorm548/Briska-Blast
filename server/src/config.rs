@@ -8,6 +8,8 @@ pub struct Config {
     pub min_launcher_version: String,
     pub min_game_version: String,
     pub admin_password: String,
+    pub watchtower_url: String,
+    pub watchtower_token: String,
 }
 
 impl Config {
@@ -41,6 +43,10 @@ impl Config {
                 .unwrap_or_else(|_| "0.1.0".to_string()),
             admin_password: env::var("ADMIN_PASSWORD")
                 .unwrap_or_else(|_| "@admin".to_string()),
+            watchtower_url: env::var("WATCHTOWER_URL")
+                .unwrap_or_else(|_| "http://watchtower:25921".to_string()),
+            watchtower_token: env::var("WATCHTOWER_TOKEN")
+                .unwrap_or_else(|_| "briska-watchtower-token".to_string()),
         }
     }
 }
