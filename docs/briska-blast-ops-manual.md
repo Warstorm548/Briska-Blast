@@ -102,6 +102,44 @@ Each environment lives in its own folder with its own compose file and `.env`:
     └── .env              (GAME_PORT=25939, ADMIN_PORT=25940, WATCHTOWER_PORT=25941)
 ```
 
+### Compose Project Isolation (`COMPOSE_PROJECT_NAME`)
+
+Docker Compose namespaces named volumes, networks, and container names by **project name**, which defaults to the directory you ran `docker compose up` from. Because each environment above lives in its own folder, each one automatically gets its own Redis volume:
+
+| Environment | Default volume name |
+|---|---|
+| prod | `prod_redis_data` |
+| staging | `staging_redis_data` |
+| dev | `dev_redis_data` |
+
+These are entirely separate — no data is shared across environments. Verify with:
+
+```bash
+docker volume ls | grep redis_data
+```
+
+**Recommended hardening**: Set `COMPOSE_PROJECT_NAME` explicitly in each environment's `.env` so the namespace doesn't depend on the directory name. This protects against accidental collisions if a folder is ever renamed or copied.
+
+```env
+# ~/briska/prod/.env
+COMPOSE_PROJECT_NAME=briska-prod
+
+# ~/briska/staging/.env
+COMPOSE_PROJECT_NAME=briska-staging
+
+# ~/briska/dev/.env
+COMPOSE_PROJECT_NAME=briska-dev
+```
+
+After setting this, recreate the stack:
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+Note: changing `COMPOSE_PROJECT_NAME` on an existing stack effectively orphans the old volumes (they keep their old prefix). Either migrate the data manually or accept a fresh Redis on the first boot under the new name.
+
 ### nginx Configuration
 
 Each environment has its own nginx config file:
