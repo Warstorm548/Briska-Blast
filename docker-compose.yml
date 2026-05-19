@@ -67,8 +67,27 @@ services:
       # is not silently overwritten by Watchtower pulling the registry's newer
       # channel image on its next trigger. The server pre-pulls images itself
       # via bollard on the auto-apply path to compensate.
+      #
+      # NOTE: Pairs with the HTTP-API-only design below — autonomous polls
+      # were the OTHER way Watchtower could clobber the local retag, even
+      # with NO_PULL set, by detecting the new locally-cached image and
+      # redeploying on its own. With autonomous polls off, this is moot.
       - WATCHTOWER_NO_PULL=true
-    command: --http-api-periodic-polls
+    # HTTP-API-only mode — no `command:` line, so Watchtower runs with
+    # nickfedor/watchtower's default entrypoint. Combined with
+    # WATCHTOWER_HTTP_API_UPDATE=true above, this disables ALL autonomous
+    # polling (default behaviour when the HTTP API is enabled). Watchtower
+    # only acts on POST /v1/update from the server.
+    #
+    # Why: the previous `command: --http-api-periodic-polls` re-enabled
+    # periodic polls on top of the HTTP API. Watchtower's poll would detect
+    # the server's bollard pre-pulled image as "newer than running" and
+    # redeploy autonomously, racing the server's apply path. The server's
+    # apply path writes `update:previous_version = current` AFTER a
+    # successful HTTP trigger (server/src/update/task.rs::store_previous_version);
+    # an autonomous redeploy killed the container before that write,
+    # leaving previous_version stale and pointing the rollback button at
+    # the wrong target. See ServerChangeLog v0.4.7.
     # Internal-network only — never `ports:`. Publishing the Watchtower HTTP
     # API to the host (even loopback) is a privileged-endpoint exposure: the
     # token is the only thing standing between an on-host attacker and a
