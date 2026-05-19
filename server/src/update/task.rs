@@ -42,29 +42,39 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
             .await
             .inspect_err(|e| tracing::warn!("redis get scheduled_at failed: {e}"))
             .unwrap_or_default();
-        if let Ok(ts) = stored.parse::<i64>() {
-            let now = chrono::Utc::now().timestamp();
-            match classify_recovered_schedule(ts, now) {
-                RecoveredSchedule::Corrupted => {
-                    tracing::warn!(
-                        "discarded scheduled_at={ts} on recovery: > {} days in the future (corrupted)",
-                        SCHEDULE_RECOVERY_MAX_FUTURE_SECS / 86400
-                    );
-                    clear_schedule_conn(&mut conn).await;
-                }
-                RecoveredSchedule::Usable => {
-                    let state2 = state.clone();
-                    let client2 = client.clone();
-                    tokio::spawn(async move {
-                        wait_and_apply(ts, state2, client2).await;
-                    });
-                    tracing::info!("resumed pending scheduled update for ts={ts}");
-                }
-                RecoveredSchedule::AlreadyPassed => {
-                    clear_schedule_conn(&mut conn).await;
-                    tracing::warn!("discarded stale scheduled update (scheduled time already passed)");
+        match stored.parse::<i64>() {
+            Ok(ts) => {
+                let now = chrono::Utc::now().timestamp();
+                match classify_recovered_schedule(ts, now) {
+                    RecoveredSchedule::Corrupted => {
+                        tracing::warn!(
+                            "discarded scheduled_at={ts} on recovery: > {} days in the future (corrupted)",
+                            SCHEDULE_RECOVERY_MAX_FUTURE_SECS / 86400
+                        );
+                        clear_schedule_conn(&mut conn).await;
+                    }
+                    RecoveredSchedule::Usable => {
+                        let state2 = state.clone();
+                        let client2 = client.clone();
+                        tokio::spawn(async move {
+                            wait_and_apply(ts, state2, client2).await;
+                        });
+                        tracing::info!("resumed pending scheduled update for ts={ts}");
+                    }
+                    RecoveredSchedule::AlreadyPassed => {
+                        clear_schedule_conn(&mut conn).await;
+                        tracing::warn!("discarded stale scheduled update (scheduled time already passed)");
+                    }
                 }
             }
+            // A non-empty, non-parseable value would otherwise sit in Redis
+            // forever and block every restart from auto-applying — clear it.
+            Err(_) if !stored.is_empty() => {
+                tracing::warn!("discarded malformed scheduled_at={stored:?} on recovery");
+                clear_schedule_conn(&mut conn).await;
+            }
+            // Key absent (empty default) — nothing to recover.
+            Err(_) => {}
         }
     }
 

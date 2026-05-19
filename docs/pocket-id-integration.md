@@ -68,7 +68,7 @@ The feature should be **opt-in**: if `POCKET_ID_URL` is not set, the admin panel
 2. Compute `code_challenge = BASE64URL(SHA256(code_verifier))`.
 3. Store `state → code_verifier` in Redis with a short TTL (~5 minutes), keyed as `admin:oidc_state:<state>`.
 4. Redirect the browser to:
-   ```
+   ```http
    {POCKET_ID_URL}/oidc/authorize
      ?response_type=code
      &client_id={OIDC_CLIENT_ID}
@@ -84,7 +84,7 @@ The feature should be **opt-in**: if `POCKET_ID_URL` is not set, the admin panel
 2. Look up `admin:oidc_state:<state>` in Redis — if missing or expired, return an error (CSRF protection).
 3. Delete the state key from Redis (one-time use).
 4. POST to `{POCKET_ID_URL}/oidc/token`:
-   ```
+   ```http
    grant_type=authorization_code
    code=<code>
    redirect_uri=https://<admin-domain>/admin/oidc/callback
@@ -92,8 +92,8 @@ The feature should be **opt-in**: if `POCKET_ID_URL` is not set, the admin panel
    client_secret=<OIDC_CLIENT_SECRET>
    code_verifier=<stored code_verifier>
    ```
-5. Parse the returned `id_token` (JWT — decode without signature verification for now, or verify against Pocket ID's JWKS).
-6. Extract the `groups` claim. If it does not contain `OIDC_ADMIN_GROUP`, return 403.
+5. Fully validate the returned `id_token` JWT before trusting any of its claims: verify the signature against Pocket ID's JWKS (`/.well-known/jwks.json` from the discovery document), and validate `iss` (matches `POCKET_ID_URL`), `aud` (matches `OIDC_CLIENT_ID`), and `exp` (not expired). Reject the request if any check fails.
+6. Only after successful verification, extract the `groups` claim. If it does not contain `OIDC_ADMIN_GROUP`, return 403.
 7. Generate a random 32-byte session token, store it in Redis as `admin:session:<token>` with 24h TTL (same pattern as password auth).
 8. Set `briska_admin_session` cookie and redirect to `/admin/dashboard`.
 
@@ -128,4 +128,4 @@ The feature should be **opt-in**: if `POCKET_ID_URL` is not set, the admin panel
 
 1. **Coexist or replace?** Should Pocket ID be an *alternative* login alongside the password form, or fully replace it? Replacing is cleaner but requires Pocket ID to be reachable for any admin access.
 2. **Group requirement?** Require a specific Pocket ID group, or allow any authenticated Pocket ID user in?
-3. **JWT verification depth?** Decode-only (trust the token came from the expected redirect) vs. full signature verification against Pocket ID's JWKS. Full verification is more correct but adds complexity.
+3. **JWT verification depth?** Full signature verification against Pocket ID's JWKS is required (see step 5 above). Decision left: whether to hand-roll with `jsonwebtoken` + a JWKS fetch, or use the `openidconnect` crate which handles discovery + JWKS rotation automatically.

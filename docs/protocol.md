@@ -41,7 +41,7 @@ Host                    Server                   Joiner
   |<-- {session_code} ----|                         |
   |                        |<-- POST /join ----------|
   |                        |    {code, joiner_ip}   |
-  |                        |--> {host_ip,           |
+  |                        |--> {host_ip, host_port,|
   |                        |    gamemode} ---------->|
   |-- GET /session/{code}->|                         |
   |<-- {joiner_ip:port} ---|                         |

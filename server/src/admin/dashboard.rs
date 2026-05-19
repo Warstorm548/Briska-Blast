@@ -302,8 +302,15 @@ pub async fn schedule_update(
 
     match ts {
         Ok(ts) => {
+            // Mirror the precondition in `apply_update_now`: refuse to persist
+            // a schedule when there is no actual target. Otherwise a stale
+            // `scheduled_at` would later spawn a `wait_and_apply` with an empty
+            // `scheduled_version`, which would no-op confusingly at apply time.
             if let Ok(mut conn) = state.redis.get().await {
                 let available: String = conn.get("update:available_version").await.unwrap_or_default();
+                if available.is_empty() {
+                    return Redirect::to("/admin/dashboard?err=No+update+available").into_response();
+                }
                 let _: () = conn.set("update:scheduled_at", ts.to_string()).await.unwrap_or(());
                 let _: () = conn.set("update:scheduled_version", &available).await.unwrap_or(());
             }
@@ -409,19 +416,23 @@ pub async fn rollback_update(
     // retag itself.
     let _guard = state.update_apply_lock.lock().await;
 
+    // Build the HTTP client BEFORE the retag. If the builder fails, we'd
+    // otherwise leave the local `:channel` ref rewritten with no Watchtower
+    // trigger and no Redis bookkeeping — a worse state than not having tried.
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Redirect::to("/admin/dashboard?err=Internal+HTTP+client+error").into_response(),
+    };
+
     match crate::update::docker::retag_for_rollback(&versioned_tag, channel).await {
         Ok(()) => {
             // Trigger Watchtower FIRST. Only commit Redis state changes if it
             // actually succeeds — otherwise we'd lose the rollback target
             // (previous_version) and the cached "update available" state
             // while the rollback never actually happened.
-            let client = match reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-            {
-                Ok(c) => c,
-                Err(_) => return Redirect::to("/admin/dashboard?err=Internal+HTTP+client+error").into_response(),
-            };
             let ok = crate::update::watchtower::trigger_update(
                 &client,
                 &state.config.watchtower_url,

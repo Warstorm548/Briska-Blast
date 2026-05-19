@@ -1,11 +1,11 @@
 services:
   server:
-    image: ghcr.io/warstorm548/briska-blast:${RELEASE_CHANNEL:-dev}
+    image: ghcr.io/warstorm548/briska-blast:${RELEASE_CHANNEL:?RELEASE_CHANNEL must be set in .env (stable|ea|dev)}
     build:
       context: .
       dockerfile: server/Dockerfile
       args:
-        - RELEASE_CHANNEL=${RELEASE_CHANNEL:-dev}
+        - RELEASE_CHANNEL=${RELEASE_CHANNEL:?RELEASE_CHANNEL must be set in .env (stable|ea|dev)}
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${GAME_PORT:-25919}:${GAME_PORT:-25919}"
       - "${BIND_ADDR:-127.0.0.1}:${ADMIN_PORT:-25920}:${ADMIN_PORT:-25920}"
