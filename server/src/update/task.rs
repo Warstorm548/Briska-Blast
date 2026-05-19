@@ -33,6 +33,37 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
             .await
             .inspect_err(|e| tracing::warn!("redis seed current_version failed: {e}"))
             .unwrap_or(());
+
+        // Post-apply cleanup: if `update:available_version` still holds the
+        // tag we just applied (or anything older), the outgoing binary
+        // didn't get a chance to clear it before Watchtower swapped us in.
+        // The dashboard renders the green "Update Available" banner whenever
+        // this key is non-empty, so without this it would stay stuck until
+        // the next auto-check hit the NoUpdate branch — up to 6 hours.
+        // `is_stale_available_version` is semver-aware so a genuinely-newer
+        // available_version (one that landed in Redis while we were mid-
+        // restart) is preserved.
+        let available: String = conn
+            .get("update:available_version")
+            .await
+            .inspect_err(|e| tracing::warn!("redis get available_version failed: {e}"))
+            .unwrap_or_default();
+        if is_stale_available_version(&available, env!("CARGO_PKG_VERSION")) {
+            let _: () = conn
+                .del("update:available_version")
+                .await
+                .inspect_err(|e| tracing::warn!("redis del stale available_version failed: {e}"))
+                .unwrap_or(());
+            let _: () = conn
+                .del("update:found_at")
+                .await
+                .inspect_err(|e| tracing::warn!("redis del stale found_at failed: {e}"))
+                .unwrap_or(());
+            tracing::info!(
+                "cleared stale update:available_version={available} on startup (current={})",
+                env!("CARGO_PKG_VERSION")
+            );
+        }
     }
 
     // recover any pending manual schedule that survived a restart
@@ -338,6 +369,32 @@ fn decide_should_apply(
         && !available_version.is_empty()
 }
 
+/// True when `available` is a version we already are (semver-equal) or
+/// older than `current`. Used to clear stale `update:available_version`
+/// on startup so the dashboard banner doesn't stick after a successful
+/// apply. Also called from the dashboard renderer as defense-in-depth.
+///
+/// Returns false on:
+/// - empty `available` (nothing to clean up)
+/// - parse failure on either side (defensive: don't clear legitimately-
+///   set state just because Redis holds an unexpected value)
+/// - `available > current` (banner is correct; preserve)
+///
+/// Tag-style prefixes (`v0.4.5`) and bare semver (`0.4.5`) are both
+/// accepted; the leading `v` is stripped before parsing on each side.
+pub(crate) fn is_stale_available_version(available: &str, current: &str) -> bool {
+    if available.is_empty() {
+        return false;
+    }
+    let Ok(av) = semver::Version::parse(available.trim_start_matches('v')) else {
+        return false;
+    };
+    let Ok(cv) = semver::Version::parse(current.trim_start_matches('v')) else {
+        return false;
+    };
+    av <= cv
+}
+
 /// Read `update:rollback_locked` and return true iff it is set to "true".
 /// Used by the `ApplyNow` command handler to bail out on a stale command
 /// that was queued before a rollback completed.
@@ -528,6 +585,51 @@ mod tests {
     fn decide_should_apply_requires_available_version() {
         // No update was found — nothing to do.
         assert!(!decide_should_apply("true", "", "", ""));
+    }
+
+    #[test]
+    fn is_stale_available_version_empty_is_not_stale() {
+        // Nothing in Redis = nothing to clear.
+        assert!(!is_stale_available_version("", "0.4.6"));
+    }
+
+    #[test]
+    fn is_stale_available_version_dev_prerelease_after_apply_is_stale() {
+        // The exact regression we're guarding against: post-apply on the
+        // dev channel, available holds the just-applied prerelease tag and
+        // current is the matching release version. Semver: release > prerelease.
+        assert!(is_stale_available_version("v0.4.5-dev.1", "0.4.5"));
+        assert!(is_stale_available_version("v0.4.5-ea.2", "0.4.5"));
+    }
+
+    #[test]
+    fn is_stale_available_version_exact_match_is_stale() {
+        // Post-apply on stable channel: tag and Cargo version match.
+        assert!(is_stale_available_version("v0.4.5", "0.4.5"));
+        // Bare semver on the available side is also accepted.
+        assert!(is_stale_available_version("0.4.5", "0.4.5"));
+    }
+
+    #[test]
+    fn is_stale_available_version_newer_is_not_stale() {
+        // A real new release exists — banner should stay; don't clear.
+        assert!(!is_stale_available_version("v0.4.6-dev.1", "0.4.5"));
+        assert!(!is_stale_available_version("v0.5.0", "0.4.6"));
+        assert!(!is_stale_available_version("v1.0.0", "0.4.6"));
+    }
+
+    #[test]
+    fn is_stale_available_version_unparseable_available_is_not_stale() {
+        // Defensive: an unexpected string in Redis must not cause data
+        // loss. Better to leave it alone than to delete on a parse error.
+        assert!(!is_stale_available_version("not-a-version", "0.4.5"));
+        assert!(!is_stale_available_version("v", "0.4.5"));
+    }
+
+    #[test]
+    fn is_stale_available_version_unparseable_current_is_not_stale() {
+        // Equally defensive on the current side.
+        assert!(!is_stale_available_version("v0.4.5", "not-a-version"));
     }
 
     #[test]
