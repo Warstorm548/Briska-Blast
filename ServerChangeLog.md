@@ -5,6 +5,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.4.7] — 2026-05-19
+
+Patch release — closes a race in the auto-apply flow that left
+`update:previous_version` stale (pointing the rollback button at the
+wrong target version after every apply). Pure compose-config change;
+no Rust code changes.
+
+### Fixed
+
+- **Autonomous Watchtower polls raced the server's apply path
+  (`docker-compose.yml`)** — observed after the v0.4.4 swap from
+  `containrrr/watchtower:1.7.1` to `nickfedor/watchtower:1.17.0`. The
+  compose previously set `command: --http-api-periodic-polls`, which
+  per the [nickfedor docs](https://watchtower.nickfedor.com/v1.17.0/advanced-features/http-api/)
+  re-enables periodic polling on top of the HTTP API ("By default,
+  enabling the HTTP API prevents periodic updates. The
+  `--http-api-periodic-polls` flag re-enables periodic updates while
+  the HTTP API is active."). The server's apply path in
+  `server/src/update/task.rs::maybe_apply` (and `wait_and_apply` /
+  `ApplyNow`) does:
+    1. `docker::pull_channel_image` — bollard caches the new image
+       locally.
+    2. `watchtower::trigger_update` — HTTP POST to Watchtower.
+    3. On success, `store_previous_version` — writes
+       `update:previous_version = current`.
+
+  With autonomous polling enabled, Watchtower's poll firing between
+  steps 1 and 2 saw the new locally-cached image as "newer than
+  running" (`WATCHTOWER_NO_PULL=true` skips the registry pull but
+  doesn't suppress the local-vs-running comparison) and redeployed
+  on its own — killing the outgoing container before step 3 wrote.
+  The incoming container booted with `update:previous_version`
+  untouched from the previous apply, so the rollback button pointed
+  two (or more) versions back instead of one.
+
+  **Fix**: remove `command: --http-api-periodic-polls`. Watchtower
+  falls back to its default entrypoint and, with
+  `WATCHTOWER_HTTP_API_UPDATE=true` set in env, runs HTTP-API-only —
+  no autonomous polls, no race. The server's apply path is now the
+  sole driver of container swaps. `WATCHTOWER_NO_PULL=true` is kept
+  for defense-in-depth and gets a cross-reference comment.
+
+  **Self-healing**: the next successful apply (v0.4.6 → v0.4.7)
+  runs the un-raced path and writes the correct
+  `update:previous_version = "0.4.6"`. No manual recovery needed; no
+  Redis migration step required.
+
+### Migration
+
+None. Watchtower auto-applies through the existing HTTP API contract
+(the server's trigger path is unchanged). The change takes effect on
+the next compose recreate, which happens automatically as part of
+the Watchtower image being swapped during the v0.4.7 apply.
+
+---
+
 ## [0.4.6] — 2026-05-19
 
 Patch release — fixes the "Update Available" green banner that stayed
