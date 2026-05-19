@@ -101,7 +101,21 @@ pub async fn dashboard(
         release_channel: env!("RELEASE_CHANNEL"),
         server_version: env!("CARGO_PKG_VERSION"),
         update_last_checked: fmt_ts(&update_last_checked),
-        update_available: if update_available.is_empty() { None } else { Some(update_available) },
+        // Defense-in-depth against the post-apply stuck-banner bug
+        // (root-cause fix is in update::task::run, which clears stale
+        // state on startup). If Redis somehow still holds an
+        // available_version we already are or are past, render as if
+        // it weren't set. Banner only shows for genuinely-newer tags.
+        update_available: if update_available.is_empty()
+            || crate::update::task::is_stale_available_version(
+                &update_available,
+                env!("CARGO_PKG_VERSION"),
+            )
+        {
+            None
+        } else {
+            Some(update_available)
+        },
         update_auto_enabled: update_auto_enabled == "true",
         update_check_interval_secs: update_check_interval.parse().unwrap_or(21600),
         update_apply_interval_secs: update_apply_interval.parse().ok().filter(|&v| v > 0u64),

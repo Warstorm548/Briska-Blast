@@ -5,6 +5,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.4.6] — 2026-05-19
+
+Patch release — fixes the "Update Available" green banner that stayed
+stuck on the admin dashboard after a successful auto-apply or manual
+Apply Now. Rollback button behavior is unchanged (it was correct
+already, since it keys off a different Redis state).
+
+### Fixed
+
+- **Stale `update:available_version` not cleared post-apply
+  (`update/task.rs`, `admin/dashboard.rs`)** — `run()` writes
+  `update:current_version` to the new binary's `env!("CARGO_PKG_VERSION")`
+  on startup but did nothing about the `update:available_version` that
+  the outgoing binary left behind. The dashboard renders the banner
+  whenever that key is non-empty, with no comparison against current
+  (`dashboard.rs:78,104`), so the banner stayed green until the next
+  auto-check cycle (default 6h) happened to hit the `NoUpdate` branch —
+  and only if the just-applied tag was no longer the latest matching
+  release for the channel. Now, the startup path reads
+  `update:available_version` and clears it (and `update:found_at`) if
+  the value is semver-equal to or older than the running version. The
+  dashboard render path uses the same predicate as defense-in-depth so
+  any state churn (manual `redis-cli SET`, partial cleanup, future code
+  that forgets the rule) can't re-stick the banner.
+
+### Added
+
+- **`update::task::is_stale_available_version` helper** — pure semver
+  predicate, matches the existing extracted-helper-for-testability
+  pattern used by `decide_should_apply`, `should_reset_found_at`,
+  `wait_and_apply_should_proceed`, and `classify_recovered_schedule`.
+  `pub(crate)` so `admin/dashboard.rs` can reuse it without duplicating
+  the comparison logic.
+- **Six unit tests** in `server/src/update/task.rs::tests`:
+  - `is_stale_available_version_empty_is_not_stale`
+  - `is_stale_available_version_dev_prerelease_after_apply_is_stale`
+  - `is_stale_available_version_exact_match_is_stale`
+  - `is_stale_available_version_newer_is_not_stale`
+  - `is_stale_available_version_unparseable_available_is_not_stale`
+  - `is_stale_available_version_unparseable_current_is_not_stale`
+
+  Cover the post-apply stuck-banner path on both dev/ea (prerelease) and
+  stable channels, defensive behaviour on parse failures (an
+  unparseable value left alone), and the genuinely-newer case
+  (banner preserved).
+
+### Migration
+
+None. The new binary's first boot runs the cleanup automatically.
+Watchtower auto-applies through the existing GitHub Releases contract;
+neither was touched. No new Redis keys, no env vars, no dependencies
+(`semver` was already a server dep).
+
+---
+
 ## [0.4.5] — 2026-05-19
 
 Patch release — switches Redis persistence from a Docker-managed named
