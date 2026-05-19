@@ -33,7 +33,14 @@ services:
     image: redis:7-alpine
     command: redis-server --appendonly yes
     volumes:
-      - redis_data:/data
+      # Bind mount, not a named volume — keeps the AOF data visible next
+      # to the compose file (one ./redis_data/ per environment directory).
+      # Per-env isolation is preserved by directory layout, not by Docker
+      # volume naming. Container runs as uid 999; the directory must be
+      # chown'd to 999:999 before first start. See
+      # docs/migrations/0.4.5-redis-bind-mount.md for the one-time
+      # migration from the previous named-volume layout.
+      - ./redis_data:/data
     restart: always
 
   watchtower:
@@ -70,6 +77,3 @@ services:
     expose:
       - "${WATCHTOWER_PORT:-25921}"
     restart: always
-
-volumes:
-  redis_data:

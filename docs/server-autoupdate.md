@@ -170,7 +170,7 @@ docker compose logs server | grep -i "pre-pull failed"
 
 ## Redis Keys Reference
 
-All update state is stored in Redis (persisted to disk via the `redis_data` Docker volume) and survives container restarts and updates.
+All update state is stored in Redis (persisted to disk via the `./redis_data/` bind mount alongside the compose file) and survives container restarts and updates.
 
 | Key | Description |
 |---|---|
