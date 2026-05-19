@@ -38,8 +38,16 @@ services:
 
   watchtower:
     # Pinned: never run :latest in production. A breaking or malicious
-    # upstream Watchtower release would otherwise auto-deploy on next pull.
-    image: containrrr/watchtower:1.7.1
+    # upstream release would otherwise auto-deploy on next pull.
+    #
+    # Image source: containrrr/watchtower was archived Dec 2025 and its
+    # last release (1.7.1) only speaks Docker API 1.25 — modern Docker
+    # Engine (28+) requires >= 1.44, so the original image no longer
+    # negotiates with current daemons. nickfedor/watchtower is the
+    # actively-maintained continuation fork (github.com/nicholas-fedor/
+    # watchtower); it autonegotiates the API version. Env vars and CLI
+    # flags below are unchanged from the containrrr image.
+    image: nickfedor/watchtower:1.17.0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
