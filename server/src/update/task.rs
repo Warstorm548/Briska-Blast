@@ -386,10 +386,14 @@ pub(crate) fn is_stale_available_version(available: &str, current: &str) -> bool
     if available.is_empty() {
         return false;
     }
-    let Ok(av) = semver::Version::parse(available.trim_start_matches('v')) else {
+    // strip_prefix removes at most one leading 'v'; trim_start_matches
+    // would have stripped any number ("vv0.4.5" → "0.4.5"), silently
+    // accepting malformed input where the defensive intent is to fail
+    // to parse and leave Redis alone.
+    let Ok(av) = semver::Version::parse(available.strip_prefix('v').unwrap_or(available)) else {
         return false;
     };
-    let Ok(cv) = semver::Version::parse(current.trim_start_matches('v')) else {
+    let Ok(cv) = semver::Version::parse(current.strip_prefix('v').unwrap_or(current)) else {
         return false;
     };
     av <= cv
@@ -630,6 +634,16 @@ mod tests {
     fn is_stale_available_version_unparseable_current_is_not_stale() {
         // Equally defensive on the current side.
         assert!(!is_stale_available_version("v0.4.5", "not-a-version"));
+    }
+
+    #[test]
+    fn is_stale_available_version_double_v_prefix_is_not_stale() {
+        // Regression guard for the strip_prefix-vs-trim_start_matches fix:
+        // a malformed value like "vv0.4.5" must NOT be silently normalised
+        // by stripping two 'v's. Only one leading 'v' is removed; the
+        // remaining "v0.4.5" fails to semver-parse and we preserve state.
+        assert!(!is_stale_available_version("vv0.4.5", "0.4.5"));
+        assert!(!is_stale_available_version("vvv0.4.5-dev.1", "0.4.5"));
     }
 
     #[test]
