@@ -18,16 +18,23 @@ jobs:
       - name: Detect release channel from tag
         id: channel
         run: |
+          # Anchored regex match — substring matching previously misclassified
+          # tags like `v1.2.3-beta-ea-1` or `v1.2.3-readme` onto the wrong
+          # channel. Each pattern must fully match the tag end-to-end.
           TAG="${GITHUB_REF_NAME}"
-          if echo "$TAG" | grep -q "\-ea"; then
+          SEMVER='v[0-9]+\.[0-9]+\.[0-9]+'
+          if [[ "$TAG" =~ ^${SEMVER}-ea\.[0-9]+$ ]]; then
             echo "channel=ea" >> "$GITHUB_OUTPUT"
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          elif echo "$TAG" | grep -q "\-dev"; then
+          elif [[ "$TAG" =~ ^${SEMVER}-dev\.[0-9]+$ ]]; then
             echo "channel=dev" >> "$GITHUB_OUTPUT"
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          else
+          elif [[ "$TAG" =~ ^${SEMVER}$ ]]; then
             echo "channel=stable" >> "$GITHUB_OUTPUT"
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Tag '$TAG' does not match any release channel pattern (stable: v1.2.3, ea: v1.2.3-ea.N, dev: v1.2.3-dev.N)"
+            exit 1
           fi
 
       - name: Validate tag matches Cargo.toml version

@@ -1,8 +1,12 @@
 use reqwest::Client;
 
 pub async fn trigger_update(client: &Client, url: &str, token: &str) -> bool {
+    // Normalise the base URL — a trailing slash on WATCHTOWER_URL would otherwise
+    // produce `.../v1/update` with a double slash, which some reverse proxies
+    // reject before the request ever reaches Watchtower.
+    let endpoint = format!("{}/v1/update", url.trim_end_matches('/'));
     let result = client
-        .post(format!("{}/v1/update", url))
+        .post(endpoint)
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await;

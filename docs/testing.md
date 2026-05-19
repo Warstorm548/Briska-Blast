@@ -211,7 +211,7 @@ GET update:current_version       # version the running binary reports
 GET update:previous_version      # version before last update (rollback source)
 GET update:auto_enabled          # "true" / "false"
 GET update:check_interval_secs   # e.g. "21600"
-GET update:apply_interval_secs   # e.g. "259200" or "" (immediate)
+GET update:apply_interval_secs   # e.g. "259200" or "0" (immediate)
 GET update:available_version     # latest version found on GitHub, if any
 GET update:found_at              # unix timestamp when update was discovered
 GET update:last_checked          # unix timestamp of last GitHub API poll

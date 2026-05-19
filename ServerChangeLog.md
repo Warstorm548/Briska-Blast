@@ -232,11 +232,11 @@ For tracking — items 11, 12, 13, 14, 15 from the audit prompt and their status
 
 | # | Item | Status | Disposition |
 |---|---|---|---|
-| 11 | Server has direct Docker socket access via `bollard`; compromise == host root. | **Deferred** to follow-up branch `harden/docker-socket-proxy`. Mitigation: introduce `tecnativa/docker-socket-proxy` and restrict the server's permissions to only `images:read`, `images:create`, and `containers:write` — the minimum that rollback retag + pre-pull need. |
-| 12 | Watchtower HTTP API exposure. | **Fixed in this release**: `ports:` → `expose:`. |
-| 13 | Bearer token literal default in compose. | **Fixed in this release**: default removed, `${WATCHTOWER_TOKEN:?...}` interpolation guard added. `.gitignore` now covers `.env`. |
-| 14 | `WATCHTOWER_LABEL_ENABLE=true` + server label. | **Already correct.** |
-| 15 | Watchtower image pinned. | **Fixed in this release**: pinned to `containrrr/watchtower:1.7.1`. |
+| 11 | Server has direct Docker socket access via `bollard`; compromise == host root. | **Deferred** to follow-up branch `harden/docker-socket-proxy`. | Introduce `tecnativa/docker-socket-proxy` and restrict the server's permissions to only `images:read`, `images:create`, and `containers:write` — the minimum that rollback retag + pre-pull need. |
+| 12 | Watchtower HTTP API exposure. | **Fixed in this release**. | `ports:` → `expose:`. |
+| 13 | Bearer token literal default in compose. | **Fixed in this release**. | Default removed, `${WATCHTOWER_TOKEN:?...}` interpolation guard added. `.gitignore` now covers `.env`. |
+| 14 | `WATCHTOWER_LABEL_ENABLE=true` + server label. | **Already correct.** | No change. |
+| 15 | Watchtower image pinned. | **Fixed in this release**. | Pinned to `containrrr/watchtower:1.7.1`. |
 
 ### Risk notes for the human reviewer
 

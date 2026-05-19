@@ -3,9 +3,8 @@
 **/target/
 
 # Secrets — must never be committed
-.env
-.env.local
-.env.*.local
+.env*
+!.env.example
 
 # IDE / editor
 .idea/

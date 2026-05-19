@@ -9,7 +9,7 @@ The BriskaBlast server supports self-managed updates via a combination of:
 
 - **Compile-time release channels** — the binary knows its own channel at runtime
 - **GitHub Releases** — source of truth for available versions
-- **Watchtower** — Docker sidecar that performs the actual image pull and container restart
+- **Watchtower** — Docker sidecar that recreates/restarts the server container. Runs with `WATCHTOWER_NO_PULL=true` (see [Watchtower](#watchtower) below), so it does not pull images itself; the server owns image pulls via `bollard`.
 - **Admin panel** — operator UI for manual checks, scheduling, and rollback
 
 ---

@@ -300,18 +300,52 @@ pub async fn schedule_update(
     let ts = NaiveDateTime::parse_from_str(&form.scheduled_at, "%Y-%m-%dT%H:%M")
         .map(|dt| dt.and_utc().timestamp());
 
-    match ts {
-        Ok(ts) => {
-            if let Ok(mut conn) = state.redis.get().await {
-                let available: String = conn.get("update:available_version").await.unwrap_or_default();
-                let _: () = conn.set("update:scheduled_at", ts.to_string()).await.unwrap_or(());
-                let _: () = conn.set("update:scheduled_version", &available).await.unwrap_or(());
-            }
-            let _ = state.update_tx.send(UpdateCommand::Schedule(ts)).await;
-            Redirect::to("/admin/dashboard?ok=Update+scheduled").into_response()
-        }
-        Err(_) => Redirect::to("/admin/dashboard?err=Invalid+date+format").into_response(),
+    let ts = match ts {
+        Ok(ts) => ts,
+        Err(_) => return Redirect::to("/admin/dashboard?err=Invalid+date+format").into_response(),
+    };
+
+    // Fail closed: any Redis error must surface as an err redirect rather
+    // than fall through to the success path. Otherwise the dashboard would
+    // show "Update scheduled" while `scheduled_at`/`scheduled_version` were
+    // never persisted, leaving the apply path with nothing to run.
+    let mut conn = match state.redis.get().await {
+        Ok(c) => c,
+        Err(_) => return Redirect::to("/admin/dashboard?err=Redis+error").into_response(),
+    };
+
+    let available: String = match conn.get("update:available_version").await {
+        Ok(v) => v,
+        Err(_) => return Redirect::to("/admin/dashboard?err=Redis+error").into_response(),
+    };
+    // Mirror the precondition in `apply_update_now`: refuse to persist a
+    // schedule when there is no actual target. Otherwise a stale `scheduled_at`
+    // would later spawn a `wait_and_apply` with an empty `scheduled_version`.
+    if available.is_empty() {
+        return Redirect::to("/admin/dashboard?err=No+update+available").into_response();
     }
+
+    if conn
+        .set::<_, _, ()>("update:scheduled_at", ts.to_string())
+        .await
+        .is_err()
+    {
+        return Redirect::to("/admin/dashboard?err=Redis+error").into_response();
+    }
+    if conn
+        .set::<_, _, ()>("update:scheduled_version", &available)
+        .await
+        .is_err()
+    {
+        // scheduled_at was already written — clear it so we don't leave a
+        // half-persisted schedule that would spawn a `wait_and_apply` with no
+        // version target.
+        let _: Result<(), _> = conn.del("update:scheduled_at").await;
+        return Redirect::to("/admin/dashboard?err=Redis+error").into_response();
+    }
+
+    let _ = state.update_tx.send(UpdateCommand::Schedule(ts)).await;
+    Redirect::to("/admin/dashboard?ok=Update+scheduled").into_response()
 }
 
 pub async fn cancel_update(
@@ -409,19 +443,23 @@ pub async fn rollback_update(
     // retag itself.
     let _guard = state.update_apply_lock.lock().await;
 
+    // Build the HTTP client BEFORE the retag. If the builder fails, we'd
+    // otherwise leave the local `:channel` ref rewritten with no Watchtower
+    // trigger and no Redis bookkeeping — a worse state than not having tried.
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Redirect::to("/admin/dashboard?err=Internal+HTTP+client+error").into_response(),
+    };
+
     match crate::update::docker::retag_for_rollback(&versioned_tag, channel).await {
         Ok(()) => {
             // Trigger Watchtower FIRST. Only commit Redis state changes if it
             // actually succeeds — otherwise we'd lose the rollback target
             // (previous_version) and the cached "update available" state
             // while the rollback never actually happened.
-            let client = match reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-            {
-                Ok(c) => c,
-                Err(_) => return Redirect::to("/admin/dashboard?err=Internal+HTTP+client+error").into_response(),
-            };
             let ok = crate::update::watchtower::trigger_update(
                 &client,
                 &state.config.watchtower_url,
