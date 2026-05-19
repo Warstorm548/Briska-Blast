@@ -15,3 +15,7 @@
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Runtime Redis data — the bind mount target written by the redis service.
+# Never commit operator runtime state into the repo.
+redis_data/

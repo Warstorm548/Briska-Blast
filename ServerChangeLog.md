@@ -5,6 +5,86 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.4.5] — 2026-05-19
+
+Patch release — switches Redis persistence from a Docker-managed named
+volume to a bind mount alongside the compose file. Operator-driven: the
+data was previously hidden under `/var/lib/docker/volumes/...`, which
+made backup and disaster-recovery workflows harder than they needed to
+be. No server code changes.
+
+### Changed
+
+- **`docker-compose.yml` Redis volume** — switched from the named volume
+  `redis_data` to bind mount `./redis_data`. The top-level
+  `volumes: redis_data:` declaration is removed (bind mounts don't need
+  one). Per-environment isolation is preserved by directory layout —
+  each env's compose file has its own sibling `./redis_data/` directory —
+  rather than by docker-volume name prefix.
+- **`.gitignore`** — adds `redis_data/` so operator runtime state isn't
+  accidentally committed.
+- **Docs** — `architecture.md`, `server-autoupdate.md`, and the env
+  isolation section of `briska-blast-ops-manual.md` updated to describe
+  the new mount layout. The `docker volume ls | grep redis_data`
+  verification example is replaced with `ls -la */redis_data/`.
+
+### Added
+
+- **`docs/migrations/0.4.5-redis-bind-mount.md`** — full one-time
+  migration procedure for existing deployments: stop the stack, copy
+  AOF data from `/var/lib/docker/volumes/<project>_redis_data/_data/`
+  to `./redis_data/`, chown to uid 999 (the `redis:7-alpine` container
+  user), pull the new compose, restart, verify admin password still
+  works. Old named volume is intentionally left in place as a rollback
+  safety net.
+- **`docs/migrations/` directory** — establishes
+  `docs/migrations/<version>-<slug>.md` as the canonical pattern for
+  future one-shot upgrade procedures.
+
+### Migration
+
+**Required for existing deployments.** Without the migration procedure,
+Redis starts with an empty `./redis_data/` directory and the admin
+password resets to the default `@admin` — admin panel access is
+recoverable but all custom Redis state (min versions, update history,
+schedules, rollback targets) is lost. See
+`docs/migrations/0.4.5-redis-bind-mount.md` for the full procedure.
+
+New deployments need no special steps — `docker compose up` creates the
+bind mount target on first start. If Redis logs `Permission denied` on
+first boot, `chown -R 999:999 redis_data` and restart.
+
+---
+
+## [0.4.4] — 2026-05-19
+
+Patch release — replaces the archived Watchtower image with a
+maintained fork. Compose-only; no server code changes.
+
+### Fixed
+
+- **`docker-compose.yml` Watchtower image pin** —
+  `containrrr/watchtower:1.7.1` was archived in December 2025 and only
+  speaks Docker Engine API v1.25. Docker Engine 28+ enforces a minimum
+  API of v1.44, so the old image crash-loops on modern hosts with:
+  `error="client version 1.25 is too old. Minimum supported API version is 1.44"`.
+  Swapped to `nickfedor/watchtower:1.17.0` — the actively-maintained
+  continuation fork at `github.com/nicholas-fedor/watchtower`. The fork
+  autonegotiates the API version, so it transparently supports whatever
+  Docker Engine the host is running (verified against Engine 29.1.3,
+  API 1.52 / min 1.44). Env vars and CLI flags are unchanged from the
+  containrrr image; the swap is a drop-in.
+
+### Migration
+
+None required. `docker compose pull && docker compose up -d` recreates
+the watchtower container on the new image, picking up the existing
+`WATCHTOWER_TOKEN` and config. Existing crash-looping
+`containrrr/watchtower:1.7.1` containers on Docker Engine 28+ will
+start working again immediately after the pull.
+
+---
+
 ## [0.4.3] — 2026-05-18
 
 Patch release — completes the rollback/auto-apply race fix that v0.4.2 started.

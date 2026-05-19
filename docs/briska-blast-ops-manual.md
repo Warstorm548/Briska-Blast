@@ -121,21 +121,21 @@ Optionally set `GITHUB_TOKEN=<read-only PAT>` to raise the GitHub Releases API r
 
 ### Compose Project Isolation (`COMPOSE_PROJECT_NAME`)
 
-Docker Compose namespaces named volumes, networks, and container names by **project name**, which defaults to the directory you ran `docker compose up` from. Because each environment above lives in its own folder, each one automatically gets its own Redis volume:
+Docker Compose namespaces networks and container names by **project name**, which defaults to the directory you ran `docker compose up` from. Redis data isolation works differently: it's a bind mount (`./redis_data/`) relative to each environment's compose directory, so each env's data lives next to its own compose file:
 
-| Environment | Default volume name |
+| Environment | Data location |
 |---|---|
-| prod | `prod_redis_data` |
-| staging | `staging_redis_data` |
-| dev | `dev_redis_data` |
+| prod | `~/briska/prod/redis_data/` |
+| staging | `~/briska/staging/redis_data/` |
+| dev | `~/briska/dev/redis_data/` |
 
 These are entirely separate — no data is shared across environments. Verify with:
 
 ```bash
-docker volume ls | grep redis_data
+ls -la ~/briska/*/redis_data/
 ```
 
-**Recommended hardening**: Set `COMPOSE_PROJECT_NAME` explicitly in each environment's `.env` so the namespace doesn't depend on the directory name. This protects against accidental collisions if a folder is ever renamed or copied.
+**Recommended hardening**: Set `COMPOSE_PROJECT_NAME` explicitly in each environment's `.env` so the network/container namespace doesn't depend on the directory name. This protects against accidental collisions if a folder is ever renamed or copied.
 
 ```env
 # ~/briska/prod/.env
