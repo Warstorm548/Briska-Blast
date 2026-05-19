@@ -300,25 +300,52 @@ pub async fn schedule_update(
     let ts = NaiveDateTime::parse_from_str(&form.scheduled_at, "%Y-%m-%dT%H:%M")
         .map(|dt| dt.and_utc().timestamp());
 
-    match ts {
-        Ok(ts) => {
-            // Mirror the precondition in `apply_update_now`: refuse to persist
-            // a schedule when there is no actual target. Otherwise a stale
-            // `scheduled_at` would later spawn a `wait_and_apply` with an empty
-            // `scheduled_version`, which would no-op confusingly at apply time.
-            if let Ok(mut conn) = state.redis.get().await {
-                let available: String = conn.get("update:available_version").await.unwrap_or_default();
-                if available.is_empty() {
-                    return Redirect::to("/admin/dashboard?err=No+update+available").into_response();
-                }
-                let _: () = conn.set("update:scheduled_at", ts.to_string()).await.unwrap_or(());
-                let _: () = conn.set("update:scheduled_version", &available).await.unwrap_or(());
-            }
-            let _ = state.update_tx.send(UpdateCommand::Schedule(ts)).await;
-            Redirect::to("/admin/dashboard?ok=Update+scheduled").into_response()
-        }
-        Err(_) => Redirect::to("/admin/dashboard?err=Invalid+date+format").into_response(),
+    let ts = match ts {
+        Ok(ts) => ts,
+        Err(_) => return Redirect::to("/admin/dashboard?err=Invalid+date+format").into_response(),
+    };
+
+    // Fail closed: any Redis error must surface as an err redirect rather
+    // than fall through to the success path. Otherwise the dashboard would
+    // show "Update scheduled" while `scheduled_at`/`scheduled_version` were
+    // never persisted, leaving the apply path with nothing to run.
+    let mut conn = match state.redis.get().await {
+        Ok(c) => c,
+        Err(_) => return Redirect::to("/admin/dashboard?err=Redis+error").into_response(),
+    };
+
+    let available: String = match conn.get("update:available_version").await {
+        Ok(v) => v,
+        Err(_) => return Redirect::to("/admin/dashboard?err=Redis+error").into_response(),
+    };
+    // Mirror the precondition in `apply_update_now`: refuse to persist a
+    // schedule when there is no actual target. Otherwise a stale `scheduled_at`
+    // would later spawn a `wait_and_apply` with an empty `scheduled_version`.
+    if available.is_empty() {
+        return Redirect::to("/admin/dashboard?err=No+update+available").into_response();
     }
+
+    if conn
+        .set::<_, _, ()>("update:scheduled_at", ts.to_string())
+        .await
+        .is_err()
+    {
+        return Redirect::to("/admin/dashboard?err=Redis+error").into_response();
+    }
+    if conn
+        .set::<_, _, ()>("update:scheduled_version", &available)
+        .await
+        .is_err()
+    {
+        // scheduled_at was already written — clear it so we don't leave a
+        // half-persisted schedule that would spawn a `wait_and_apply` with no
+        // version target.
+        let _: Result<(), _> = conn.del("update:scheduled_at").await;
+        return Redirect::to("/admin/dashboard?err=Redis+error").into_response();
+    }
+
+    let _ = state.update_tx.send(UpdateCommand::Schedule(ts)).await;
+    Redirect::to("/admin/dashboard?ok=Update+scheduled").into_response()
 }
 
 pub async fn cancel_update(

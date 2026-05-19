@@ -83,16 +83,14 @@ The feature should be **opt-in**: if `POCKET_ID_URL` is not set, the admin panel
 1. Read `code` and `state` from query params.
 2. Look up `admin:oidc_state:<state>` in Redis — if missing or expired, return an error (CSRF protection).
 3. Delete the state key from Redis (one-time use).
-4. POST to `{POCKET_ID_URL}/oidc/token`:
+4. POST a form-encoded body to the token endpoint (RFC 6749 §4.1.3 requires `application/x-www-form-urlencoded`):
    ```http
-   grant_type=authorization_code
-   code=<code>
-   redirect_uri=https://<admin-domain>/admin/oidc/callback
-   client_id=<OIDC_CLIENT_ID>
-   client_secret=<OIDC_CLIENT_SECRET>
-   code_verifier=<stored code_verifier>
+   POST {POCKET_ID_URL}/oidc/token
+   Content-Type: application/x-www-form-urlencoded
+
+   grant_type=authorization_code&code=<code>&redirect_uri=https%3A%2F%2F<admin-domain>%2Fadmin%2Foidc%2Fcallback&client_id=<OIDC_CLIENT_ID>&client_secret=<OIDC_CLIENT_SECRET>&code_verifier=<stored code_verifier>
    ```
-5. Fully validate the returned `id_token` JWT before trusting any of its claims: verify the signature against Pocket ID's JWKS (`/.well-known/jwks.json` from the discovery document), and validate `iss` (matches `POCKET_ID_URL`), `aud` (matches `OIDC_CLIENT_ID`), and `exp` (not expired). Reject the request if any check fails.
+5. Fully validate the returned `id_token` JWT before trusting any of its claims. Fetch the discovery document at `{POCKET_ID_URL}/.well-known/openid-configuration`, read its `jwks_uri` field (do not assume `/.well-known/jwks.json` — the path is provider-defined), and fetch the JWKS from there. Then verify the JWT's signature against that JWKS and validate `iss` (matches `POCKET_ID_URL`), `aud` (matches `OIDC_CLIENT_ID`), and `exp` (not expired). Reject the request on any verification failure.
 6. Only after successful verification, extract the `groups` claim. If it does not contain `OIDC_ADMIN_GROUP`, return 403.
 7. Generate a random 32-byte session token, store it in Redis as `admin:session:<token>` with 24h TTL (same pattern as password auth).
 8. Set `briska_admin_session` cookie and redirect to `/admin/dashboard`.
