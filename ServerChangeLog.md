@@ -5,6 +5,160 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.0] — 2026-05-20
+
+Minor release (breaking, pre-1.0). Replaces the 2-player UDP
+hole-punch design with N-player WebRTC signaling. The server stops
+storing peer endpoints entirely — clients discover their own via
+STUN, and the server's job narrows to validating session parameters
+and relaying SDP / ICE between peers over a new WebSocket.
+
+Adds a hardcoded server-authoritative per-gamemode `[min, max]`
+player-count table that rejects out-of-spec session-creation requests
+before any state is allocated. The 2-player join model is gone; a
+`Session` now stores a list of joiners up to `player_count`, with the
+race that previously allowed two concurrent joiners to both squeeze
+past a full-cap check closed by doing the entire read-check-append
+inside a single Redis Lua script. Lobby lifecycle gains an explicit
+`Starting` phase — `/join` no longer side-effects status, only a new
+`POST /session/:code/start` does. A WebSocket endpoint and per-process
+`SignalHub` relay WebRTC signaling messages between peers; the server
+attests every relayed `from` so impersonation isn't possible. A
+same-origin HTML/JS test harness ships behind `ENABLE_TEST_HARNESS=true`
+to verify the full flow without a Godot client.
+
+Symmetric-NAT players (~5–10% of consumer routers) cannot participate
+in this release because no TURN relay exists yet. TURN, the
+host-configurable min/max-pair schema, and WS-ticket auth are tracked
+in `docs/roadmap.md`. All known edge cases live in the new
+`docs/session-multiplayer-edge-cases.md`.
+
+### Added
+
+- **Typed `GameMode` enum (`shared/src/types/gamemode.rs`)** — initial
+  variant: `Extended`. Serde rejects unknown gamemode strings at
+  deserialize time, so any client sending an unrecognized gamemode is
+  bounced at 400 before handler code runs. The matching server-side
+  bounds module (`server/src/gamemode.rs`) uses an exhaustive `match`
+  so adding a future variant without a bounds row is a compile error.
+- **`SessionStatus::Starting` variant** — the lobby lifecycle splits
+  from `Waiting → Active` into `Waiting → Starting → Active`.
+- **`validate_player_count(mode, requested) → Result<(), AppError>`**
+  in `server/src/gamemode.rs`. Returns the new
+  `AppError::InvalidPlayerCount { min, max, requested }` (HTTP 400)
+  carrying both the gamemode bounds and the offending value, so a
+  client can render a useful message without a second round-trip.
+- **`AppError::SessionFull { capacity }`** (HTTP 409) — returned by
+  `/join` when the lobby is at its cap. Echoes the cap so the client
+  doesn't have to poll to learn how full was full.
+- **`AppError::SessionNotStartable { reason }`** (HTTP 409) — returned
+  by `/session/:code/start` when preconditions fail. Stable reason
+  discriminator (`not_host`, `not_in_waiting`, `below_min_players`,
+  `not_all_peers_ready`).
+- **N-player `Session` storage (`server/src/api/mod.rs`)** —
+  `joiners: Vec<JoinerEntry>` replaces the single-joiner fields.
+  `JoinerEntry { player_id, joined_at_ms }` persists the join
+  timestamp for future kick-the-late-arrival logic. Helpers
+  `current_player_count()`, `is_full()`, `contains_player()`.
+- **`POST /session/:code/start`** (`server/src/api/start.rs`) —
+  version-gated route. Preconditions: caller is host, status is
+  `Waiting`, current count ≥ gamemode min, every session member has
+  a live WS in `SignalHub`. Transitions status to `Starting` and
+  persists to Redis BEFORE broadcasting `start_signaling`, so
+  visible state and signaling intent stay aligned even if the
+  broadcast fan-out is interrupted.
+- **`server/src/signaling/` module** — `SignalHub` is an in-process
+  registry of rooms keyed by session code, with `mpsc::UnboundedSender`
+  per identified player. Not Redis-backed (signaling state is
+  ephemeral, a server restart drops every WS anyway). `ServerMsg` and
+  `ClientMsg` JSON-tagged enums cover the wire schema. Empty rooms
+  are dropped eagerly in `leave_room` to prevent map leakage.
+- **WebSocket endpoint `GET /ws/session/:code`** — handler upgrades
+  the connection, requires `{"type":"identify",…}` as the first frame
+  within 5s, validates the token via the existing `validate_player`
+  helper, confirms the player is a member of the session, registers
+  in `SignalHub`. `tokio::select!` pump loop over `socket.recv()` and
+  `rx.recv()`. Server-attested `from` on every relayed offer / answer
+  / ICE candidate. App-defined 4xxx close codes (4400 bad initial,
+  4401 unauthorized, 4403 not in session, 4404 not found, 4500
+  internal) mirror HTTP semantics. Host disconnect while session is
+  still `Waiting` deletes the Redis session and broadcasts
+  `session_ended { reason: "host_disconnect" }`.
+- **Same-origin HTML/JS test harness at `GET /test/webrtc`** — gated
+  by `ENABLE_TEST_HARNESS=true` env var (default off). Vanilla JS
+  exercises register → host/join → identify → start → WebRTC mesh
+  → data-channel broadcast. STUN at `stun.l.google.com:19302`. Glare
+  avoidance via lexicographic `player_id`. WS auto-reconnect with
+  exponential backoff for non-4xxx closes.
+
+### Changed
+
+- **`/host`** now validates `(gamemode, player_count)` against
+  `gamemode::bounds_for` BEFORE generating a session code — invalid
+  requests no longer waste a Redis collision-check round-trip.
+- **`/join`** now does the entire read-check-append-write inside a
+  Redis Lua script. Without this, two simultaneous joiners could
+  both observe "1 slot left" and both succeed. The script returns
+  a discriminated JSON envelope that the Rust side decodes via a
+  typed enum.
+- **`/join` no longer flips status to `Active`** — joining a session
+  only fills a slot. The Waiting → Starting transition is now
+  exclusively driven by `POST /session/:code/start`.
+- **`/host`, `/join`, `/session/:code/start`** route to the
+  version-gated subrouter (X-Launcher-Version + X-Game-Version
+  enforced). `/ws/session/:code` does NOT — browsers cannot easily
+  attach custom headers to a WS upgrade, and clients are already
+  version-gated by the REST step they used to learn the code.
+
+### Breaking
+
+- **`HostRequest` drops `external_ip` and `external_port`** — peer
+  endpoints are no longer the server's concern. WebRTC discovers
+  them via STUN client-side.
+- **`HostRequest.gamemode` is now `GameMode`** (typed) instead of a
+  free-form `String`. Unknown values bounce at the deserialize
+  boundary with HTTP 400.
+- **`HostRequest` gains `player_count: u8`** — the host's chosen
+  lobby cap, validated against the gamemode bounds. Includes the
+  host (`player_count = 4` means 1 host + 3 joiners total).
+- **`JoinRequest` drops `external_ip` and `external_port`.**
+- **`JoinResponse` drops `host_ip` / `host_port`** and now carries
+  `gamemode: GameMode`, `player_count: u8`, `current_player_count: u8`,
+  and `joiners: Vec<JoinedPeer>`. A new joiner learns the full lobby
+  roster from the join response — no separate poll needed.
+- **`SessionPollResponse` switches to typed `status: SessionStatus`
+  and `gamemode: GameMode`**, drops `joiner_ip` / `joiner_port`, and
+  gains capacity + roster fields.
+- **New `StartSessionRequest { player_id, secret_token }`** —
+  session code comes from the URL path; only auth in the body.
+- **New `JoinedPeer { player_id }`** — the minimal wire-side peer
+  descriptor. Network addresses are not in HTTP responses anymore.
+
+### Deferred (not in this release)
+
+- TURN relay for symmetric-NAT players. Affected ~5–10% currently
+  cannot participate; they see `kicked { reason: "peer_connection_unrecoverable" }`.
+  See `docs/roadmap.md`.
+- Host-configurable `[min, max]` pair per gamemode (the host sends
+  one value today; per-gamemode pair selection is a future shape).
+- WS-ticket auth — `secret_token` is sent cleartext in the
+  `Identify` frame, mitigated only by TLS in production. Future
+  hardening replaces this with a short-lived signed ticket.
+- Joiner-list mutation on WS disconnect during `Starting` / `Active`.
+  Server broadcasts `peer_left` but does not modify the persisted
+  joiners array (races with `/start` writes).
+- Duplicate `Identify` policy. Current behavior: second identify on
+  an already-connected player is ignored. Intended: kick the old.
+
+### Tests
+
+42 unit + module tests pass at every commit. The WebSocket handler
+itself is verified manually via the new HTML harness — Rust
+WebSocket testing is intentionally deferred to avoid adding
+`tokio-tungstenite` as a dev-dependency for a single test file.
+
+---
+
 ## [0.4.7] — 2026-05-19
 
 Patch release — closes a race in the auto-apply flow that left
