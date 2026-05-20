@@ -98,15 +98,29 @@
   }
 
   async function postJson(path, body) {
-    const r = await fetch(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...VERSION_HEADERS },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const text = await r.text();
-    let parsed = null;
-    try { parsed = text ? JSON.parse(text) : null; } catch {}
-    return { ok: r.ok, status: r.status, body: parsed, raw: text };
+    // Wrap the whole fetch so network/DNS/CORS failures (which throw)
+    // surface in the same shape callers handle for HTTP errors. Without
+    // this, a thrown error escapes postJson and crashes the caller's
+    // `if (!r.ok) { ... }` flow.
+    try {
+      const r = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...VERSION_HEADERS },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const text = await r.text();
+      let parsed = null;
+      try { parsed = text ? JSON.parse(text) : null; } catch {}
+      return { ok: r.ok, status: r.status, body: parsed, raw: text };
+    } catch (err) {
+      log('postJson ' + path + ' failed: ' + (err && err.message ? err.message : err));
+      return {
+        ok: false,
+        status: 0,
+        body: null,
+        raw: err && err.message ? err.message : String(err),
+      };
+    }
   }
 
   function sendWs(obj) {
@@ -141,6 +155,13 @@
   }
 
   function forget() {
+    // Tear down any active session before nulling identity. Without
+    // this, an open WebSocket and live RTCPeerConnections would keep
+    // running with stale identity references — they'd happily continue
+    // signaling for a player whose credentials we just cleared.
+    if (sessionCode || ws || peers.size > 0) {
+      teardown();
+    }
     sessionStorage.removeItem('playerId');
     sessionStorage.removeItem('secretToken');
     playerId = null;
