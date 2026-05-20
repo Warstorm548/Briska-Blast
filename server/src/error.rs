@@ -13,6 +13,9 @@ pub enum AppError {
     Conflict(String),
     TooManyRequests,
     UpgradeRequired { component: String, minimum: String, current: String },
+    InvalidPlayerCount { min: u8, max: u8, requested: u8 },
+    SessionFull { capacity: u8 },
+    SessionNotStartable { reason: &'static str },
     Internal(String),
 }
 
@@ -34,6 +37,23 @@ impl IntoResponse for AppError {
                     "current_version": current,
                 }),
             ),
+            AppError::InvalidPlayerCount { min, max, requested } => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid_player_count",
+                    "min": min,
+                    "max": max,
+                    "requested": requested,
+                }),
+            ),
+            AppError::SessionFull { capacity } => (
+                StatusCode::CONFLICT,
+                json!({"error": "session_full", "capacity": capacity}),
+            ),
+            AppError::SessionNotStartable { reason } => (
+                StatusCode::CONFLICT,
+                json!({"error": "session_not_startable", "reason": reason}),
+            ),
             AppError::Internal(msg) => {
                 tracing::error!("internal error: {}", msg);
                 (
@@ -47,3 +67,45 @@ impl IntoResponse for AppError {
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    async fn body_json(err: AppError) -> (StatusCode, serde_json::Value) {
+        let resp = err.into_response();
+        let status = resp.status();
+        let bytes = to_bytes(resp.into_body(), 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn invalid_player_count_returns_400_with_bounds() {
+        let (status, body) =
+            body_json(AppError::InvalidPlayerCount { min: 2, max: 4, requested: 5 }).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_player_count");
+        assert_eq!(body["min"], 2);
+        assert_eq!(body["max"], 4);
+        assert_eq!(body["requested"], 5);
+    }
+
+    #[tokio::test]
+    async fn session_full_returns_409_with_capacity() {
+        let (status, body) = body_json(AppError::SessionFull { capacity: 4 }).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "session_full");
+        assert_eq!(body["capacity"], 4);
+    }
+
+    #[tokio::test]
+    async fn session_not_startable_returns_409_with_reason() {
+        let (status, body) =
+            body_json(AppError::SessionNotStartable { reason: "not_host" }).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "session_not_startable");
+        assert_eq!(body["reason"], "not_host");
+    }
+}
