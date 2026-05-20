@@ -6,6 +6,8 @@ pub mod session;
 use deadpool_redis::redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use shared::types::gamemode::GameMode;
+use shared::types::session::SessionStatus;
 use std::net::{IpAddr, SocketAddr};
 
 use axum::extract::ConnectInfo;
@@ -13,16 +15,37 @@ use axum::extract::ConnectInfo;
 use crate::error::{AppError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JoinerEntry {
+    pub player_id: String,
+    pub joined_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub code: String,
     pub host_player_id: String,
-    pub host_ip: String,
-    pub host_port: u16,
-    pub gamemode: String,
-    pub joiner_player_id: Option<String>,
-    pub joiner_ip: Option<String>,
-    pub joiner_port: Option<u16>,
-    pub status: String,
+    pub gamemode: GameMode,
+    pub player_count: u8,
+    pub joiners: Vec<JoinerEntry>,
+    pub status: SessionStatus,
+}
+
+impl Session {
+    pub fn current_player_count(&self) -> u8 {
+        // Host plus joiners. Joiner count is capped at u8::MAX in practice
+        // because player_count is u8 and is_full() enforces the upper bound
+        // before any append.
+        1u8.saturating_add(self.joiners.len() as u8)
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.current_player_count() >= self.player_count
+    }
+
+    pub fn contains_player(&self, player_id: &str) -> bool {
+        self.host_player_id == player_id
+            || self.joiners.iter().any(|j| j.player_id == player_id)
+    }
 }
 
 pub(crate) fn hash_token(token: &str) -> String {
