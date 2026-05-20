@@ -153,44 +153,40 @@ Push to main branch
 
 ### The NAT Traversal Problem
 
-Home routers act like apartment building front desks — outgoing traffic passes freely, but unsolicited incoming connections are blocked. The solution is **NAT hole-punching**.
+Home routers act like apartment building front desks — outgoing traffic passes freely, but unsolicited incoming connections are blocked. Two NATed peers can't connect "cold." The solution is to use **WebRTC**, which handles NAT traversal automatically via the ICE protocol (STUN candidates for the common case, TURN relay for symmetric NATs).
 
-### NAT Hole-Punching Flow
-```
-Player A (Host)          Matchmaking Server          Player B (Joiner)
-     |                          |                          |
-     |--- "I'm hosting" ------->|<--- "Join ABC123" -------|
-     |    IP:port stored        |                          |
-     |                          |--- "Host is at" -------->|
-     |                          |    X.X.X.X:54231         |
-     |                          |                          |
-     |<--- simultaneous outward reach --------------------->|
-     |    (both routers see outgoing traffic)               |
-     |<============= direct P2P connection ================>|
-```
+In v0.5.0, the server is no longer a "matchmaking broker that hands out IP:ports." The server is a **signaling channel**: it relays small text messages (SDP offers, answers, ICE candidates) between peers over a WebSocket. WebRTC discovers and uses the actual peer endpoints client-side — the server never sees or stores them.
 
-**Key Insight:** The server only brokers the introduction. It never touches game data after P2P is established.
+### WebRTC Signaling Flow (v0.5.0)
 
-### Why External Port Matters
-- Player A's game listens on local port `7777`
-- Their router maps it to external port `54231`
-- The server sees `54231` — that is the port Player B needs
-- This is called the **external mapped port**
-- STUN protocol automates discovering this external IP:port
-
-### STUN Protocol
-```
-Player A's Game          STUN Server
-      |                      |
-      |--- "What do you  --->|
-      |     see me as?"      |
-      |<-- "X.X.X.X:54231" --|
-      |
-      | (Now I know my real external IP:port)
-      | (Send this to matchmaking server)
+```text
+Player A (Host)          Server (signaling)          Player B (Joiner)
+     |                         |                          |
+     |-- POST /host ---------->|                          |
+     |   {gamemode, count}     |                          |
+     |<- {session_code} -------|                          |
+     |                         |<-- POST /join -----------|
+     |                         |    {code}                |
+     |                         |--> {gamemode, count,     |
+     |                         |     joiner roster} ----->|
+     |-- WS identify --------->|                          |
+     |                         |<-- WS identify ----------|
+     |<-- peer_joined ---------|                          |
+     |                         |                          |
+     |-- POST /start --------->|                          |
+     |<-- start_signaling -----|--> start_signaling ----->|
+     |                         |                          |
+     |== SDP/ICE relayed via the WebSocket both ways =====|
+     |                         |                          |
+     |<======= direct WebRTC peer connection ============>|
+     |======= server is no longer in the data path ======|
 ```
 
-Public STUN servers are freely available. Godot 4's WebRTC handles this automatically.
+**Key Insight:** The server brokers the introduction (via signaling) but never touches game data after the WebRTC peer connection is established.
+
+### STUN and TURN
+- **STUN** lets each peer discover its own public IP:port through a public STUN server (the project uses `stun.l.google.com:19302`). The browser/Godot WebRTC stack does this transparently — application code only sees ICE candidates ready to exchange.
+- **TURN** relays peer traffic for the ~5–10% of consumer routers that are "symmetric NATs" and can't be hole-punched. v0.5.0 ships **without** TURN — affected players currently cannot join sessions. See [`roadmap.md`](roadmap.md).
 
 ### P2P Topology (4 Players)
 

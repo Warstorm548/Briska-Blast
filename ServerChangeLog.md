@@ -152,7 +152,7 @@ in `docs/roadmap.md`. All known edge cases live in the new
 
 ### Tests
 
-42 unit + module tests pass at every commit. The WebSocket handler
+42 unit + module tests pass as of this release. The WebSocket handler
 itself is verified manually via the new HTML harness — Rust
 WebSocket testing is intentionally deferred to avoid adding
 `tokio-tungstenite` as a dev-dependency for a single test file.

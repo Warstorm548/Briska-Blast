@@ -58,7 +58,7 @@ After `Identified`, the client and server exchange the messages documented in `s
 
 ## End-to-end signaling flow
 
-```
+```text
 Host                    Server                Joiner(s)
  |-- POST /host -------->|                       |
  |     {gamemode,        |                       |

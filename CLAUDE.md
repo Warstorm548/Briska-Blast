@@ -41,7 +41,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Full package structure and module layout | [`docs/architecture.md`](docs/architecture.md) |
 | Dev environment setup and Docker instructions | [`docs/setup.md`](docs/setup.md) |
 | Manual testing with curl, admin panel tests | [`docs/testing.md`](docs/testing.md) |
-| Server endpoint design and hole-punch flow | [`docs/protocol.md`](docs/protocol.md) |
+| Server endpoint design and WebRTC signaling flow | [`docs/protocol.md`](docs/protocol.md) |
 | Full networking, identity, and game design | [`docs/game-architecture-summary.md`](docs/game-architecture-summary.md) |
 | Launcher self-update and version enforcement | [`docs/launcher-update-and-version-validation.md`](docs/launcher-update-and-version-validation.md) |
 | Dev branch and release channel rules | [`docs/devtools.md`](docs/devtools.md) |
