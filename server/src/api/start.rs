@@ -3,9 +3,9 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use deadpool_redis::redis::AsyncCommands;
+use deadpool_redis::redis::{AsyncCommands, Script};
+use serde::Deserialize;
 use shared::protocol::messages::StartSessionRequest;
-use shared::types::session::SessionStatus;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 
@@ -16,6 +16,60 @@ use crate::{
     state::AppState,
 };
 use super::{client_ip, validate_player, Session};
+
+// Atomic transition Waiting → Starting. Equivalent to a Redis
+// WATCH/MULTI/EXEC CAS, but expressed as a single Lua script so the
+// whole read-validate-write happens in one Redis round-trip with no
+// other commands interleaving — same atomicity guarantee as the join
+// handler.
+//
+// We pass `expected_joiner_count` so the script can detect a concurrent
+// /join that landed between our Rust-side WS-ready check and the
+// transaction. On mismatch the script returns `conflict` and Rust
+// retries the whole flow (re-reading the session and re-running the
+// WS-ready check against the fresh state).
+//
+// KEYS[1] = session key
+// ARGV[1] = expected host player_id
+// ARGV[2] = gamemode min_players (host included)
+// ARGV[3] = expected joiner count (len of session.joiners at WS-ready time)
+// ARGV[4] = session TTL in seconds
+const START_SCRIPT: &str = r#"
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+  return cjson.encode({result = 'not_found'})
+end
+local session = cjson.decode(raw)
+if session.host_player_id ~= ARGV[1] then
+  return cjson.encode({result = 'not_host'})
+end
+if session.status ~= 'waiting' then
+  return cjson.encode({result = 'not_in_waiting'})
+end
+local current = 1 + #session.joiners
+if current < tonumber(ARGV[2]) then
+  return cjson.encode({result = 'below_min_players'})
+end
+if #session.joiners ~= tonumber(ARGV[3]) then
+  return cjson.encode({result = 'conflict'})
+end
+session.status = 'starting'
+redis.call('SET', KEYS[1], cjson.encode(session), 'EX', tonumber(ARGV[4]))
+return cjson.encode({result = 'ok'})
+"#;
+
+#[derive(Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+enum StartOutcome {
+    Ok,
+    NotFound,
+    NotHost,
+    NotInWaiting,
+    BelowMinPlayers,
+    Conflict,
+}
+
+const MAX_START_RETRIES: u32 = 3;
 
 pub async fn start_session(
     State(state): State<AppState>,
@@ -38,83 +92,103 @@ pub async fn start_session(
     validate_player(&mut conn, &body.player_id, &body.secret_token).await?;
 
     let key = format!("session:{}", code);
-    let raw: Option<String> = conn
-        .get(&key)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    let raw = raw.ok_or(AppError::NotFound)?;
-    let mut session: Session = serde_json::from_str(&raw)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    // Precondition: caller is the host. Defense in depth — the UI hides the
-    // start button for non-hosts, but the server doesn't trust that.
-    if session.host_player_id != body.player_id {
-        return Err(AppError::SessionNotStartable { reason: "not_host" });
+    // Optimistic retry loop. The Lua script rejects the transition on
+    // joiner-count mismatch (a concurrent /join landed); we re-read and
+    // re-check WS-readiness against the new snapshot.
+    for _attempt in 0..MAX_START_RETRIES {
+        // Read the current snapshot. Used for the WS-ready check (which
+        // can't be expressed inside Lua — SignalHub lives in-process).
+        let raw: Option<String> = conn
+            .get(&key)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let raw = raw.ok_or(AppError::NotFound)?;
+        let session: Session = serde_json::from_str(&raw)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        // WS-ready check uses this snapshot's member list. The Lua's
+        // expected-joiner-count guard is what protects us from a join
+        // landing between this check and the commit.
+        let ws_members: HashSet<String> = state
+            .signal_hub
+            .room_members(&code)
+            .await
+            .into_iter()
+            .collect();
+        let session_members: Vec<String> = std::iter::once(session.host_player_id.clone())
+            .chain(session.joiners.iter().map(|j| j.player_id.clone()))
+            .collect();
+        if !session_members.iter().all(|p| ws_members.contains(p)) {
+            return Err(AppError::SessionNotStartable {
+                reason: "not_all_peers_ready",
+            });
+        }
+
+        let (min_players, _max) = gamemode::bounds_for(session.gamemode);
+        let expected_joiner_count = session.joiners.len();
+
+        let script = Script::new(START_SCRIPT);
+        let result_json: String = script
+            .key(&key)
+            .arg(&body.player_id)
+            .arg(min_players)
+            .arg(expected_joiner_count)
+            .arg(state.config.session_ttl_secs)
+            .invoke_async(&mut *conn)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        let outcome: StartOutcome = serde_json::from_str(&result_json)
+            .map_err(|e| AppError::Internal(format!("malformed start lua result: {e}")))?;
+
+        match outcome {
+            StartOutcome::Ok => {
+                // Best-effort broadcast. Clients that miss it can re-poll
+                // /session/:code to discover the new Starting status.
+                state
+                    .signal_hub
+                    .broadcast(
+                        &code,
+                        ServerMsg::StartSignaling {
+                            gamemode: session.gamemode,
+                            player_count: session.player_count,
+                            peers: session_members,
+                        },
+                        None,
+                    )
+                    .await;
+                tracing::info!(
+                    "player {} started session {} ({}/{} players)",
+                    body.player_id,
+                    code,
+                    session.current_player_count(),
+                    session.player_count
+                );
+                return Ok(StatusCode::NO_CONTENT);
+            }
+            StartOutcome::NotFound => return Err(AppError::NotFound),
+            StartOutcome::NotHost => {
+                return Err(AppError::SessionNotStartable { reason: "not_host" })
+            }
+            StartOutcome::NotInWaiting => {
+                return Err(AppError::SessionNotStartable { reason: "not_in_waiting" })
+            }
+            StartOutcome::BelowMinPlayers => {
+                return Err(AppError::SessionNotStartable { reason: "below_min_players" })
+            }
+            StartOutcome::Conflict => {
+                // A concurrent /join changed the joiner list between our
+                // WS-ready check and the transaction. Re-read and retry.
+                tracing::debug!("start: conflict on session {}, retrying", code);
+                continue;
+            }
+        }
     }
 
-    // Precondition: session is still in the lobby phase. Re-starting a
-    // Starting/Active/Ended session is an error, not a no-op.
-    if !matches!(session.status, SessionStatus::Waiting) {
-        return Err(AppError::SessionNotStartable { reason: "not_in_waiting" });
-    }
-
-    // Precondition: at least gamemode-minimum humans in the lobby.
-    let (min_players, _max_players) = gamemode::bounds_for(session.gamemode);
-    if session.current_player_count() < min_players {
-        return Err(AppError::SessionNotStartable {
-            reason: "below_min_players",
-        });
-    }
-
-    // Precondition: every session member has a live WS connection in
-    // SignalHub. Without this, start_signaling would broadcast to a
-    // partial roster and the missing player would never establish peer
-    // links. Strict by design (per plan default).
-    let ws_members: HashSet<String> =
-        state.signal_hub.room_members(&code).await.into_iter().collect();
-    let session_members: Vec<String> = std::iter::once(session.host_player_id.clone())
-        .chain(session.joiners.iter().map(|j| j.player_id.clone()))
-        .collect();
-    if !session_members.iter().all(|p| ws_members.contains(p)) {
-        return Err(AppError::SessionNotStartable {
-            reason: "not_all_peers_ready",
-        });
-    }
-
-    // Persist the transition BEFORE broadcasting. If we broadcast first and
-    // the SET fails, clients would already be negotiating WebRTC against a
-    // session that still reads as Waiting — recoverable but ugly. Doing the
-    // persist first keeps the visible session state and the signaling
-    // intent aligned.
-    session.status = SessionStatus::Starting;
-    let updated = serde_json::to_string(&session)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    conn.set_ex::<_, _, ()>(&key, updated, state.config.session_ttl_secs)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    // Best-effort broadcast. Clients that miss it can re-poll /session/:code
-    // to discover the new Starting status.
-    state
-        .signal_hub
-        .broadcast(
-            &code,
-            ServerMsg::StartSignaling {
-                gamemode: session.gamemode,
-                player_count: session.player_count,
-                peers: session_members,
-            },
-            None,
-        )
-        .await;
-
-    tracing::info!(
-        "player {} started session {} ({}/{} players)",
-        body.player_id,
-        code,
-        session.current_player_count(),
-        session.player_count
+    tracing::warn!(
+        "start: exhausted {} retries on session {} — concurrent /join activity",
+        MAX_START_RETRIES, code
     );
-
-    Ok(StatusCode::NO_CONTENT)
+    Err(AppError::SessionNotStartable { reason: "conflict" })
 }

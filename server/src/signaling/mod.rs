@@ -2,14 +2,15 @@ pub mod protocol;
 pub mod ws;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{mpsc, RwLock};
 
 pub use protocol::ServerMsg;
 
 /// Ephemeral in-process registry of WebSocket signaling rooms keyed by
-/// session code. Each room maps player_id → mpsc sender so the hub can
-/// fan out broadcasts or push targeted messages without the WS handlers
-/// knowing about each other.
+/// session code. Each room maps player_id → (connection_id, mpsc sender)
+/// so the hub can fan out broadcasts or push targeted messages without
+/// the WS handlers knowing about each other.
 ///
 /// State is intentionally not persisted to Redis: a server restart drops
 /// every WS anyway, and rebuilding the registry across instances would
@@ -18,39 +19,57 @@ pub use protocol::ServerMsg;
 #[derive(Default)]
 pub struct SignalHub {
     rooms: RwLock<HashMap<String, Room>>,
+    next_conn_id: AtomicU64,
 }
 
 #[derive(Default)]
 struct Room {
-    senders: HashMap<String, mpsc::UnboundedSender<ServerMsg>>,
+    /// player_id → (connection_id, sender). The connection_id lets
+    /// `leave_room` distinguish a stale cleanup (old socket finishing
+    /// its disconnect path) from a real eviction. If a player_id has
+    /// already been re-bound to a newer connection, the old socket's
+    /// cleanup must not remove the newer sender.
+    senders: HashMap<String, (u64, mpsc::UnboundedSender<ServerMsg>)>,
 }
 
 impl SignalHub {
     /// Register a sender for `player_id` in `code`'s room. Returns the
-    /// receiving end so the caller (the WS handler) can pump outbound
-    /// messages into the socket. Creates the room if it doesn't exist.
+    /// connection_id (used later to scope `leave_room` correctly) and
+    /// the receiving end (the WS handler pumps outbound messages from
+    /// it). Creates the room if it doesn't exist.
+    ///
+    /// If the same `player_id` was already registered (a duplicate
+    /// identify on a new socket), the older entry is replaced — its
+    /// sender is dropped, which closes the old receiver and naturally
+    /// breaks the old WS handler's pump loop.
     pub async fn join_room(
         &self,
         code: &str,
         player_id: &str,
-    ) -> mpsc::UnboundedReceiver<ServerMsg> {
+    ) -> (u64, mpsc::UnboundedReceiver<ServerMsg>) {
+        let conn_id = self.next_conn_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::unbounded_channel();
         let mut rooms = self.rooms.write().await;
         let room = rooms.entry(code.to_string()).or_default();
-        room.senders.insert(player_id.to_string(), tx);
-        rx
+        room.senders.insert(player_id.to_string(), (conn_id, tx));
+        (conn_id, rx)
     }
 
-    /// Remove `player_id` from `code`'s room. Drops the room entirely if
-    /// the last sender just left, so the map doesn't accumulate empty
-    /// rooms forever as sessions end.
-    pub async fn leave_room(&self, code: &str, player_id: &str) {
+    /// Remove `player_id` from `code`'s room IF the stored entry matches
+    /// the given `conn_id`. The match check prevents an old WS handler's
+    /// late cleanup from evicting a newer socket that already re-bound
+    /// the same player_id (the duplicate-identify race).
+    ///
+    /// Drops the room entirely once the last sender leaves, so the map
+    /// doesn't accumulate empty rooms forever as sessions end.
+    pub async fn leave_room(&self, code: &str, player_id: &str, conn_id: u64) {
         let mut rooms = self.rooms.write().await;
-        if let Some(room) = rooms.get_mut(code) {
+        let Some(room) = rooms.get_mut(code) else { return };
+        if room.senders.get(player_id).map(|(id, _)| *id) == Some(conn_id) {
             room.senders.remove(player_id);
-            if room.senders.is_empty() {
-                rooms.remove(code);
-            }
+        }
+        if room.senders.is_empty() {
+            rooms.remove(code);
         }
     }
 
@@ -61,7 +80,7 @@ impl SignalHub {
         rooms
             .get(code)
             .and_then(|r| r.senders.get(player_id))
-            .map(|tx| tx.send(msg).is_ok())
+            .map(|(_, tx)| tx.send(msg).is_ok())
             .unwrap_or(false)
     }
 
@@ -71,7 +90,7 @@ impl SignalHub {
     pub async fn broadcast(&self, code: &str, msg: ServerMsg, except: Option<&str>) {
         let rooms = self.rooms.read().await;
         if let Some(room) = rooms.get(code) {
-            for (pid, tx) in &room.senders {
+            for (pid, (_, tx)) in &room.senders {
                 if Some(pid.as_str()) == except {
                     continue;
                 }
@@ -99,7 +118,7 @@ mod tests {
     #[tokio::test]
     async fn join_room_returns_a_receiver_and_registers_the_sender() {
         let hub = SignalHub::default();
-        let _rx = hub.join_room("ABC", "0000001").await;
+        let (_conn_id, _rx) = hub.join_room("ABC", "0000001").await;
         let members = hub.room_members("ABC").await;
         assert_eq!(members, vec!["0000001".to_string()]);
     }
@@ -107,8 +126,8 @@ mod tests {
     #[tokio::test]
     async fn send_to_delivers_only_to_the_named_player() {
         let hub = SignalHub::default();
-        let mut rx_a = hub.join_room("ABC", "0000001").await;
-        let mut rx_b = hub.join_room("ABC", "0000002").await;
+        let (_, mut rx_a) = hub.join_room("ABC", "0000001").await;
+        let (_, mut rx_b) = hub.join_room("ABC", "0000002").await;
 
         let delivered = hub
             .send_to("ABC", "0000002", ServerMsg::Kicked { reason: "test" })
@@ -122,7 +141,7 @@ mod tests {
     #[tokio::test]
     async fn send_to_missing_player_returns_false() {
         let hub = SignalHub::default();
-        let _rx = hub.join_room("ABC", "0000001").await;
+        let (_, _rx) = hub.join_room("ABC", "0000001").await;
         let delivered = hub
             .send_to("ABC", "0000099", ServerMsg::Kicked { reason: "test" })
             .await;
@@ -132,8 +151,8 @@ mod tests {
     #[tokio::test]
     async fn broadcast_reaches_everyone_when_except_is_none() {
         let hub = SignalHub::default();
-        let mut rx_a = hub.join_room("ABC", "0000001").await;
-        let mut rx_b = hub.join_room("ABC", "0000002").await;
+        let (_, mut rx_a) = hub.join_room("ABC", "0000001").await;
+        let (_, mut rx_b) = hub.join_room("ABC", "0000002").await;
 
         hub.broadcast("ABC", ServerMsg::PeerJoined { player_id: "X".into() }, None)
             .await;
@@ -145,8 +164,8 @@ mod tests {
     #[tokio::test]
     async fn broadcast_skips_the_excepted_player() {
         let hub = SignalHub::default();
-        let mut rx_a = hub.join_room("ABC", "0000001").await;
-        let mut rx_b = hub.join_room("ABC", "0000002").await;
+        let (_, mut rx_a) = hub.join_room("ABC", "0000001").await;
+        let (_, mut rx_b) = hub.join_room("ABC", "0000002").await;
 
         hub.broadcast(
             "ABC",
@@ -162,13 +181,9 @@ mod tests {
     #[tokio::test]
     async fn leave_room_drops_empty_room() {
         let hub = SignalHub::default();
-        {
-            let _rx = hub.join_room("ABC", "0000001").await;
-        }
-        hub.leave_room("ABC", "0000001").await;
+        let (conn_id, _rx) = hub.join_room("ABC", "0000001").await;
+        hub.leave_room("ABC", "0000001", conn_id).await;
         assert!(hub.room_members("ABC").await.is_empty());
-        // Internal: the rooms map should no longer contain "ABC" — verify
-        // indirectly by attempting a send_to and confirming false.
         let delivered = hub
             .send_to("ABC", "0000001", ServerMsg::Kicked { reason: "test" })
             .await;
@@ -189,14 +204,14 @@ mod tests {
         let h1 = {
             let hub = hub.clone();
             tokio::spawn(async move {
-                let _rx = hub.join_room("ABC", "0000001").await;
+                let (_, _rx) = hub.join_room("ABC", "0000001").await;
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             })
         };
         let h2 = {
             let hub = hub.clone();
             tokio::spawn(async move {
-                let _rx = hub.join_room("ABC", "0000002").await;
+                let (_, _rx) = hub.join_room("ABC", "0000002").await;
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             })
         };
@@ -206,5 +221,27 @@ mod tests {
         let mut members = hub.room_members("ABC").await;
         members.sort();
         assert_eq!(members, vec!["0000001".to_string(), "0000002".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn stale_leave_does_not_evict_newer_connection_for_same_player() {
+        // Scenario: socket A1 registers player 0000001. Socket A2 reconnects
+        // (same player_id, duplicate identify) and overwrites A1's entry.
+        // A1's disconnect cleanup then runs and calls leave_room — it must
+        // NOT remove A2's entry. The nonce makes this work.
+        let hub = SignalHub::default();
+        let (old_conn, _rx_old) = hub.join_room("ABC", "0000001").await;
+        let (_new_conn, mut rx_new) = hub.join_room("ABC", "0000001").await;
+
+        // A1's late cleanup with the old conn_id.
+        hub.leave_room("ABC", "0000001", old_conn).await;
+
+        // A2 must still be registered.
+        assert_eq!(hub.room_members("ABC").await, vec!["0000001".to_string()]);
+        let delivered = hub
+            .send_to("ABC", "0000001", ServerMsg::Kicked { reason: "ok" })
+            .await;
+        assert!(delivered);
+        assert!(matches!(rx_new.try_recv(), Ok(ServerMsg::Kicked { .. })));
     }
 }

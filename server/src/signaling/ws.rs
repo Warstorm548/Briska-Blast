@@ -6,7 +6,6 @@ use axum::{
     response::IntoResponse,
 };
 use deadpool_redis::redis::AsyncCommands;
-use shared::types::session::SessionStatus;
 use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -47,7 +46,9 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
     };
 
     // Phase 2: Register with SignalHub and announce arrival.
-    let mut rx = state.signal_hub.join_room(&code, &player_id).await;
+    // conn_id scopes the eventual leave_room call so an older socket's
+    // cleanup can't evict a newer socket that re-bound this player_id.
+    let (conn_id, mut rx) = state.signal_hub.join_room(&code, &player_id).await;
 
     // Snapshot peers at identify time so the client doesn't need a poll.
     let peers = match peer_roster(&state, &code, &player_id).await {
@@ -56,7 +57,7 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
             // Session must have been deleted between membership check
             // and now — vanishingly rare race, but bail cleanly.
             close_with(&mut socket, CLOSE_NOT_FOUND, "session_gone").await;
-            state.signal_hub.leave_room(&code, &player_id).await;
+            state.signal_hub.leave_room(&code, &player_id, conn_id).await;
             return;
         }
     };
@@ -132,8 +133,10 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
         }
     }
 
-    // Phase 4: Cleanup.
-    state.signal_hub.leave_room(&code, &player_id).await;
+    // Phase 4: Cleanup. leave_room is scoped to our conn_id so a newer
+    // socket that re-bound this player_id (duplicate identify) isn't
+    // evicted by our late cleanup.
+    state.signal_hub.leave_room(&code, &player_id, conn_id).await;
     state
         .signal_hub
         .broadcast(
@@ -319,29 +322,50 @@ async fn handle_client_frame(
 /// On host disconnect, end the session and notify remaining peers — but
 /// only if the session is still in Waiting. Past Waiting, the match has
 /// already started and host-loss is a game-state concern handled elsewhere.
+///
+/// Atomicity matters here: a non-atomic GET-then-DEL races with
+/// `/session/:code/start` transitioning Waiting → Starting between the
+/// two calls. A single Lua script performs the read, status check, and
+/// conditional DEL as one Redis operation — no other command can
+/// interleave.
 async fn end_session_if_waiting(state: &AppState, code: &str) -> Result<(), String> {
-    let mut conn = state
-        .redis
-        .get()
-        .await
-        .map_err(|e| e.to_string())?;
-    let raw: Option<String> = conn
-        .get(format!("session:{}", code))
-        .await
-        .map_err(|e| e.to_string())?;
-    let raw = match raw {
-        Some(r) => r,
-        None => return Ok(()), // already gone
-    };
-    let session: Session =
-        serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    if !matches!(session.status, SessionStatus::Waiting) {
-        return Ok(());
+    const END_IF_WAITING_SCRIPT: &str = r#"
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+  return cjson.encode({result = 'not_found'})
+end
+local session = cjson.decode(raw)
+if session.status ~= 'waiting' then
+  return cjson.encode({result = 'not_waiting'})
+end
+redis.call('DEL', KEYS[1])
+return cjson.encode({result = 'deleted'})
+"#;
+
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "result", rename_all = "snake_case")]
+    enum EndOutcome {
+        Deleted,
+        NotFound,
+        NotWaiting,
     }
 
-    conn.del::<_, ()>(format!("session:{}", code))
+    let mut conn = state.redis.get().await.map_err(|e| e.to_string())?;
+    let script = deadpool_redis::redis::Script::new(END_IF_WAITING_SCRIPT);
+    let raw: String = script
+        .key(format!("session:{}", code))
+        .invoke_async(&mut *conn)
         .await
         .map_err(|e| e.to_string())?;
+    let outcome: EndOutcome =
+        serde_json::from_str(&raw).map_err(|e| format!("malformed lua result: {e}"))?;
+
+    if !matches!(outcome, EndOutcome::Deleted) {
+        // Nothing to clean up — either the session was already gone or
+        // it had already advanced past Waiting (likely a concurrent
+        // /start). No broadcast needed in either case.
+        return Ok(());
+    }
 
     state
         .signal_hub
