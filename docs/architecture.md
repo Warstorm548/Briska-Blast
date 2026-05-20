@@ -25,15 +25,22 @@ Two independent `TcpListener` instances run inside the same process and share `A
 - `main.rs` — entry point; builds two independent routers, binds two listeners, spawns the update background task, wires graceful shutdown via broadcast channel
 - `build.rs` — compile-time script that bakes `RELEASE_CHANNEL` into the binary via `env!("RELEASE_CHANNEL")`
 - `config.rs` — environment variable loading with defaults (`GAME_PORT`, `ADMIN_PORT`, `WATCHTOWER_URL`, `WATCHTOWER_TOKEN`, etc.)
-- `error.rs` — unified `AppError` type implementing `IntoResponse`
-- `state.rs` — shared `AppState` holding Redis pool, rate limiters, `update_tx` channel sender, and `update_apply_lock` (single-flight mutex serialising every code path that triggers Watchtower); shared across both listeners
+- `error.rs` — unified `AppError` type implementing `IntoResponse`; structured 4xx variants (`InvalidPlayerCount`, `SessionFull`, `SessionNotStartable`) carry context the client can render directly
+- `state.rs` — shared `AppState` holding Redis pool, rate limiters, `update_tx` channel sender, `update_apply_lock` (single-flight mutex serialising every code path that triggers Watchtower), and `signal_hub` (per-process WebSocket signaling registry); shared across both listeners
+- `gamemode.rs` — server-authoritative `bounds_for(GameMode) -> (u8, u8)` and `validate_player_count` helper. Exhaustive `match` with no wildcard, so adding a future `GameMode` variant in `shared/` without a bounds row here is a compile error
 - `api/` — HTTP route handlers (game listener only)
   - `register.rs` — `POST /register` — player identity issuance
-  - `host.rs` — `POST /host` — session creation and code generation
-  - `join.rs` — `POST /join` — session join and joiner endpoint exchange
+  - `host.rs` — `POST /host` — session creation; validates `gamemode` (typed) and `player_count` against the gamemode's bounds before allocating a session code
+  - `join.rs` — `POST /join` — atomic Redis-Lua append into the joiners list; rejects full sessions with `SessionFull`, host with `cannot_join_own_session`, duplicate joiner with `already_joined`
   - `session.rs` — `GET /session/{code}` and `DELETE /session/{code}`
+  - `start.rs` — `POST /session/{code}/start` — transitions Waiting → Starting; preconditions: caller is host, status is Waiting, current count ≥ gamemode min, every member has a live WS in `SignalHub`; broadcasts `start_signaling` to the lobby
+- `signaling/` — WebSocket signaling for WebRTC peer setup
+  - `mod.rs` — `SignalHub` in-process registry of rooms (`code → player_id → mpsc::UnboundedSender<ServerMsg>`). `tokio::sync::RwLock` for concurrent broadcasts. Eager empty-room cleanup. Not Redis-backed: signaling state is ephemeral per-process
+  - `protocol.rs` — `ClientMsg` (incoming) and `ServerMsg` (outgoing) JSON-tagged enums. Server attests `from` on relayed frames based on the authenticated WS connection — clients cannot forge a `from`
+  - `ws.rs` — `GET /ws/session/{code}` upgrade handler. 5s identify-frame deadline, token + membership validation, `tokio::select!` pump loop, host-disconnect-during-Waiting tears the session down
+- `testharness/` — same-origin HTML/JS WebRTC test harness at `GET /test/webrtc`, gated by `ENABLE_TEST_HARNESS=true` env var. Off by default. Vanilla JS, no build step
 - `middleware/` — Tower middleware
-  - `version.rs` — `X-Launcher-Version` and `X-Game-Version` enforcement (HTTP 426)
+  - `version.rs` — `X-Launcher-Version` and `X-Game-Version` enforcement (HTTP 426) on `/host`, `/join`, `/session/{code}/start`
 - `admin/` — password-protected web admin panel (admin listener only)
   - `auth.rs` — login, logout, bcrypt session handling
   - `dashboard.rs` — dashboard display, config update handlers, and all update system handlers (check, apply, schedule, cancel, settings, rollback)
@@ -52,9 +59,10 @@ Two independent `TcpListener` instances run inside the same process and share `A
 ## Shared (`shared/`)
 Rust library crate shared between `server/` and `launcher/`. No OS-specific built-ins.
 The Godot client uses equivalent C# types defined in `client/scripts/`.
-- `src/protocol/messages.rs` — request/response types for all server endpoints
+- `src/protocol/messages.rs` — request/response types for all server REST endpoints (`HostRequest`, `JoinRequest`, `JoinResponse`, `SessionPollResponse`, `CloseSessionRequest`, `StartSessionRequest`, plus the minimal `JoinedPeer` peer-descriptor)
+- `src/types/gamemode.rs` — `GameMode` enum, the authoritative list of valid gamemode strings on the wire. Serde rejects unknown variants at deserialize time
 - `src/types/player.rs` — `PlayerId` type with sequential formatting
-- `src/types/session.rs` — `SessionStatus` enum
+- `src/types/session.rs` — `SessionStatus` enum (`Waiting`, `Starting`, `Active`, `Ended`)
 - `src/utils/` — pure utility functions
 
 ## Launcher (`launcher/`)

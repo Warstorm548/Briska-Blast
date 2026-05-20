@@ -21,3 +21,17 @@ Work intentionally deferred until after the initial production deployment of the
 - **What**: Extend the session-creation API so the host can send a `[min, max]` pair (instead of a single `player_count`) when the selected gamemode supports a host-configurable range. The server would still re-validate the pair against the gamemode's authoritative `[min_players, max_players]` bounds.
 - **Why deferred**: The initial session-validation work uses a single value because no current gamemode benefits from a host-chosen range. Locking in a pair schema now would couple the request format to gamemodes that don't exist yet and force every gamemode to adopt the same shape even when it isn't meaningful. Easier to extend the schema once a real driving gamemode lands.
 - **Trigger to start**: A new gamemode is added whose intended UX requires the host to pick a sub-range inside the gamemode's allowed bounds (e.g. a mode that legitimately supports anywhere from 3 to 6 players and the host wants to cap their lobby at 4).
+
+### TURN relay for symmetric-NAT players
+
+- **What**: Add a TURN server (Cloudflare TURN free tier, or self-hosted coturn) and issue short-lived TURN credentials to clients in `Identified` / `start_signaling` payloads. Update the test harness and (eventually) the Godot client to include the TURN URL in their `RTCPeerConnection` `iceServers` list. Symmetric-NAT players can then route through TURN instead of being kicked.
+- **Why deferred**: Roughly 5–10% of consumer routers are symmetric NATs. Shipping without TURN means that minority cannot play, but adding TURN requires either a vendor account (Cloudflare API key + credential issuance endpoint) or self-hosted infrastructure (coturn container, firewall ports, abuse hardening). Neither is a one-evening change, and the symmetric-NAT player can still verify the server works with peers who are reachable. Better to ship the signaling backbone first and revisit once the audience is large enough to justify the operational cost.
+- **Trigger to start**: User reports of "can't connect" that correlate with NAT type, OR the Godot client lands and we want to broaden compatibility before public beta.
+- **Related**: see the symmetric-NAT entries in [`session-multiplayer-edge-cases.md`](session-multiplayer-edge-cases.md).
+
+### WS-ticket auth (stop sending `secret_token` over the WebSocket)
+
+- **What**: The launcher / client currently sends its `secret_token` as cleartext in the first WS `Identify` frame. Replace that with a short-lived signed ticket: `/host` and `/join` REST responses include a `ws_ticket` (HMAC-signed `{player_id, session_code, expiry}`), and the client opens the WebSocket as `/ws/session/{code}?ticket=...`. The server verifies the signature + expiry on upgrade; the raw token never crosses the WS.
+- **Why deferred**: Production deployment will use `wss://` (TLS) which already protects the token in transit. Tickets are defense in depth, but not load-bearing yet — and shipping ticket infra requires signing-key management, expiry handling, and a launcher-side change. Easier to land after the launcher exists and we can update both ends together.
+- **Trigger to start**: Security audit before any non-TLS deployment path opens up, OR the Godot client lands (good moment to define this part of the wire shape once for both crates).
+- **Related**: see the WS auth replay entry in [`session-multiplayer-edge-cases.md`](session-multiplayer-edge-cases.md).
