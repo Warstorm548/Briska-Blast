@@ -2,6 +2,7 @@ mod admin;
 mod api;
 mod config;
 mod error;
+mod gamemode;
 mod middleware;
 mod state;
 mod update;
