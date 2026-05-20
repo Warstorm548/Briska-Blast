@@ -15,17 +15,18 @@ Godot 4 + C# project using Godot's scene/node tree. Game logic lives in C# scrip
 - `addons/` — Godot plugins and third-party addons
 
 ## Server (`server/src/`)
-Rust + Axum server on Tokio. Handles player identity, session signaling, version enforcement, and the admin panel. Session state is backed by Redis.
+Rust + Axum server on Tokio. Handles player identity, session signaling, version enforcement, the admin panel, and self-managed container updates. Session state is backed by Redis.
 
 Two independent `TcpListener` instances run inside the same process and share `AppState`:
 - **Game listener** (`GAME_PORT`, default `25919`) — serves all player-facing endpoints
 - **Admin listener** (`ADMIN_PORT`, default `25920`) — serves all `/admin/*` endpoints exclusively
 
 **Built:**
-- `main.rs` — entry point; builds two independent routers, binds two listeners, wires graceful shutdown via broadcast channel
-- `config.rs` — environment variable loading with defaults (`GAME_PORT`, `ADMIN_PORT`, etc.)
+- `main.rs` — entry point; builds two independent routers, binds two listeners, spawns the update background task, wires graceful shutdown via broadcast channel
+- `build.rs` — compile-time script that bakes `RELEASE_CHANNEL` into the binary via `env!("RELEASE_CHANNEL")`
+- `config.rs` — environment variable loading with defaults (`GAME_PORT`, `ADMIN_PORT`, `WATCHTOWER_URL`, `WATCHTOWER_TOKEN`, etc.)
 - `error.rs` — unified `AppError` type implementing `IntoResponse`
-- `state.rs` — shared `AppState` holding Redis pool and rate limiters (shared across both listeners)
+- `state.rs` — shared `AppState` holding Redis pool, rate limiters, `update_tx` channel sender, and `update_apply_lock` (single-flight mutex serialising every code path that triggers Watchtower); shared across both listeners
 - `api/` — HTTP route handlers (game listener only)
   - `register.rs` — `POST /register` — player identity issuance
   - `host.rs` — `POST /host` — session creation and code generation
@@ -35,8 +36,13 @@ Two independent `TcpListener` instances run inside the same process and share `A
   - `version.rs` — `X-Launcher-Version` and `X-Game-Version` enforcement (HTTP 426)
 - `admin/` — password-protected web admin panel (admin listener only)
   - `auth.rs` — login, logout, bcrypt session handling
-  - `dashboard.rs` — dashboard display and config update handlers
+  - `dashboard.rs` — dashboard display, config update handlers, and all update system handlers (check, apply, schedule, cancel, settings, rollback)
   - `templates.rs` — HTML page functions (no template engine dependency)
+- `update/` — server self-update system
+  - `github.rs` — GitHub Releases API version check; uses `semver` to compare against `env!("CARGO_PKG_VERSION")`; supports ETag conditional requests (`update:github_etag` in Redis) and optional `GITHUB_TOKEN` Bearer auth
+  - `watchtower.rs` — Watchtower HTTP API client (triggers container restart; Watchtower runs with `WATCHTOWER_NO_PULL=true`, so it no longer pulls on its own)
+  - `docker.rs` — bollard Docker client; two entry points: `pull_channel_image(channel)` used by the auto-apply path, and `retag_for_rollback(versioned_tag, channel)` used by the admin rollback handler. `IMAGE_REPO` is a hardcoded const for defense-in-depth.
+  - `task.rs` — long-running tokio background task; drives auto-check intervals, apply intervals, and scheduled updates via `UpdateCommand` channel. Every apply path acquires `AppState::update_apply_lock` before triggering Watchtower.
 
 **Planned (future milestones):**
 - `relay/` — real-time message relay between players once P2P is established
@@ -68,12 +74,13 @@ Rust + Iced standalone binary that runs before the game. See [`devtools.md`](dev
 - `tests/` — launcher integration tests
 
 ## Infrastructure
-- **Docker + Docker Compose** — server and Redis run in containers for portable redeployment
-- **Redis** — session storage, player registry, and runtime config with TTL auto-expiry; `appendonly yes` ensures the player counter survives restarts
+- **Docker + Docker Compose** — server, Redis, and Watchtower run in containers for portable redeployment
+- **Redis** — session storage, player registry, runtime config, and update system state with TTL auto-expiry; `appendonly yes` ensures all state survives restarts (persisted to the `./redis_data/` bind mount alongside the compose file)
+- **Watchtower** — Docker sidecar that recreates/restarts the server container on command via its HTTP API. Runs with `WATCHTOWER_NO_PULL=true`, so it does **not** pull images itself — the server pre-pulls via `bollard` before triggering. Image pull failures appear in the server's logs (`docker compose logs server`), not Watchtower's.
 - **Portainer** — web GUI for container management (start/stop/logs/env vars)
-- **Admin Panel** — password-protected web UI at `/admin` (admin port only) for managing runtime config (version gates, password) without container restarts
+- **Admin Panel** — password-protected web UI at `/admin` (admin port only) for managing runtime config (version gates, password, update settings) without container restarts
 - **Systemd / Docker restart policies** — keeps containers alive across reboots
-- **GitHub Actions** — CI/CD: auto-build and deploy on push to main
+- **GitHub Actions** — CI on every push; versioned Docker image releases to GHCR on tag push (`v*`), with automatic channel detection (`stable` / `ea` / `dev`) from the tag format
 
 ## Tools (`tools/`)
 - `build/` — build scripts and bundler configuration

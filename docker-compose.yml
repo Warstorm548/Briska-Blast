@@ -1,8 +1,11 @@
 services:
   server:
+    image: ghcr.io/warstorm548/briska-blast:${RELEASE_CHANNEL:?RELEASE_CHANNEL must be set in .env (stable|ea|dev)}
     build:
       context: .
       dockerfile: server/Dockerfile
+      args:
+        - RELEASE_CHANNEL=${RELEASE_CHANNEL:?RELEASE_CHANNEL must be set in .env (stable|ea|dev)}
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${GAME_PORT:-25919}:${GAME_PORT:-25919}"
       - "${BIND_ADDR:-127.0.0.1}:${ADMIN_PORT:-25920}:${ADMIN_PORT:-25920}"
@@ -13,6 +16,15 @@ services:
       - RUST_LOG=info
       - MIN_GAME_VERSION=0.1.0
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-@admin}
+      - WATCHTOWER_URL=http://watchtower:${WATCHTOWER_PORT:-25921}
+      # No default token here — must be supplied via .env. Falling back to a
+      # known-literal token would mean a missing .env silently runs with a
+      # public secret. Fail-closed is safer.
+      - WATCHTOWER_TOKEN=${WATCHTOWER_TOKEN:?WATCHTOWER_TOKEN must be set in .env}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     depends_on:
       - redis
     restart: always
@@ -21,8 +33,66 @@ services:
     image: redis:7-alpine
     command: redis-server --appendonly yes
     volumes:
-      - redis_data:/data
+      # Bind mount, not a named volume — keeps the AOF data visible next
+      # to the compose file (one ./redis_data/ per environment directory).
+      # Per-env isolation is preserved by directory layout, not by Docker
+      # volume naming. Container runs as uid 999; the directory must be
+      # chown'd to 999:999 before first start. See
+      # docs/migrations/0.4.5-redis-bind-mount.md for the one-time
+      # migration from the previous named-volume layout.
+      - ./redis_data:/data
     restart: always
 
-volumes:
-  redis_data:
+  watchtower:
+    # Pinned: never run :latest in production. A breaking or malicious
+    # upstream release would otherwise auto-deploy on next pull.
+    #
+    # Image source: containrrr/watchtower was archived Dec 2025 and its
+    # last release (1.7.1) only speaks Docker API 1.25 — modern Docker
+    # Engine (28+) requires >= 1.44, so the original image no longer
+    # negotiates with current daemons. nickfedor/watchtower is the
+    # actively-maintained continuation fork (github.com/nicholas-fedor/
+    # watchtower); it autonegotiates the API version. Env vars and CLI
+    # flags below are unchanged from the containrrr image.
+    image: nickfedor/watchtower:1.17.0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_TOKEN:?WATCHTOWER_TOKEN must be set in .env}
+      - WATCHTOWER_HTTP_API_UPDATE=true
+      - WATCHTOWER_HTTP_API_PORT=${WATCHTOWER_PORT:-25921}
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_LABEL_ENABLE=true
+      # Required so the rollback flow's local retag in server/src/update/docker.rs
+      # is not silently overwritten by Watchtower pulling the registry's newer
+      # channel image on its next trigger. The server pre-pulls images itself
+      # via bollard on the auto-apply path to compensate.
+      #
+      # NOTE: Pairs with the HTTP-API-only design below — autonomous polls
+      # were the OTHER way Watchtower could clobber the local retag, even
+      # with NO_PULL set, by detecting the new locally-cached image and
+      # redeploying on its own. With autonomous polls off, this is moot.
+      - WATCHTOWER_NO_PULL=true
+    # HTTP-API-only mode — no `command:` line, so Watchtower runs with
+    # nickfedor/watchtower's default entrypoint. Combined with
+    # WATCHTOWER_HTTP_API_UPDATE=true above, this disables ALL autonomous
+    # polling (default behaviour when the HTTP API is enabled). Watchtower
+    # only acts on POST /v1/update from the server.
+    #
+    # Why: the previous `command: --http-api-periodic-polls` re-enabled
+    # periodic polls on top of the HTTP API. Watchtower's poll would detect
+    # the server's bollard pre-pulled image as "newer than running" and
+    # redeploy autonomously, racing the server's apply path. The server's
+    # apply path writes `update:previous_version = current` AFTER a
+    # successful HTTP trigger (server/src/update/task.rs::store_previous_version);
+    # an autonomous redeploy killed the container before that write,
+    # leaving previous_version stale and pointing the rollback button at
+    # the wrong target. See ServerChangeLog v0.4.7.
+    # Internal-network only — never `ports:`. Publishing the Watchtower HTTP
+    # API to the host (even loopback) is a privileged-endpoint exposure: the
+    # token is the only thing standing between an on-host attacker and a
+    # forced container restart. `expose:` keeps it reachable only from other
+    # containers on the same Docker network.
+    expose:
+      - "${WATCHTOWER_PORT:-25921}"
+    restart: always

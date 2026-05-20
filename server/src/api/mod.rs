@@ -18,6 +18,7 @@ pub struct Session {
     pub host_player_id: String,
     pub host_ip: String,
     pub host_port: u16,
+    pub gamemode: String,
     pub joiner_player_id: Option<String>,
     pub joiner_ip: Option<String>,
     pub joiner_port: Option<u16>,

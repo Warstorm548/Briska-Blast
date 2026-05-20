@@ -58,6 +58,7 @@ pub async fn host(
         host_player_id: body.player_id.clone(),
         host_ip: body.external_ip,
         host_port: body.external_port,
+        gamemode: body.gamemode.clone(),
         joiner_player_id: None,
         joiner_ip: None,
         joiner_port: None,

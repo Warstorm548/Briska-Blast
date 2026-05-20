@@ -12,6 +12,7 @@ pub struct HostRequest {
     pub secret_token: String,
     pub external_ip: String,
     pub external_port: u16,
+    pub gamemode: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -32,6 +33,7 @@ pub struct JoinRequest {
 pub struct JoinResponse {
     pub host_ip: String,
     pub host_port: u16,
+    pub gamemode: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

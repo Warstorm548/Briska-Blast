@@ -1,6 +1,6 @@
 [package]
 name = "server"
-version = "0.2.0"
+version = "0.4.7"
 edition = "2021"
 
 [[bin]]
@@ -25,4 +25,9 @@ dotenvy         = "0.15"
 semver          = "1.0"
 governor        = "0.6"
 bcrypt          = "0.15"
+reqwest         = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+chrono          = { version = "0.4", features = ["serde"] }
+bollard         = "0.17"
+futures-util    = "0.3"
+urlencoding     = "2"
 shared          = { path = "../shared" }

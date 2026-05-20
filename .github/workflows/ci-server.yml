@@ -1,43 +1,40 @@
-# CI — Server (Go)
-# Temporarily disabled: trigger is manual only.
-# To re-enable, replace the `on` block with:
-#   on:
-#     push:
-#       branches: [main, experimental, dev]
-#       paths: [server/**]
-#     pull_request:
-#       paths: [server/**]
-
 name: CI — Server
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main, dev, "feature/**"]
+    paths: ["server/**", "shared/**", "Cargo.toml", "Cargo.lock"]
+  pull_request:
+    branches: [main, dev]
+    paths: ["server/**", "shared/**", "Cargo.toml", "Cargo.lock"]
 
 jobs:
-  build:
+  build-and-test:
     name: Build & Test
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
         with:
-          go-version: '1.22'
-          cache: true
-
-      - name: Check formatting
-        run: test -z "$(gofmt -l .)"
-        working-directory: server
-
-      - name: Vet
-        run: go vet ./...
-        working-directory: server
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build
-        run: go build ./...
-        working-directory: server
+        run: cargo build -p server
+        env:
+          RELEASE_CHANNEL: dev
 
       - name: Test
-        run: go test ./...
-        working-directory: server
+        run: cargo test -p server
+        env:
+          RELEASE_CHANNEL: dev

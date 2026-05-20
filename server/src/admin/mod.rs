@@ -49,3 +49,20 @@ pub struct PasswordForm {
     pub new_password: String,
     pub confirm_password: String,
 }
+
+#[derive(Deserialize)]
+pub struct UpdateSettingsForm {
+    pub auto_enabled: Option<String>,         // "on" when checkbox checked, absent otherwise
+    pub check_interval_secs: Option<String>,
+    pub apply_interval_secs: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ScheduleUpdateForm {
+    pub scheduled_at: String, // datetime-local value: "2026-05-20T03:00"
+}
+
+#[derive(Deserialize)]
+pub struct RollbackForm {
+    pub version: String, // e.g. "v0.3.0"
+}

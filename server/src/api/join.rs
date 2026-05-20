@@ -49,6 +49,7 @@ pub async fn join(
 
     let host_ip = session.host_ip.clone();
     let host_port = session.host_port;
+    let gamemode = session.gamemode.clone();
 
     session.joiner_player_id = Some(body.player_id.clone());
     session.joiner_ip = Some(body.external_ip);
@@ -67,5 +68,5 @@ pub async fn join(
         body.player_id, body.session_code
     );
 
-    Ok(Json(JoinResponse { host_ip, host_port }))
+    Ok(Json(JoinResponse { host_ip, host_port, gamemode }))
 }

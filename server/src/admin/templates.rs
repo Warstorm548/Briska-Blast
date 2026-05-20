@@ -7,6 +7,18 @@ pub struct DashboardData {
     pub player_count: u64,
     pub message: Option<(bool, String)>,
     pub using_default_password: bool,
+    // update system
+    pub release_channel: &'static str,
+    pub server_version: &'static str,
+    pub update_last_checked: Option<String>,
+    pub update_available: Option<String>,
+    pub update_auto_enabled: bool,
+    pub update_check_interval_secs: u64,
+    pub update_apply_interval_secs: Option<u64>,
+    pub update_scheduled_at: Option<String>,
+    pub update_scheduled_version: Option<String>,
+    pub update_previous_version: Option<String>,
+    pub update_rollback_locked: bool,
 }
 
 fn escape(s: &str) -> String {
@@ -47,6 +59,22 @@ input:focus { border-color: #388bfd; }
 .msg-err { background: #2d1117; border: 1px solid #da3633; border-radius: 6px; color: #f85149; padding: 9px 13px; font-size: 0.83rem; margin-bottom: 14px; }
 .warn    { background: #2d2308; border: 1px solid #d29922; border-radius: 6px; color: #e3b341; padding: 9px 13px; font-size: 0.82rem; margin-bottom: 14px; }
 .note    { font-size: 0.74rem; color: #6e7681; margin-top: 6px; }
+.toggle-wrap { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.toggle { position: relative; display: inline-block; width: 38px; height: 22px; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; inset: 0; background: #30363d; border-radius: 22px; transition: .2s; }
+.slider:before { position: absolute; content: ''; height: 16px; width: 16px; left: 3px; bottom: 3px; background: #8b949e; border-radius: 50%; transition: .2s; }
+input:checked + .slider { background: #e94560; }
+input:checked + .slider:before { transform: translateX(16px); background: #fff; }
+.toggle-label { font-size: 0.85rem; color: #c9d1d9; }
+.update-meta { font-size: 0.75rem; color: #6e7681; margin-bottom: 14px; }
+.update-found { background: #0f2912; border: 1px solid #238636; border-radius: 6px; color: #3fb950; padding: 10px 13px; font-size: 0.83rem; margin-bottom: 12px; }
+.update-sched { background: #0d1f36; border: 1px solid #388bfd; border-radius: 6px; color: #79c0ff; padding: 10px 13px; font-size: 0.83rem; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+.rollback-box { background: #2d1117; border: 1px solid #da3633; border-radius: 6px; color: #f85149; padding: 10px 13px; font-size: 0.83rem; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+.rollback-locked { background: #2d2308; border: 1px solid #d29922; border-radius: 6px; color: #e3b341; padding: 9px 13px; font-size: 0.82rem; margin-bottom: 12px; }
+.auto-settings { margin-left: 4px; margin-bottom: 4px; }
+select { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; padding: 6px 8px; font-size: 0.875rem; }
+input[type=datetime-local] { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; padding: 6px 8px; font-size: 0.875rem; }
 ";
 
 pub fn login_page(error: Option<&str>) -> String {
@@ -82,6 +110,140 @@ pub fn login_page(error: Option<&str>) -> String {
     )
 }
 
+fn build_update_section(data: &DashboardData) -> String {
+    let channel = escape(data.release_channel);
+    let version = escape(data.server_version);
+    let last_checked = data.update_last_checked.as_deref().map(escape).unwrap_or_else(|| "Never".to_string());
+
+    let rollback_locked_html = if data.update_rollback_locked {
+        r#"<div class="rollback-locked">&#9888; Auto-update was disabled after a rollback. Re-enable it above once you have verified the rolled-back version is stable.</div>"#.to_string()
+    } else {
+        String::new()
+    };
+
+    let scheduled_html = if let Some(sched_at) = &data.update_scheduled_at {
+        let version_label = data.update_scheduled_version.as_deref().unwrap_or("update");
+        format!(
+            r#"<div class="update-sched">
+              <span>&#128197; <strong>{}</strong> scheduled for <strong>{}</strong></span>
+              <form method="POST" action="/admin/update/cancel" style="margin:0">
+                <button type="submit" class="btn btn-sm">Cancel</button>
+              </form>
+            </div>"#,
+            escape(version_label), escape(sched_at)
+        )
+    } else {
+        String::new()
+    };
+
+    let update_found_html = if let Some(ref available) = data.update_available {
+        if data.update_scheduled_at.is_none() {
+            format!(
+                r#"<div class="update-found">
+                  &#8593; Update available: <strong>{}</strong>
+                  <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+                    <form method="POST" action="/admin/update/apply-now" style="margin:0">
+                      <button type="submit" class="btn btn-primary btn-sm">Apply Now</button>
+                    </form>
+                    <form method="POST" action="/admin/update/schedule" style="margin:0;display:flex;gap:6px;align-items:center">
+                      <input type="datetime-local" name="scheduled_at" required title="Enter time in UTC">
+                      <span style="font-size:0.72rem;color:#6e7681">UTC</span>
+                      <button type="submit" class="btn btn-sm">Schedule</button>
+                    </form>
+                  </div>
+                  <div class="note">Scheduled time is interpreted as UTC — convert from your local timezone before entering.</div>
+                </div>"#,
+                escape(available)
+            )
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    let rollback_html = if let Some(ref prev) = data.update_previous_version {
+        if data.update_scheduled_at.is_none() {
+            format!(
+                r#"<div class="rollback-box">
+                  <span>&#8595; Previous version: <strong>{}</strong></span>
+                  <form method="POST" action="/admin/update/rollback" style="margin:0">
+                    <input type="hidden" name="version" value="{}">
+                    <button type="submit" class="btn btn-sm" style="border-color:#da3633;color:#f85149">Rollback to {}</button>
+                  </form>
+                </div>"#,
+                escape(prev), escape(prev), escape(prev)
+            )
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    let auto_checked = if data.update_auto_enabled { "checked" } else { "" };
+
+    let check_interval_options = [("21600","6 hours"),("43200","12 hours"),("86400","24 hours"),("172800","48 hours")];
+    let check_opts: String = check_interval_options.iter().map(|(val, label)| {
+        let sel = if data.update_check_interval_secs == val.parse::<u64>().unwrap_or(0) { "selected" } else { "" };
+        format!(r#"<option value="{}" {}>{}</option>"#, val, sel, label)
+    }).collect();
+
+    let apply_interval_options = [("0","Immediately"),("86400","1 day"),("259200","3 days"),("604800","1 week"),("1209600","2 weeks")];
+    let apply_opts: String = apply_interval_options.iter().map(|(val, label)| {
+        let sel = if data.update_apply_interval_secs.unwrap_or(0) == val.parse::<u64>().unwrap_or(0) { "selected" } else { "" };
+        format!(r#"<option value="{}" {}>{}</option>"#, val, sel, label)
+    }).collect();
+
+    let auto_settings_html = if data.update_auto_enabled {
+        format!(
+            r#"<div class="auto-settings" id="auto-settings">
+              <form method="POST" action="/admin/update/settings">
+                <input type="hidden" name="auto_enabled" value="on">
+                <div class="field" style="margin-bottom:10px">
+                  <label>Check every</label>
+                  <select name="check_interval_secs" onchange="this.form.submit()">{}</select>
+                </div>
+                <div class="field">
+                  <label>Apply after</label>
+                  <select name="apply_interval_secs" onchange="this.form.submit()">{}</select>
+                </div>
+              </form>
+            </div>"#,
+            check_opts, apply_opts
+        )
+    } else {
+        String::new()
+    };
+
+    format!(
+        r#"<div class="section">
+      <p class="section-title">Server Updates</p>
+      <p class="update-meta">Channel: <strong>{channel}</strong> &nbsp;|&nbsp; Version: <strong>v{version}</strong> &nbsp;|&nbsp; Last checked: {last_checked}</p>
+
+      {rollback_locked_html}
+      {scheduled_html}
+      {update_found_html}
+      {rollback_html}
+
+      <form method="POST" action="/admin/update/check" style="margin-bottom:14px">
+        <button type="submit" class="btn btn-sm">Check for Updates</button>
+      </form>
+
+      <div class="toggle-wrap">
+        <form method="POST" action="/admin/update/settings" style="margin:0">
+          <label class="toggle">
+            <input type="checkbox" name="auto_enabled" value="on" {auto_checked} onchange="this.form.submit()">
+            <span class="slider"></span>
+          </label>
+        </form>
+        <span class="toggle-label">Enable Automatic Updates</span>
+      </div>
+      {auto_settings_html}
+    </div>"#
+    )
+}
+
 pub fn dashboard_page(data: &DashboardData) -> String {
     let msg_html = match &data.message {
         Some((true, text)) => format!(r#"<div class="msg-ok">&#10003; {}</div>"#, escape(text)),
@@ -101,6 +263,7 @@ pub fn dashboard_page(data: &DashboardData) -> String {
     let admin_port = data.admin_port;
     let sessions = data.session_count;
     let players = data.player_count;
+    let update_section = build_update_section(data);
 
     format!(
         r#"<!DOCTYPE html>
@@ -178,6 +341,8 @@ pub fn dashboard_page(data: &DashboardData) -> String {
         </form>
       </div>
     </div>
+
+    {update_section}
 
     <div class="section">
       <p class="section-title">Change Password</p>

@@ -53,21 +53,25 @@ Redis (in Docker container)
 
 ### The Allocation Table
 
-| Environment | Game Port | Admin Port |
-|-------------|-----------|------------|
-| Prod        | 25919     | 25920      |
-| Staging     | 25929     | 25930      |
-| Dev         | 25939     | 25940      |
+| Environment | Game Port | Admin Port | Watchtower Port |
+|-------------|-----------|------------|-----------------|
+| Prod        | 25919     | 25920      | 25921           |
+| Staging     | 25929     | 25930      | 25931           |
+| Dev         | 25939     | 25940      | 25941           |
 
 ### The Tens-Digit Pattern
 
-Ports are allocated in per-environment pairs, with game/admin separated by +1:
+Ports are allocated in per-environment triplets, with game/admin/watchtower separated by +1:
 
-- Prod: 25919 (game), 25920 (admin)
-- Staging: 25929 (game), 25930 (admin)
-- Dev: 25939 (game), 25940 (admin)
+- Prod: 25919 (game), 25920 (admin), 25921 (watchtower)
+- Staging: 25929 (game), 25930 (admin), 25931 (watchtower)
+- Dev: 25939 (game), 25940 (admin), 25941 (watchtower)
 
 This keeps each environment in its own numeric block and makes environment ownership easy to spot in logs/config at a glance.
+
+**Why not 8080 for Watchtower?** Port 8080 is an extremely common "alternative HTTP" port used by game server panels (Pterodactyl, AMP, etc.), web UIs, and proxies. Keeping Watchtower in the 25900s block eliminates any ambiguity and prevents conflicts on a shared dedi.
+
+**Watchtower port is internal-only.** The Watchtower port is published via `expose:` in compose, **not** `ports:`. It is reachable only from other containers on the same compose network — *not* from the host shell. `curl 127.0.0.1:25921/v1/update` on the dedi will fail with "connection refused" by design. If you need to test Watchtower's HTTP API during debugging, `docker exec` into the server container and `curl http://watchtower:25921/v1/update` from there.
 
 ### Why This Range?
 
@@ -91,14 +95,67 @@ Each environment lives in its own folder with its own compose file and `.env`:
 ~/briska/
 ├── prod/
 │   ├── docker-compose.yml
-│   └── .env              (GAME_PORT=25919, ADMIN_PORT=25920)
+│   └── .env              (GAME_PORT=25919, ADMIN_PORT=25920, WATCHTOWER_PORT=25921, WATCHTOWER_TOKEN=…)
 ├── staging/
 │   ├── docker-compose.yml
-│   └── .env              (GAME_PORT=25929, ADMIN_PORT=25930)
+│   └── .env              (GAME_PORT=25929, ADMIN_PORT=25930, WATCHTOWER_PORT=25931, WATCHTOWER_TOKEN=…)
 └── dev/
     ├── docker-compose.yml
-    └── .env              (GAME_PORT=25939, ADMIN_PORT=25940)
+    └── .env              (GAME_PORT=25939, ADMIN_PORT=25940, WATCHTOWER_PORT=25941, WATCHTOWER_TOKEN=…)
 ```
+
+**`WATCHTOWER_TOKEN` is required** in every environment's `.env`. Compose
+uses `${WATCHTOWER_TOKEN:?...}`, so a missing or empty value causes
+`docker compose up` to abort with an error. **As of server v0.4.2 the binary
+itself also enforces this** — `Config::from_env` panics on startup if
+`WATCHTOWER_TOKEN` is unset, with no literal-default fallback. This closes a
+non-compose-run gap where a dev shell or manual orchestrator could
+previously boot the binary against a hardcoded public token. Generate one
+per environment with:
+
+```bash
+openssl rand -base64 32
+```
+
+Optionally set `GITHUB_TOKEN=<read-only PAT>` to raise the GitHub Releases API rate limit from 60/hr anon to 5000/hr authenticated. Absence is supported.
+
+### Compose Project Isolation (`COMPOSE_PROJECT_NAME`)
+
+Docker Compose namespaces networks and container names by **project name**, which defaults to the directory you ran `docker compose up` from. Redis data isolation works differently: it's a bind mount (`./redis_data/`) relative to each environment's compose directory, so each env's data lives next to its own compose file:
+
+| Environment | Data location |
+|---|---|
+| prod | `~/briska/prod/redis_data/` |
+| staging | `~/briska/staging/redis_data/` |
+| dev | `~/briska/dev/redis_data/` |
+
+These are entirely separate — no data is shared across environments. Verify with:
+
+```bash
+ls -la ~/briska/*/redis_data/
+```
+
+**Recommended hardening**: Set `COMPOSE_PROJECT_NAME` explicitly in each environment's `.env` so the network/container namespace doesn't depend on the directory name. This protects against accidental collisions if a folder is ever renamed or copied.
+
+```env
+# ~/briska/prod/.env
+COMPOSE_PROJECT_NAME=briska-prod
+
+# ~/briska/staging/.env
+COMPOSE_PROJECT_NAME=briska-staging
+
+# ~/briska/dev/.env
+COMPOSE_PROJECT_NAME=briska-dev
+```
+
+After setting this, recreate the stack:
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+Note: changing `COMPOSE_PROJECT_NAME` on an existing stack effectively orphans the old volumes (they keep their old prefix). Either migrate the data manually or accept a fresh Redis on the first boot under the new name.
 
 ### nginx Configuration
 
@@ -300,7 +357,7 @@ curl http://127.0.0.1:25927/   # should reach the game server
 
 To add a new env (e.g., a "beta" branch):
 
-1. Pick port numbers following the tens-digit pattern (beta could be 25949 / 25950).
+1. Pick port numbers following the tens-digit pattern (beta could be 25949 / 25950 / 25951 for game / admin / watchtower).
 2. Create directory: `mkdir -p ~/briska/beta`
 3. Create `docker-compose.yml` and `.env` in that directory.
 4. Add DNS A record: `beta.briska-blast.com` → dedi public IP.
@@ -401,7 +458,7 @@ Set it in `.env` rather than hardcoding in `docker-compose.yml`, so it doesn't a
 
 ### Future Hardening: Passkey Auth via Pocket ID
 
-Pocket ID is a self-hosted OIDC provider supporting passkey-only authentication. Integrating it would replace `ADMIN_PASSWORD` as the third-layer auth with phishing-resistant, origin-bound passkeys. Treat this as a planned enhancement — not currently implemented.
+Pocket ID is a self-hosted OIDC provider supporting passkey-only authentication. Integrating it would replace `ADMIN_PASSWORD` as the third-layer auth with phishing-resistant, origin-bound passkeys. Full integration design documented in [`docs/pocket-id-integration.md`](pocket-id-integration.md) — not yet implemented.
 
 ---
 
@@ -499,7 +556,27 @@ Common causes:
 
 - Port conflict (see "Port Already in Use")
 - Bad env var in `.env` (compose validates these strictly)
+- **Missing `WATCHTOWER_TOKEN` in `.env`** — produces an error like `WATCHTOWER_TOKEN must be set in .env`. Add a strong random token and retry.
 - Image build failure (try `docker compose build --no-cache`)
+
+### "Apply Now" Succeeded but Server Version Didn't Change
+
+The admin panel says "Update triggered" but the running version stays the same. This usually means the server's **pre-pull step failed** — the server now owns image pulling (Watchtower is configured with `WATCHTOWER_NO_PULL=true`), so a pull failure is silent to Watchtower.
+
+```bash
+# Look for pre-pull failures in the server's logs:
+docker compose logs server | grep -iE "pre-pull|pre-pulled"
+```
+
+Expected on success: `INFO pre-pulled ghcr.io/warstorm548/briska-blast:<channel>`.
+On failure: `WARN ApplyNow pre-pull failed: <reason>` or similar.
+
+Common causes:
+
+- Outbound network blocked from the server container to `ghcr.io`
+- GHCR is rate-limiting unauthenticated pulls (rare for public images; if it happens, pre-authenticate the Docker daemon with `docker login ghcr.io`)
+- The channel tag doesn't exist on GHCR yet (race between the GitHub Release being created and the image being pushed by CI)
+- Docker socket is mounted but the server container can't reach the daemon (verify with `docker compose exec server ls -l /var/run/docker.sock`)
 
 ---
 
@@ -521,8 +598,10 @@ sudo journalctl -u nginx -f              # Live log tail
 docker compose up -d                     # Start in background
 docker compose down                      # Stop and remove containers
 docker compose restart server            # Restart just the server service
+docker compose restart watchtower        # Restart Watchtower if it gets stuck
 docker compose ps                        # Show containers
 docker compose logs -f server            # Tail server logs
+docker compose logs -f watchtower        # Tail Watchtower logs (useful when debugging updates)
 docker compose pull                      # Pull updated images
 docker compose build --no-cache          # Force full rebuild
 ```
