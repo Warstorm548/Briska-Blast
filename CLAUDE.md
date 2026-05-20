@@ -19,7 +19,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Containerization | Docker + Docker Compose |
 | CI/CD | GitHub Actions |
 | Process Management | Systemd / Docker restart policies |
-| Admin Interface | Portainer + built-in admin panel at `/admin` |
+| Admin Interface | Built-in admin panel at `/admin` |
 
 **Platforms**: Windows + Ubuntu/Linux
 

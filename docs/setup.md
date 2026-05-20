@@ -5,7 +5,6 @@
 | Tool | Purpose | Install |
 |---|---|---|
 | Docker + Docker Compose | Run server and Redis | [docs.docker.com](https://docs.docker.com/get-docker/) |
-| Portainer | Web GUI for container management | Deployed as a Docker container |
 | Rust toolchain | Build server and launcher locally | `curl https://sh.rustup.rs -sSf \| sh` |
 | Git | Source control | System package manager |
 
@@ -106,30 +105,6 @@ WATCHTOWER_TOKEN=replace-with-your-own-random-token
 4. The dashboard will show a warning banner — **change the password immediately** using the Change Password section
 5. Set your desired minimum versions for launcher and game
 6. The **Server Updates** section shows the compile-time release channel of your binary — you cannot change it from the panel. To switch channels, redeploy with a different `RELEASE_CHANNEL` build arg. Use this section to enable automatic updates, set check/apply intervals, or trigger a manual update.
-
----
-
-## Portainer Setup
-
-Portainer is the recommended way to manage the running containers in production.
-
-```bash
-# Run Portainer (first time only)
-docker volume create portainer_data
-docker run -d \
-  -p 9443:9443 \
-  --name portainer \
-  --restart=always \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v portainer_data:/data \
-  portainer/portainer-ce:latest
-```
-
-Access Portainer at `https://yourserver:9443`. From there you can:
-- Start, stop, and restart the server and Redis containers
-- View live logs
-- Change environment variables (requires container restart to apply)
-- Exec into the Redis container for emergency Redis CLI access
 
 ---
 

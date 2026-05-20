@@ -21,7 +21,7 @@ This document summarizes the complete architecture designed across our conversat
 | Containerization | Docker + Docker Compose | Portable, easy redeployment across servers |
 | CI/CD | GitHub Actions | Auto-build and deploy on push to main |
 | Process Management | Systemd / Docker restart policies | Keeps containers alive |
-| Admin Interface | Portainer | Web GUI for container management, password protected |
+| Admin Interface | Built-in `/admin` panel | Password-protected web UI for runtime config |
 
 ---
 

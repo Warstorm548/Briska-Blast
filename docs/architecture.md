@@ -77,7 +77,6 @@ Rust + Iced standalone binary that runs before the game. See [`devtools.md`](dev
 - **Docker + Docker Compose** — server, Redis, and Watchtower run in containers for portable redeployment
 - **Redis** — session storage, player registry, runtime config, and update system state with TTL auto-expiry; `appendonly yes` ensures all state survives restarts (persisted to the `./redis_data/` bind mount alongside the compose file)
 - **Watchtower** — Docker sidecar that recreates/restarts the server container on command via its HTTP API. Runs with `WATCHTOWER_NO_PULL=true`, so it does **not** pull images itself — the server pre-pulls via `bollard` before triggering. Image pull failures appear in the server's logs (`docker compose logs server`), not Watchtower's.
-- **Portainer** — web GUI for container management (start/stop/logs/env vars)
 - **Admin Panel** — password-protected web UI at `/admin` (admin port only) for managing runtime config (version gates, password, update settings) without container restarts
 - **Systemd / Docker restart policies** — keeps containers alive across reboots
 - **GitHub Actions** — CI on every push; versioned Docker image releases to GHCR on tag push (`v*`), with automatic channel detection (`stable` / `ea` / `dev`) from the tag format

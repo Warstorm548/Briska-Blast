@@ -592,7 +592,7 @@ For tracking — items 11, 12, 13, 14, 15 from the audit prompt and their status
 - Dashboard sections:
   - **Server Stats** — live count of active sessions and total registered players
   - **Version Control / Version Minimums to Join Game Sessions** — update `min_launcher_version` and `min_game_version` with immediate effect; no restart required
-  - **Server Bind Address** — save a new bind address to Redis; applied on next container restart via Portainer
+  - **Server Bind Address** — save a new bind address to Redis; applied on next container restart
   - **Change Password** — verifies current password before accepting new one; enforces 6-character minimum
 - Warning banner displayed on dashboard whenever the default `@admin` password is still in use
 - Session tokens stored in Redis with 24-hour TTL; logout deletes the token immediately

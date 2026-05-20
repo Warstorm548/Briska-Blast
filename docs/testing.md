@@ -185,7 +185,7 @@ curl -s -X POST http://localhost:25919/host \
 
 ---
 
-## Redis Inspection (via Portainer exec or local redis-cli)
+## Redis Inspection (via `docker exec` or local redis-cli)
 
 ```bash
 redis-cli

@@ -42,8 +42,8 @@ pub struct AppState {
     //
     // Single-writer assumption: this lock is sufficient only as long as this
     // Rust process is the only writer to the daemon's `:channel` ref. If a
-    // second writer is ever introduced (manual `docker` CLI, Portainer,
-    // another launcher process), promote to a Redis-backed advisory lock
+    // second writer is ever introduced (manual `docker` CLI, another
+    // launcher process), promote to a Redis-backed advisory lock
     // keyed on the image ref — the Docker Engine API has no native
     // tag/ref lock primitive (moby PR #37781 protects individual writes
     // from corruption, not from last-write-wins ordering).

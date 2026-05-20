@@ -277,7 +277,7 @@ Redis value: "1.2.0"
 
 ```
 Critical bug discovered in launcher 1.1.0
-    → Admin opens Portainer or admin web page
+    → Admin opens the built-in `/admin` panel
     → Changes min_launcher_version from "1.1.0" to "1.2.0"
     → Within seconds, all outdated launchers receive 426 responses
     → Users see "Update required" prompts at next online action
@@ -288,9 +288,9 @@ Critical bug discovered in launcher 1.1.0
 
 | Option | Pros | Cons |
 |---|---|---|
-| Direct Redis edit via Portainer | No code needed | Requires Redis CLI/GUI knowledge |
+| Direct Redis edit (`redis-cli`) | No code needed | Requires Redis CLI knowledge |
 | Small password-protected admin endpoint | Clean UX, auditable | Requires building a small admin UI |
-| Environment variable + container restart | Visible in Portainer | Brief downtime on change |
+| Environment variable + container restart | Visible via `docker inspect` / `.env` | Brief downtime on change |
 
 **Recommendation:** Small password-protected admin endpoint that updates Redis. Provides clean UX, easy audit trail, and zero downtime.
 
@@ -317,7 +317,7 @@ This update and version system integrates cleanly with the existing project arch
 | Rust launcher | Hosts the self-update logic via `self_update` crate |
 | Rust + Axum server | Validates versions, returns 426 when incompatible |
 | Redis | Stores `min_launcher_version` as dynamic config |
-| Portainer | Admin interface for changing minimum version |
+| Admin panel (`/admin`) | Web UI for changing minimum version at runtime |
 | GitHub Actions | Builds and publishes launcher binaries to Releases |
 | Identity system (player_id + secret_token) | Used in protocol validation; cannot be faked |
 | Score validation system | Same architectural principle: server-side validation |
