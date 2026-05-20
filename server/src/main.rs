@@ -4,6 +4,7 @@ mod config;
 mod error;
 mod gamemode;
 mod middleware;
+mod signaling;
 mod state;
 mod update;
 
