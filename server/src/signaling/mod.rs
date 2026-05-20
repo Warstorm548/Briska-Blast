@@ -1,4 +1,5 @@
 pub mod protocol;
+pub mod ws;
 
 use std::collections::HashMap;
 use tokio::sync::{mpsc, RwLock};

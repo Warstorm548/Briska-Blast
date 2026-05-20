@@ -1,5 +1,42 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use shared::types::gamemode::GameMode;
+
+/// Client → server signaling frames. JSON-tagged on `type`. Receive-only,
+/// so Deserialize but not Serialize. The server attests `from` on relays
+/// based on the authenticated WS connection — clients only specify `to`
+/// for targeted messages; they cannot forge a `from` field.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ClientMsg {
+    /// Must be the first frame after upgrade. Carries auth so the server
+    /// can bind the WS connection to a player.
+    Identify {
+        player_id: String,
+        secret_token: String,
+    },
+    /// SDP offer aimed at a specific peer in the same session.
+    Offer { to: String, sdp: String },
+    /// SDP answer aimed at a specific peer.
+    Answer { to: String, sdp: String },
+    /// ICE candidate aimed at a specific peer.
+    IceCandidate {
+        to: String,
+        candidate: String,
+        sdp_mid: String,
+        sdp_m_line_index: u16,
+    },
+    /// Sent by a peer when it has exhausted ICE candidates against `peer`
+    /// and cannot establish a direct connection (symmetric NAT case). The
+    /// server's full handling of this is deferred to a follow-up branch;
+    /// for now the server logs it.
+    PeerConnectionFailed {
+        peer: String,
+        reason: String,
+    },
+    /// Voluntary clean teardown. Server will treat the WS close as a
+    /// normal disconnect.
+    Leave,
+}
 
 /// Server → client signaling frames. JSON-tagged on `type`. Cloneable
 /// because broadcasts fan one message out to multiple senders.

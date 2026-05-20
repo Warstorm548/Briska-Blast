@@ -63,6 +63,7 @@ async fn main() {
         .route("/register", post(api::register::register))
         .route("/session/:code", get(api::session::get_session))
         .route("/session/:code", delete(api::session::close_session))
+        .route("/ws/session/:code", get(signaling::ws::ws_handler))
         .merge(versioned)
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());

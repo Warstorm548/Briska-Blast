@@ -8,7 +8,7 @@ name = "server"
 path = "src/main.rs"
 
 [dependencies]
-axum            = { version = "0.7", features = ["json", "macros"] }
+axum            = { version = "0.7", features = ["json", "macros", "ws"] }
 tokio           = { version = "1",   features = ["full"] }
 deadpool-redis  = "0.15"
 redis           = { version = "0.25", features = ["aio", "tokio-comp"] }
