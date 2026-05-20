@@ -56,3 +56,9 @@ pub struct CloseSessionRequest {
     pub player_id: String,
     pub secret_token: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StartSessionRequest {
+    pub player_id: String,
+    pub secret_token: String,
+}

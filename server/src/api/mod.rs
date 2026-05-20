@@ -2,6 +2,7 @@ pub mod host;
 pub mod join;
 pub mod register;
 pub mod session;
+pub mod start;
 
 use deadpool_redis::redis::AsyncCommands;
 use serde::{Deserialize, Serialize};

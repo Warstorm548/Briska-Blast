@@ -53,6 +53,7 @@ async fn main() {
     let versioned = Router::new()
         .route("/host", post(api::host::host))
         .route("/join", post(api::join::join))
+        .route("/session/:code/start", post(api::start::start_session))
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::version::check_version,
