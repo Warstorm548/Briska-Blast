@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BriskaBlast WebRTC Test Harness</title>
+</head>
+<body>
+  <h1>BriskaBlast WebRTC Test Harness</h1>
+  <p><em>Minimal, unstyled. For verifying signaling + peer mesh end-to-end before the Godot client lands.</em></p>
+
+  <section id="auth-section">
+    <h2>1. Register</h2>
+    <button id="register-btn">Register new player</button>
+    <button id="forget-btn">Forget</button>
+    <div>Identity: <code id="auth-status">none</code></div>
+  </section>
+
+  <hr>
+
+  <section id="session-section" hidden>
+    <h2>2. Host or Join</h2>
+    <fieldset>
+      <legend>Host</legend>
+      <label>Gamemode:
+        <select id="host-gamemode">
+          <option value="extended">extended</option>
+        </select>
+      </label>
+      <label>player_count:
+        <input type="number" id="host-count" min="2" max="4" value="2">
+      </label>
+      <button id="host-btn">Host new session</button>
+    </fieldset>
+    <fieldset>
+      <legend>Join</legend>
+      <label>Session code:
+        <input type="text" id="join-code" maxlength="6" placeholder="ABC123">
+      </label>
+      <button id="join-btn">Join</button>
+    </fieldset>
+  </section>
+
+  <hr>
+
+  <section id="lobby-section" hidden>
+    <h2>3. Lobby</h2>
+    <div>Session code: <code id="lobby-code">-</code></div>
+    <div>Session status: <code id="lobby-status">-</code></div>
+    <div>WS status: <code id="ws-status">disconnected</code></div>
+    <div>Role: <code id="lobby-role">-</code></div>
+    <div>Peers:</div>
+    <ul id="peers-list"></ul>
+    <button id="start-btn" hidden>Start match</button>
+    <button id="leave-btn">Leave session</button>
+  </section>
+
+  <hr>
+
+  <section id="data-section" hidden>
+    <h2>4. Data channel broadcast</h2>
+    <input type="text" id="data-msg" placeholder="Type a message" size="40">
+    <button id="data-send-btn">Send to all peers</button>
+    <div>Received:</div>
+    <ul id="data-received"></ul>
+  </section>
+
+  <hr>
+
+  <h2>Log</h2>
+  <pre id="log" style="height: 280px; overflow: auto; background: #f5f5f5; padding: 8px; font-size: 11px; border: 1px solid #ccc;"></pre>
+
+  <script>
+  // ---------- State ----------
+  let playerId = sessionStorage.getItem('playerId');
+  let secretToken = sessionStorage.getItem('secretToken');
+  let sessionCode = null;
+  let isHost = false;
+  let ws = null;
+  let wsReconnectAttempts = 0;
+  let wsShouldReconnect = false;
+  const peers = new Map();           // peerId -> { pc: RTCPeerConnection, dc: RTCDataChannel|null }
+  const pendingCandidates = new Map(); // peerId -> ICE candidates buffered before setRemoteDescription
+
+  const STUN_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+  const VERSION_HEADERS = {
+    'X-Launcher-Version': '0.5.0',
+    'X-Game-Version': '0.5.0',
+  };
+
+  // ---------- Helpers ----------
+  function $(id) { return document.getElementById(id); }
+
+  function log(msg) {
+    const ts = new Date().toISOString().slice(11, 23);
+    const el = $('log');
+    el.textContent += `[${ts}] ${msg}\n`;
+    el.scrollTop = el.scrollHeight;
+  }
+
+  async function postJson(path, body) {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...VERSION_HEADERS },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const text = await r.text();
+    let parsed = null;
+    try { parsed = text ? JSON.parse(text) : null; } catch {}
+    return { ok: r.ok, status: r.status, body: parsed, raw: text };
+  }
+
+  function sendWs(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(obj));
+      log('WS tx: ' + obj.type);
+    } else {
+      log('WS tx skipped (not open): ' + obj.type);
+    }
+  }
+
+  function refreshAuthUi() {
+    if (playerId) {
+      $('auth-status').textContent = playerId;
+      $('session-section').hidden = false;
+    } else {
+      $('auth-status').textContent = 'none';
+      $('session-section').hidden = true;
+    }
+  }
+
+  // ---------- Auth ----------
+  async function register() {
+    const r = await postJson('/register');
+    if (!r.ok) { log('register failed: ' + r.status + ' ' + r.raw); return; }
+    playerId = r.body.player_id;
+    secretToken = r.body.secret_token;
+    sessionStorage.setItem('playerId', playerId);
+    sessionStorage.setItem('secretToken', secretToken);
+    log('registered as ' + playerId);
+    refreshAuthUi();
+  }
+
+  function forget() {
+    sessionStorage.removeItem('playerId');
+    sessionStorage.removeItem('secretToken');
+    playerId = null;
+    secretToken = null;
+    log('forgot identity');
+    refreshAuthUi();
+  }
+
+  // ---------- Session ops ----------
+  async function hostSession() {
+    const gamemode = $('host-gamemode').value;
+    const player_count = parseInt($('host-count').value, 10);
+    const r = await postJson('/host', {
+      player_id: playerId,
+      secret_token: secretToken,
+      gamemode,
+      player_count,
+    });
+    if (!r.ok) { log('host failed: ' + r.status + ' ' + r.raw); return; }
+    sessionCode = r.body.session_code;
+    isHost = true;
+    log('hosted ' + sessionCode + ' (' + gamemode + ', capacity ' + player_count + ')');
+    enterLobby();
+  }
+
+  async function joinSession() {
+    const code = $('join-code').value.trim().toUpperCase();
+    if (code.length === 0) { log('no code entered'); return; }
+    const r = await postJson('/join', {
+      session_code: code,
+      player_id: playerId,
+      secret_token: secretToken,
+    });
+    if (!r.ok) { log('join failed: ' + r.status + ' ' + r.raw); return; }
+    sessionCode = code;
+    isHost = false;
+    log('joined ' + sessionCode + ' (' + r.body.current_player_count + '/' + r.body.player_count + ')');
+    enterLobby();
+  }
+
+  async function startMatch() {
+    const r = await postJson('/session/' + sessionCode + '/start', {
+      player_id: playerId,
+      secret_token: secretToken,
+    });
+    if (!r.ok) { log('start failed: ' + r.status + ' ' + r.raw); return; }
+    log('start ok');
+  }
+
+  // ---------- UI: lobby + peers list ----------
+  function enterLobby() {
+    $('session-section').hidden = true;
+    $('lobby-section').hidden = false;
+    $('lobby-code').textContent = sessionCode;
+    $('lobby-role').textContent = isHost ? 'host' : 'joiner';
+    $('lobby-status').textContent = 'waiting';
+    $('start-btn').hidden = !isHost;
+    $('peers-list').innerHTML = '';
+    wsShouldReconnect = true;
+    connectWs();
+  }
+
+  function updatePeersList(peerIds) {
+    const ul = $('peers-list');
+    ul.innerHTML = '';
+    for (const pid of peerIds) {
+      const li = document.createElement('li');
+      li.id = 'peer-' + pid;
+      li.textContent = pid;
+      ul.appendChild(li);
+    }
+  }
+
+  function addPeer(pid) {
+    if ($('peer-' + pid)) return;
+    const li = document.createElement('li');
+    li.id = 'peer-' + pid;
+    li.textContent = pid;
+    $('peers-list').appendChild(li);
+  }
+
+  function removePeer(pid) {
+    const li = $('peer-' + pid);
+    if (li) li.remove();
+    const p = peers.get(pid);
+    if (p) { try { p.pc.close(); } catch {} peers.delete(pid); }
+    pendingCandidates.delete(pid);
+  }
+
+  function markPeerState(pid, label) {
+    const li = $('peer-' + pid);
+    if (li) li.textContent = pid + ' [' + label + ']';
+  }
+
+  // ---------- WebSocket with reconnect ----------
+  function connectWs() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = proto + '//' + location.host + '/ws/session/' + sessionCode;
+    log('WS connecting to ' + url);
+    $('ws-status').textContent = 'connecting';
+    ws = new WebSocket(url);
+
+    ws.onopen = () => {
+      log('WS open');
+      $('ws-status').textContent = 'connected';
+      wsReconnectAttempts = 0;
+      sendWs({ type: 'identify', player_id: playerId, secret_token: secretToken });
+    };
+
+    ws.onmessage = (e) => {
+      let msg;
+      try { msg = JSON.parse(e.data); }
+      catch { log('WS rx (bad json): ' + e.data); return; }
+      log('WS rx: ' + msg.type);
+      handleServerMsg(msg);
+    };
+
+    ws.onclose = (ev) => {
+      log('WS close: code=' + ev.code + ' reason=' + (ev.reason || ''));
+      $('ws-status').textContent = 'disconnected';
+      ws = null;
+      // App-defined codes (4xxx) mean "don't come back" — auth failed,
+      // session gone, kicked, etc. Reconnecting would just loop.
+      if (ev.code >= 4000 && ev.code < 5000) {
+        log('WS app-defined close — not reconnecting');
+        wsShouldReconnect = false;
+        return;
+      }
+      if (!wsShouldReconnect) return;
+      const delay = Math.min(1000 * Math.pow(2, wsReconnectAttempts), 16000);
+      wsReconnectAttempts++;
+      log('WS reconnecting in ' + delay + 'ms (attempt ' + wsReconnectAttempts + ')');
+      $('ws-status').textContent = 'reconnecting in ' + delay + 'ms';
+      setTimeout(() => { if (wsShouldReconnect) connectWs(); }, delay);
+    };
+
+    ws.onerror = () => log('WS error');
+  }
+
+  // ---------- Server message handler ----------
+  function handleServerMsg(msg) {
+    switch (msg.type) {
+      case 'identified':
+        log('  your_player_id=' + msg.your_player_id + ' is_host=' + msg.is_host + ' peers=' + JSON.stringify(msg.peers));
+        updatePeersList(msg.peers);
+        break;
+      case 'peer_joined':
+        addPeer(msg.player_id);
+        break;
+      case 'peer_left':
+        log('  ' + msg.player_id + ' left (' + msg.reason + ')');
+        removePeer(msg.player_id);
+        break;
+      case 'start_signaling':
+        log('  gamemode=' + msg.gamemode + ' peers=' + JSON.stringify(msg.peers));
+        $('lobby-status').textContent = 'starting';
+        $('data-section').hidden = false;
+        startWebRtc(msg.peers);
+        break;
+      case 'offer':
+        handleOffer(msg.from, msg.sdp);
+        break;
+      case 'answer':
+        handleAnswer(msg.from, msg.sdp);
+        break;
+      case 'ice_candidate':
+        handleIceCandidate(msg.from, msg.candidate, msg.sdp_mid, msg.sdp_m_line_index);
+        break;
+      case 'session_ended':
+        log('  reason=' + msg.reason);
+        teardown();
+        break;
+      case 'kicked':
+        log('  reason=' + msg.reason);
+        teardown();
+        break;
+      default:
+        log('  unknown server msg: ' + JSON.stringify(msg));
+    }
+  }
+
+  // ---------- WebRTC mesh ----------
+  function startWebRtc(peerList) {
+    for (const peerId of peerList) {
+      if (peerId === playerId) continue;
+      // Glare avoidance: smaller player_id offers, larger answers.
+      const shouldOffer = playerId < peerId;
+      createPeerConnection(peerId, shouldOffer);
+    }
+  }
+
+  function createPeerConnection(peerId, shouldOffer) {
+    if (peers.has(peerId)) return;
+    log('pc ' + peerId + ' creating (offerer=' + shouldOffer + ')');
+    const pc = new RTCPeerConnection({ iceServers: STUN_SERVERS });
+
+    pc.onicecandidate = (e) => {
+      if (!e.candidate) { log('pc ' + peerId + ' ICE gathering complete'); return; }
+      sendWs({
+        type: 'ice_candidate',
+        to: peerId,
+        candidate: e.candidate.candidate,
+        sdp_mid: e.candidate.sdpMid || '',
+        sdp_m_line_index: e.candidate.sdpMLineIndex || 0,
+      });
+    };
+
+    pc.onconnectionstatechange = () => {
+      log('pc ' + peerId + ' state=' + pc.connectionState);
+      markPeerState(peerId, pc.connectionState);
+      if (pc.connectionState === 'failed') {
+        sendWs({ type: 'peer_connection_failed', peer: peerId, reason: 'ice_failed' });
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      log('pc ' + peerId + ' ice=' + pc.iceConnectionState);
+    };
+
+    pc.ondatachannel = (e) => {
+      log('pc ' + peerId + ' inbound data channel: ' + e.channel.label);
+      setupDataChannel(peerId, e.channel);
+    };
+
+    let dc = null;
+    if (shouldOffer) {
+      dc = pc.createDataChannel('chat');
+      setupDataChannel(peerId, dc);
+      pc.createOffer()
+        .then((offer) => pc.setLocalDescription(offer))
+        .then(() => sendWs({ type: 'offer', to: peerId, sdp: pc.localDescription.sdp }))
+        .catch((e) => log('pc ' + peerId + ' offer error: ' + e));
+    }
+
+    peers.set(peerId, { pc, dc });
+  }
+
+  function setupDataChannel(peerId, dc) {
+    dc.onopen = () => log('dc ' + peerId + ' open');
+    dc.onclose = () => log('dc ' + peerId + ' closed');
+    dc.onmessage = (e) => {
+      log('dc ' + peerId + ' rx: ' + e.data);
+      const li = document.createElement('li');
+      li.textContent = peerId + ': ' + e.data;
+      $('data-received').appendChild(li);
+    };
+    const p = peers.get(peerId);
+    if (p) p.dc = dc;
+  }
+
+  async function handleOffer(from, sdp) {
+    if (!peers.has(from)) createPeerConnection(from, false);
+    const { pc } = peers.get(from);
+    try {
+      await pc.setRemoteDescription({ type: 'offer', sdp });
+      await flushPendingCandidates(from);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      sendWs({ type: 'answer', to: from, sdp: pc.localDescription.sdp });
+    } catch (e) {
+      log('handleOffer ' + from + ' error: ' + e);
+    }
+  }
+
+  async function handleAnswer(from, sdp) {
+    const p = peers.get(from);
+    if (!p) { log('answer from unknown peer ' + from); return; }
+    try {
+      await p.pc.setRemoteDescription({ type: 'answer', sdp });
+      await flushPendingCandidates(from);
+    } catch (e) {
+      log('handleAnswer ' + from + ' error: ' + e);
+    }
+  }
+
+  async function handleIceCandidate(from, candidate, sdp_mid, sdp_m_line_index) {
+    const p = peers.get(from);
+    if (!p) { log('ice from unknown peer ' + from + ' — buffering not supported'); return; }
+    const cand = { candidate, sdpMid: sdp_mid, sdpMLineIndex: sdp_m_line_index };
+    // If remoteDescription isn't set yet, buffer.
+    if (!p.pc.remoteDescription || !p.pc.remoteDescription.type) {
+      if (!pendingCandidates.has(from)) pendingCandidates.set(from, []);
+      pendingCandidates.get(from).push(cand);
+      return;
+    }
+    try { await p.pc.addIceCandidate(cand); }
+    catch (e) { log('addIceCandidate ' + from + ' error: ' + e); }
+  }
+
+  async function flushPendingCandidates(from) {
+    const buffered = pendingCandidates.get(from);
+    if (!buffered || buffered.length === 0) return;
+    const p = peers.get(from);
+    for (const cand of buffered) {
+      try { await p.pc.addIceCandidate(cand); }
+      catch (e) { log('flush ice ' + from + ' error: ' + e); }
+    }
+    pendingCandidates.delete(from);
+  }
+
+  // ---------- Data channel broadcast ----------
+  function broadcast() {
+    const msg = $('data-msg').value;
+    if (!msg) return;
+    let sent = 0;
+    for (const [pid, p] of peers) {
+      if (p.dc && p.dc.readyState === 'open') {
+        p.dc.send(msg);
+        sent++;
+      }
+    }
+    log('dc tx broadcast to ' + sent + ' peer(s): ' + msg);
+    $('data-msg').value = '';
+  }
+
+  // ---------- Leave / teardown ----------
+  function teardown() {
+    wsShouldReconnect = false;
+    for (const [, p] of peers) { try { p.pc.close(); } catch {} }
+    peers.clear();
+    pendingCandidates.clear();
+    if (ws) { try { ws.send(JSON.stringify({ type: 'leave' })); } catch {} ws.close(); ws = null; }
+    sessionCode = null;
+    isHost = false;
+    $('lobby-section').hidden = true;
+    $('data-section').hidden = true;
+    $('peers-list').innerHTML = '';
+    $('data-received').innerHTML = '';
+    refreshAuthUi();
+    log('left session');
+  }
+
+  // ---------- Boot ----------
+  document.addEventListener('DOMContentLoaded', () => {
+    refreshAuthUi();
+    $('register-btn').onclick = register;
+    $('forget-btn').onclick = forget;
+    $('host-btn').onclick = hostSession;
+    $('join-btn').onclick = joinSession;
+    $('start-btn').onclick = startMatch;
+    $('leave-btn').onclick = teardown;
+    $('data-send-btn').onclick = broadcast;
+    $('data-msg').addEventListener('keydown', (e) => { if (e.key === 'Enter') broadcast(); });
+  });
+  </script>
+</body>
+</html>

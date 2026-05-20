@@ -6,6 +6,7 @@ mod gamemode;
 mod middleware;
 mod signaling;
 mod state;
+mod testharness;
 mod update;
 
 use axum::{
@@ -59,12 +60,22 @@ async fn main() {
             middleware::version::check_version,
         ));
 
-    let game_router = Router::new()
+    let mut game_router = Router::new()
         .route("/register", post(api::register::register))
         .route("/session/:code", get(api::session::get_session))
         .route("/session/:code", delete(api::session::close_session))
         .route("/ws/session/:code", get(signaling::ws::ws_handler))
-        .merge(versioned)
+        .merge(versioned);
+
+    if std::env::var("ENABLE_TEST_HARNESS")
+        .map(|v| v == "true")
+        .unwrap_or(false)
+    {
+        tracing::warn!("ENABLE_TEST_HARNESS=true — /test/webrtc route is exposed");
+        game_router = game_router.route("/test/webrtc", get(testharness::page));
+    }
+
+    let game_router = game_router
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
