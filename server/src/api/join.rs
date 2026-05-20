@@ -3,8 +3,10 @@ use axum::{
     http::HeaderMap,
     Json,
 };
-use deadpool_redis::redis::AsyncCommands;
-use shared::protocol::messages::{JoinRequest, JoinResponse};
+use chrono::Utc;
+use deadpool_redis::redis::Script;
+use serde::Deserialize;
+use shared::protocol::messages::{JoinRequest, JoinResponse, JoinedPeer};
 use std::net::SocketAddr;
 
 use crate::{
@@ -12,6 +14,58 @@ use crate::{
     state::AppState,
 };
 use super::{client_ip, validate_player, Session};
+
+// Atomic join. Performs the entire read-modify-write inside Redis so two
+// concurrent joiners can't both squeeze past a full capacity check.
+//
+// KEYS[1] = session key (e.g. "session:ABC123")
+// ARGV[1] = joining player_id
+// ARGV[2] = joined_at_ms (milliseconds since epoch, computed Rust-side)
+// ARGV[3] = session TTL in seconds (for the SETEX after a successful append)
+//
+// Returns a JSON envelope discriminated on "result":
+//   {"result": "ok", "session": <session>}
+//   {"result": "not_found"}
+//   {"result": "not_waiting"}
+//   {"result": "is_host"}
+//   {"result": "already_joined"}
+//   {"result": "session_full", "capacity": <u8>}
+const JOIN_SCRIPT: &str = r#"
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+  return cjson.encode({result = 'not_found'})
+end
+local session = cjson.decode(raw)
+if session.status ~= 'waiting' then
+  return cjson.encode({result = 'not_waiting'})
+end
+if session.host_player_id == ARGV[1] then
+  return cjson.encode({result = 'is_host'})
+end
+for _, j in ipairs(session.joiners) do
+  if j.player_id == ARGV[1] then
+    return cjson.encode({result = 'already_joined'})
+  end
+end
+local current = 1 + #session.joiners
+if current >= session.player_count then
+  return cjson.encode({result = 'session_full', capacity = session.player_count})
+end
+table.insert(session.joiners, {player_id = ARGV[1], joined_at_ms = tonumber(ARGV[2])})
+redis.call('SET', KEYS[1], cjson.encode(session), 'EX', tonumber(ARGV[3]))
+return cjson.encode({result = 'ok', session = session})
+"#;
+
+#[derive(Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+enum JoinOutcome {
+    Ok { session: Session },
+    NotFound,
+    NotWaiting,
+    IsHost,
+    AlreadyJoined,
+    SessionFull { capacity: u8 },
+}
 
 pub async fn join(
     State(state): State<AppState>,
@@ -33,40 +87,54 @@ pub async fn join(
     validate_player(&mut conn, &body.player_id, &body.secret_token).await?;
 
     let key = format!("session:{}", body.session_code);
-    let raw: Option<String> = conn
-        .get(&key)
+    let joined_at_ms = Utc::now().timestamp_millis().max(0) as u64;
+
+    let script = Script::new(JOIN_SCRIPT);
+    let raw: String = script
+        .key(&key)
+        .arg(&body.player_id)
+        .arg(joined_at_ms)
+        .arg(state.config.session_ttl_secs)
+        .invoke_async(&mut *conn)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let raw = raw.ok_or(AppError::NotFound)?;
+    let outcome: JoinOutcome = serde_json::from_str(&raw)
+        .map_err(|e| AppError::Internal(format!("join script returned malformed json: {e}")))?;
 
-    let mut session: Session = serde_json::from_str(&raw)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let session = match outcome {
+        JoinOutcome::Ok { session } => session,
+        JoinOutcome::NotFound => return Err(AppError::NotFound),
+        JoinOutcome::NotWaiting => {
+            return Err(AppError::Conflict("session_already_active".to_string()))
+        }
+        JoinOutcome::IsHost => {
+            return Err(AppError::Conflict("cannot_join_own_session".to_string()))
+        }
+        JoinOutcome::AlreadyJoined => {
+            return Err(AppError::Conflict("already_joined".to_string()))
+        }
+        JoinOutcome::SessionFull { capacity } => {
+            return Err(AppError::SessionFull { capacity })
+        }
+    };
 
-    if session.status != "waiting" {
-        return Err(AppError::Conflict("session_already_active".to_string()));
-    }
-
-    let host_ip = session.host_ip.clone();
-    let host_port = session.host_port;
-    let gamemode = session.gamemode.clone();
-
-    session.joiner_player_id = Some(body.player_id.clone());
-    session.joiner_ip = Some(body.external_ip);
-    session.joiner_port = Some(body.external_port);
-    session.status = "active".to_string();
-
-    let updated = serde_json::to_string(&session)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    conn.set_ex::<_, _, ()>(&key, updated, state.config.session_ttl_secs)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let current_player_count = session.current_player_count();
+    let joiners: Vec<JoinedPeer> = session
+        .joiners
+        .iter()
+        .map(|j| JoinedPeer { player_id: j.player_id.clone() })
+        .collect();
 
     tracing::info!(
-        "player {} joined session {}",
-        body.player_id, body.session_code
+        "player {} joined session {} ({}/{} players)",
+        body.player_id, body.session_code, current_player_count, session.player_count
     );
 
-    Ok(Json(JoinResponse { host_ip, host_port, gamemode }))
+    Ok(Json(JoinResponse {
+        gamemode: session.gamemode,
+        player_count: session.player_count,
+        current_player_count,
+        joiners,
+    }))
 }

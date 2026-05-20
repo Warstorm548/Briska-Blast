@@ -27,51 +27,87 @@ Store the returned `player_id` and `secret_token` values — you'll need them fo
 
 Replace `PLAYER1_ID`, `TOKEN1`, `PLAYER2_ID`, `TOKEN2` with the values from registration.
 
+**Behavioral note (v0.5.0):** peer connections are now WebRTC. The server stops storing peer IP/port (WebRTC discovers them client-side via STUN), and joining no longer flips status to `active` — the lobby stays `waiting` while it fills, then the host explicitly transitions it via `POST /session/{code}/start`. SDP/ICE exchange happens over a WebSocket at `/ws/session/{code}` — that part can't be exercised from curl. Use the test harness at `/test/webrtc` (start the server with `ENABLE_TEST_HARNESS=true`) for end-to-end WebRTC verification.
+
 **Step 1 — Host creates a session:**
 ```bash
 curl -s -X POST http://localhost:25919/host \
   -H "Content-Type: application/json" \
-  -H "X-Launcher-Version: 0.1.0" \
-  -H "X-Game-Version: 0.1.0" \
+  -H "X-Launcher-Version: 0.5.0" \
+  -H "X-Game-Version: 0.5.0" \
   -d '{
     "player_id": "PLAYER1_ID",
     "secret_token": "TOKEN1",
-    "external_ip": "1.2.3.4",
-    "external_port": 54231
+    "gamemode": "extended",
+    "player_count": 2
   }' | jq
 # Response: { "session_code": "K9M2XP" }
 ```
 
-**Step 2 — Host polls for a joiner (initially empty):**
+`player_count` is the total lobby size including the host. Must fall within the gamemode's allowed range (`extended`: 2–4). Out-of-range requests are rejected before the session is created — see Error Cases.
+
+**Step 2 — Host polls the session (initially host-only):**
 ```bash
 curl -s http://localhost:25919/session/K9M2XP | jq
-# Response: { "status": "waiting", "joiner_ip": null, "joiner_port": null }
+# Response:
+# {
+#   "status": "waiting",
+#   "gamemode": "extended",
+#   "player_count": 2,
+#   "current_player_count": 1,
+#   "joiner_player_ids": []
+# }
 ```
 
-**Step 3 — Joiner connects:**
+**Step 3 — Joiner joins:**
 ```bash
 curl -s -X POST http://localhost:25919/join \
   -H "Content-Type: application/json" \
-  -H "X-Launcher-Version: 0.1.0" \
-  -H "X-Game-Version: 0.1.0" \
+  -H "X-Launcher-Version: 0.5.0" \
+  -H "X-Game-Version: 0.5.0" \
   -d '{
     "session_code": "K9M2XP",
     "player_id": "PLAYER2_ID",
-    "secret_token": "TOKEN2",
-    "external_ip": "5.6.7.8",
-    "external_port": 34567
+    "secret_token": "TOKEN2"
   }' | jq
-# Response: { "host_ip": "1.2.3.4", "host_port": 54231 }
+# Response:
+# {
+#   "gamemode": "extended",
+#   "player_count": 2,
+#   "current_player_count": 2,
+#   "joiners": [ { "player_id": "PLAYER2_ID" } ]
+# }
 ```
 
-**Step 4 — Host polls again (now sees joiner):**
+**Step 4 — Host polls again (now sees the joiner; status is still waiting):**
 ```bash
 curl -s http://localhost:25919/session/K9M2XP | jq
-# Response: { "status": "active", "joiner_ip": "5.6.7.8", "joiner_port": 34567 }
+# Response:
+# {
+#   "status": "waiting",
+#   "gamemode": "extended",
+#   "player_count": 2,
+#   "current_player_count": 2,
+#   "joiner_player_ids": [ "PLAYER2_ID" ]
+# }
 ```
-Both clients now have each other's external IP and port and can begin the simultaneous UDP hole-punch.
 
-**Step 5 — Host tears down the session:**
+**Step 5 — WebSocket signaling (not via curl).** Both players must connect to `ws://localhost:25919/ws/session/K9M2XP`, send `{"type":"identify","player_id":"…","secret_token":"…"}` as the first frame, then exchange offers/answers/ICE candidates. The test harness at `http://localhost:25919/test/webrtc` (requires `ENABLE_TEST_HARNESS=true` at startup) drives this from two browser tabs.
+
+**Step 6 — Host starts the match:**
+```bash
+curl -s -X POST http://localhost:25919/session/K9M2XP/start \
+  -H "Content-Type: application/json" \
+  -H "X-Launcher-Version: 0.5.0" \
+  -H "X-Game-Version: 0.5.0" \
+  -d '{"player_id": "PLAYER1_ID", "secret_token": "TOKEN1"}' \
+  -w "%{http_code}"
+# Response: 204 — status transitions to "starting" and start_signaling is broadcast over the WS
+```
+
+Without an active WS for every session member, `/start` returns 409 `session_not_startable` with `reason: "not_all_peers_ready"`. Use the test harness if you want this to actually succeed.
+
+**Step 7 — Host tears down the session:**
 ```bash
 curl -s -X DELETE http://localhost:25919/session/K9M2XP \
   -H "Content-Type: application/json" \
@@ -89,19 +125,19 @@ curl -s -X DELETE http://localhost:25919/session/K9M2XP \
 curl -s -X POST http://localhost:25919/host \
   -H "Content-Type: application/json" \
   -H "X-Launcher-Version: 0.0.1" \
-  -H "X-Game-Version: 0.1.0" \
-  -d '{"player_id":"0000001","secret_token":"TOKEN1","external_ip":"1.2.3.4","external_port":54231}' | jq
-# Response: { "error": "launcher_update_required", "minimum_version": "0.1.0", "current_version": "0.0.1" }
+  -H "X-Game-Version: 0.5.0" \
+  -d '{"player_id":"0000001","secret_token":"TOKEN1","gamemode":"extended","player_count":2}' | jq
+# Response: { "error": "launcher_update_required", "minimum_version": "<configured>", "current_version": "0.0.1" }
 ```
 
 **Test game version rejected:**
 ```bash
 curl -s -X POST http://localhost:25919/host \
   -H "Content-Type: application/json" \
-  -H "X-Launcher-Version: 0.1.0" \
+  -H "X-Launcher-Version: 0.5.0" \
   -H "X-Game-Version: 0.0.1" \
-  -d '{"player_id":"0000001","secret_token":"TOKEN1","external_ip":"1.2.3.4","external_port":54231}' | jq
-# Response: { "error": "game_update_required", "minimum_version": "0.1.0", "current_version": "0.0.1" }
+  -d '{"player_id":"0000001","secret_token":"TOKEN1","gamemode":"extended","player_count":2}' | jq
+# Response: { "error": "game_update_required", "minimum_version": "<configured>", "current_version": "0.0.1" }
 ```
 
 ---
@@ -112,10 +148,31 @@ curl -s -X POST http://localhost:25919/host \
 ```bash
 curl -s -X POST http://localhost:25919/host \
   -H "Content-Type: application/json" \
-  -H "X-Launcher-Version: 0.1.0" \
-  -H "X-Game-Version: 0.1.0" \
-  -d '{"player_id":"0000001","secret_token":"wrongtoken","external_ip":"1.2.3.4","external_port":54231}' | jq
+  -H "X-Launcher-Version: 0.5.0" \
+  -H "X-Game-Version: 0.5.0" \
+  -d '{"player_id":"0000001","secret_token":"wrongtoken","gamemode":"extended","player_count":2}' | jq
 # Response: { "error": "unauthorized" }
+```
+
+**Unknown gamemode → 400 (rejected at the deserialize boundary):**
+```bash
+curl -s -X POST http://localhost:25919/host \
+  -H "Content-Type: application/json" \
+  -H "X-Launcher-Version: 0.5.0" \
+  -H "X-Game-Version: 0.5.0" \
+  -d '{"player_id":"PLAYER1_ID","secret_token":"TOKEN1","gamemode":"banana","player_count":2}' | jq
+# Response: 400 with serde's generic "Failed to deserialize the JSON body" — the typed
+# GameMode enum rejects unknown variants before the handler runs.
+```
+
+**Out-of-range `player_count` → 400 invalid_player_count:**
+```bash
+curl -s -X POST http://localhost:25919/host \
+  -H "Content-Type: application/json" \
+  -H "X-Launcher-Version: 0.5.0" \
+  -H "X-Game-Version: 0.5.0" \
+  -d '{"player_id":"PLAYER1_ID","secret_token":"TOKEN1","gamemode":"extended","player_count":5}' | jq
+# Response: { "error": "invalid_player_count", "min": 2, "max": 4, "requested": 5 }
 ```
 
 **Non-existent session code → 404:**
@@ -124,16 +181,32 @@ curl -s http://localhost:25919/session/XXXXXX | jq
 # Response: { "error": "not_found" }
 ```
 
-**Joining an already-active session → 409:**
+**Joining a full session → 409 session_full:**
 ```bash
-# (run after step 3 above)
+# Fill a player_count=2 session with one joiner first, then a third tries to join:
 curl -s -X POST http://localhost:25919/join \
   -H "Content-Type: application/json" \
-  -H "X-Launcher-Version: 0.1.0" \
-  -H "X-Game-Version: 0.1.0" \
-  -d '{"session_code":"K9M2XP","player_id":"PLAYER2_ID","secret_token":"TOKEN2","external_ip":"5.6.7.8","external_port":34567}' | jq
-# Response: { "error": "session_already_active" }
+  -H "X-Launcher-Version: 0.5.0" \
+  -H "X-Game-Version: 0.5.0" \
+  -d '{"session_code":"K9M2XP","player_id":"PLAYER3_ID","secret_token":"TOKEN3"}' | jq
+# Response: { "error": "session_full", "capacity": 2 }
 ```
+
+**Host trying to join their own session → 409 cannot_join_own_session.**
+
+**Existing joiner trying to join again → 409 already_joined.**
+
+**Starting a session by a non-host → 409 session_not_startable:**
+```bash
+curl -s -X POST http://localhost:25919/session/K9M2XP/start \
+  -H "Content-Type: application/json" \
+  -H "X-Launcher-Version: 0.5.0" \
+  -H "X-Game-Version: 0.5.0" \
+  -d '{"player_id":"PLAYER2_ID","secret_token":"TOKEN2"}' | jq
+# Response: { "error": "session_not_startable", "reason": "not_host" }
+```
+
+**Other `session_not_startable` reasons:** `not_in_waiting` (already starting/active), `below_min_players` (lobby has fewer than the gamemode's min), `not_all_peers_ready` (a session member doesn't have a live WS — common when testing via curl).
 
 ---
 
@@ -176,16 +249,16 @@ Visit `http://localhost:25920/admin` in a browser.
 # 1. In admin panel (localhost:25920/admin), set Min Launcher Version to 1.0.0
 # 2. Run this — should now be rejected:
 curl -s -X POST http://localhost:25919/host \
-  -H "X-Launcher-Version: 0.1.0" \
-  -H "X-Game-Version: 0.1.0" \
+  -H "X-Launcher-Version: 0.5.0" \
+  -H "X-Game-Version: 0.5.0" \
   -H "Content-Type: application/json" \
-  -d '{"player_id":"0000001","secret_token":"TOKEN1","external_ip":"1.2.3.4","external_port":54231}' | jq
+  -d '{"player_id":"0000001","secret_token":"TOKEN1","gamemode":"extended","player_count":2}' | jq
 # Response: { "error": "launcher_update_required", "minimum_version": "1.0.0", ... }
 ```
 
 ---
 
-## Redis Inspection (via Portainer exec or local redis-cli)
+## Redis Inspection (via `docker exec` or local redis-cli)
 
 ```bash
 redis-cli
