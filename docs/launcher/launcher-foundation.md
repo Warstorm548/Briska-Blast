@@ -14,7 +14,7 @@ Related docs:
 
 Five zones. Top bar, left rail, center pane, right rail, bottom bar.
 
-```
+```text
 +-----------+--------------------------------+--------------------------------+-------+
 | v1.0.0    | Updates available: stable, ea  | Update available: launcher     | [gear]|
 +-----------+--------------------------------+--------------------------------+-------+
