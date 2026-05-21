@@ -2,7 +2,7 @@
 //! Foundation doc §5C: v1 center state.
 
 use crate::app::{AppState, Message};
-use crate::ui::theme::TITLE_SIZE;
+use crate::ui::theme::{self, TITLE_SIZE};
 use iced::widget::{column, container, text};
 use iced::{Alignment, Element, Length};
 
@@ -16,6 +16,7 @@ pub fn view(_state: &AppState) -> Element<'_, Message> {
         .spacing(8)
         .align_x(Alignment::Center),
     )
+    .style(theme::menu_pane)
     .width(Length::Fill)
     .height(Length::Fill)
     .center_x(Length::Fill)

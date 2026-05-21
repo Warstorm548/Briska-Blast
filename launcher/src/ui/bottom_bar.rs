@@ -4,21 +4,21 @@
 
 use crate::app::{AppState, Message};
 use crate::mock::MOCK_PROGRESS_PERCENT;
-use crate::ui::theme::{BAR_HEIGHT, RAIL_WIDTH, ZONE_GAP};
+use crate::ui::theme::{self, BAR_HEIGHT, RAIL_WIDTH, ZONE_GAP};
 use iced::widget::{button, container, row, text};
 use iced::{Element, Length};
 
 pub fn view(state: &AppState) -> Element<'_, Message> {
     row![
-        update_button(state),
-        progress_placeholder(),
-        play_button(state),
+        update_cell(state),
+        progress_cell(),
+        play_cell(state),
     ]
     .spacing(ZONE_GAP)
     .into()
 }
 
-fn update_button(state: &AppState) -> Element<'_, Message> {
+fn update_cell(state: &AppState) -> Element<'_, Message> {
     let mut btn = button(text("Update"))
         .width(Length::Fill)
         .height(Length::Fixed(BAR_HEIGHT as f32));
@@ -26,15 +26,18 @@ fn update_button(state: &AppState) -> Element<'_, Message> {
         btn = btn.on_press(Message::UpdatePressed);
     }
     container(btn)
+        .style(theme::bordered)
         .width(Length::Fixed(RAIL_WIDTH as f32))
+        .height(Length::Fixed(BAR_HEIGHT as f32))
         .into()
 }
 
-fn progress_placeholder() -> Element<'static, Message> {
+fn progress_cell() -> Element<'static, Message> {
     container(text(format!(
         "Progress placeholder \u{2014} {}% done",
         MOCK_PROGRESS_PERCENT
     )))
+    .style(theme::bordered)
     .width(Length::Fill)
     .height(Length::Fixed(BAR_HEIGHT as f32))
     .center_y(Length::Fill)
@@ -42,7 +45,7 @@ fn progress_placeholder() -> Element<'static, Message> {
     .into()
 }
 
-fn play_button(state: &AppState) -> Element<'_, Message> {
+fn play_cell(state: &AppState) -> Element<'_, Message> {
     let label = if state.game_running { "Running" } else { "Play" };
     let mut btn = button(text(label))
         .width(Length::Fill)
@@ -51,6 +54,8 @@ fn play_button(state: &AppState) -> Element<'_, Message> {
         btn = btn.on_press(Message::PlayPressed);
     }
     container(btn)
+        .style(theme::bordered)
         .width(Length::Fixed(RAIL_WIDTH as f32))
+        .height(Length::Fixed(BAR_HEIGHT as f32))
         .into()
 }
