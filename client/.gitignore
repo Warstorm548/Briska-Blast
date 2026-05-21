@@ -21,3 +21,8 @@ Thumbs.db
 # Local editor scratch
 *.tmp
 *.bak
+
+# Generated at build time by the GenerateBuildConfig target in BriskaBlast.csproj.
+# Contains the channel + server hostname baked into this build variant.
+src/core/BuildConfig.cs
+src/core/BuildConfig.cs.uid

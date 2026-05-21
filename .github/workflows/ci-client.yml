@@ -20,6 +20,11 @@ jobs:
   build:
     name: Build & Validate
     runs-on: ubuntu-latest
+    env:
+      # CI builds every PR/branch; no tag context. Pin to dev so the
+      # GenerateBuildConfig target (client/BriskaBlast.csproj) bakes the
+      # channel whose server host actually resolves. Mirrors ci-server.yml.
+      RELEASE_CHANNEL: dev
 
     steps:
       - uses: actions/checkout@v6
