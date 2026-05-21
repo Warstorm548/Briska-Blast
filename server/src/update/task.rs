@@ -154,14 +154,19 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
                         if let Err(e) = docker::pull_channel_image(channel).await {
                             tracing::warn!("ApplyNow pre-pull failed: {e}");
                         }
-                        let ok = watchtower::trigger_update(
+                        // Persist the rollback target BEFORE triggering
+                        // Watchtower. The SIGTERM Watchtower sends to swap
+                        // the container races any post-trigger work, so a
+                        // write here is the only one guaranteed to land.
+                        // If trigger then fails, previous_version equals
+                        // current_version, which makes Rollback a no-op —
+                        // strictly no worse than the old stale state.
+                        store_previous_version(&state).await;
+                        let _ok = watchtower::trigger_update(
                             &client,
                             &state.config.watchtower_url,
                             &state.config.watchtower_token,
                         ).await;
-                        if ok {
-                            store_previous_version(&state).await;
-                        }
                     }
                     Some(UpdateCommand::Schedule(ts)) => {
                         if let Ok(mut conn) = state.redis.get().await {
@@ -314,14 +319,14 @@ async fn maybe_apply(client: &Client, state: &AppState, channel: &str) {
         if let Err(e) = docker::pull_channel_image(channel).await {
             tracing::warn!("auto-apply pre-pull failed: {e}");
         }
-        let ok = watchtower::trigger_update(
+        // See the ApplyNow handler above for the rationale on writing
+        // the rollback target before the Watchtower trigger.
+        store_previous_version(state).await;
+        let _ok = watchtower::trigger_update(
             client,
             &state.config.watchtower_url,
             &state.config.watchtower_token,
         ).await;
-        if ok {
-            store_previous_version(state).await;
-        }
     }
 }
 
@@ -446,19 +451,18 @@ async fn wait_and_apply(ts: i64, state: AppState, client: Client) {
     if let Err(e) = docker::pull_channel_image(channel).await {
         tracing::warn!("scheduled apply pre-pull failed: {e}");
     }
+    // Persist the rollback target BEFORE triggering Watchtower (see the
+    // ApplyNow handler for the SIGTERM-race rationale). The schedule
+    // cleanup stays on the success path — a failed apply should leave
+    // the schedule in place so retries can pick it up.
+    store_previous_version(&state).await;
     let ok = watchtower::trigger_update(
         &client,
         &state.config.watchtower_url,
         &state.config.watchtower_token,
     ).await;
-    // Only mutate Redis state once Watchtower has actually accepted the
-    // trigger — a failed apply must not silently drop the schedule or the
-    // rollback target.
     if ok {
-        if let Ok(mut conn) = state.redis.get().await {
-            store_previous_version_conn(&mut conn).await;
-            clear_schedule_conn(&mut conn).await;
-        }
+        clear_schedule(&state).await;
     }
 }
 
