@@ -186,7 +186,7 @@ Player A (Host)          Server (signaling)          Player B (Joiner)
 
 ### STUN and TURN
 - **STUN** lets each peer discover its own public IP:port through a public STUN server (the project uses `stun.l.google.com:19302`). The browser/Godot WebRTC stack does this transparently — application code only sees ICE candidates ready to exchange.
-- **TURN** relays peer traffic for the ~5–10% of consumer routers that are "symmetric NATs" and can't be hole-punched. v0.5.0 ships **without** TURN — affected players currently cannot join sessions. See [`roadmap.md`](roadmap.md).
+- **TURN** relays peer traffic for the ~5–10% of consumer routers that are "symmetric NATs" and can't be hole-punched. v0.5.0 ships **without** TURN — affected players currently cannot join sessions. See [`roadmap.md`](../planning/roadmap.md).
 
 ### P2P Topology (4 Players)
 

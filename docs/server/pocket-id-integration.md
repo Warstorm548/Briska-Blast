@@ -1,6 +1,6 @@
 # Pocket ID Integration — Admin Panel
 
-> Status: **Deferred to post-deployment** — see [`roadmap.md`](roadmap.md) for the decision and trigger to start.
+> Status: **Deferred to post-deployment** — see [`roadmap.md`](../planning/roadmap.md) for the decision and trigger to start.
 
 Pocket ID is a self-hosted OIDC provider that uses passkeys only (no passwords).
 This document captures everything needed to wire it into the BriskaBlast admin panel when we return to this work.

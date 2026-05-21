@@ -1,0 +1,345 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://src/ui/menus/SessionLobby.cs" id="1_script"]
+[ext_resource type="Texture2D" path="res://src/assets/sprites/backgrounds/BackgroundDefault.png" id="2_bg"]
+[ext_resource type="Theme" path="res://src/ui/theme/MenuTheme.tres" id="3_theme"]
+
+[node name="SessionLobby" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme = ExtResource("3_theme")
+script = ExtResource("1_script")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+texture = ExtResource("2_bg")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="Title" type="Label" parent="."]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_top = 60.0
+offset_bottom = 180.0
+text = "Lobby"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 84
+
+; ============ LEFT PANEL ============
+
+[node name="LeftPanel" type="PanelContainer" parent="."]
+layout_mode = 1
+offset_left = 80.0
+offset_top = 200.0
+offset_right = 720.0
+offset_bottom = 1100.0
+
+[node name="LeftMargins" type="MarginContainer" parent="LeftPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 32
+theme_override_constants/margin_top = 32
+theme_override_constants/margin_right = 32
+theme_override_constants/margin_bottom = 32
+
+[node name="LeftContent" type="VBoxContainer" parent="LeftPanel/LeftMargins"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="CodeHeader" type="Label" parent="LeftPanel/LeftMargins/LeftContent"]
+layout_mode = 2
+text = "Game Session Code"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 32
+
+[node name="SessionCodeValue" type="Label" parent="LeftPanel/LeftMargins/LeftContent"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 88)
+layout_mode = 2
+text = "ABC123"
+horizontal_alignment = 1
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 64
+
+[node name="CodeSpacer" type="Control" parent="LeftPanel/LeftMargins/LeftContent"]
+custom_minimum_size = Vector2(0, 16)
+layout_mode = 2
+
+[node name="SettingsHeader" type="Label" parent="LeftPanel/LeftMargins/LeftContent"]
+layout_mode = 2
+text = "Current Game Settings"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 28
+
+[node name="ModeRow" type="HBoxContainer" parent="LeftPanel/LeftMargins/LeftContent"]
+layout_mode = 2
+
+[node name="ModeLabel" type="Label" parent="LeftPanel/LeftMargins/LeftContent/ModeRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Mode:"
+theme_override_font_sizes/font_size = 26
+
+[node name="ModeValue" type="Label" parent="LeftPanel/LeftMargins/LeftContent/ModeRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Extended"
+horizontal_alignment = 2
+theme_override_font_sizes/font_size = 26
+
+[node name="MaxPlayersRow" type="HBoxContainer" parent="LeftPanel/LeftMargins/LeftContent"]
+layout_mode = 2
+
+[node name="MaxPlayersLabel" type="Label" parent="LeftPanel/LeftMargins/LeftContent/MaxPlayersRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Max Players:"
+theme_override_font_sizes/font_size = 26
+
+[node name="MaxPlayersValue" type="Label" parent="LeftPanel/LeftMargins/LeftContent/MaxPlayersRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "4"
+horizontal_alignment = 2
+theme_override_font_sizes/font_size = 26
+
+[node name="LeftSpacer" type="Control" parent="LeftPanel/LeftMargins/LeftContent"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ReturnToSetupButton" type="Button" parent="LeftPanel/LeftMargins/LeftContent"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 72)
+layout_mode = 2
+text = "Return to Game Setup Screen"
+
+; ============ RIGHT PANEL ============
+
+[node name="RightPanel" type="PanelContainer" parent="."]
+layout_mode = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -720.0
+offset_top = 200.0
+offset_right = -80.0
+offset_bottom = 1300.0
+
+[node name="RightMargins" type="MarginContainer" parent="RightPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 32
+theme_override_constants/margin_top = 32
+theme_override_constants/margin_right = 32
+theme_override_constants/margin_bottom = 32
+
+[node name="RightContent" type="VBoxContainer" parent="RightPanel/RightMargins"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="PlayersHeader" type="Label" parent="RightPanel/RightMargins/RightContent"]
+layout_mode = 2
+text = "Connected Players"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 32
+
+[node name="PlayerSlots" type="VBoxContainer" parent="RightPanel/RightMargins/RightContent"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+; ---- Slot 1 ----
+
+[node name="Slot1" type="HBoxContainer" parent="RightPanel/RightMargins/RightContent/PlayerSlots"]
+custom_minimum_size = Vector2(0, 64)
+layout_mode = 2
+
+[node name="Name" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot1"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Empty Slot"
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 24
+
+[node name="IsHost" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot1"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(140, 0)
+layout_mode = 2
+visible = false
+text = "Is Host"
+horizontal_alignment = 1
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 22
+
+[node name="Promote" type="Button" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot1"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+visible = false
+text = "Promote to Host"
+
+; ---- Slot 2 ----
+
+[node name="Slot2" type="HBoxContainer" parent="RightPanel/RightMargins/RightContent/PlayerSlots"]
+custom_minimum_size = Vector2(0, 64)
+layout_mode = 2
+
+[node name="Name" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot2"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Empty Slot"
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 24
+
+[node name="IsHost" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot2"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(140, 0)
+layout_mode = 2
+visible = false
+text = "Is Host"
+horizontal_alignment = 1
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 22
+
+[node name="Promote" type="Button" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot2"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+visible = false
+text = "Promote to Host"
+
+; ---- Slot 3 ----
+
+[node name="Slot3" type="HBoxContainer" parent="RightPanel/RightMargins/RightContent/PlayerSlots"]
+custom_minimum_size = Vector2(0, 64)
+layout_mode = 2
+
+[node name="Name" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot3"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Empty Slot"
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 24
+
+[node name="IsHost" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot3"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(140, 0)
+layout_mode = 2
+visible = false
+text = "Is Host"
+horizontal_alignment = 1
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 22
+
+[node name="Promote" type="Button" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot3"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+visible = false
+text = "Promote to Host"
+
+; ---- Slot 4 ----
+
+[node name="Slot4" type="HBoxContainer" parent="RightPanel/RightMargins/RightContent/PlayerSlots"]
+custom_minimum_size = Vector2(0, 64)
+layout_mode = 2
+
+[node name="Name" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot4"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Empty Slot"
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 24
+
+[node name="IsHost" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot4"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(140, 0)
+layout_mode = 2
+visible = false
+text = "Is Host"
+horizontal_alignment = 1
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 22
+
+[node name="Promote" type="Button" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot4"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+visible = false
+text = "Promote to Host"
+
+; ---- Chat ----
+
+[node name="RightVSpacer" type="Control" parent="RightPanel/RightMargins/RightContent"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ChatBox" type="PanelContainer" parent="RightPanel/RightMargins/RightContent"]
+custom_minimum_size = Vector2(0, 320)
+layout_mode = 2
+
+[node name="ChatMargins" type="MarginContainer" parent="RightPanel/RightMargins/RightContent/ChatBox"]
+layout_mode = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 12
+
+[node name="ChatVBox" type="VBoxContainer" parent="RightPanel/RightMargins/RightContent/ChatBox/ChatMargins"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="ChatHeader" type="Label" parent="RightPanel/RightMargins/RightContent/ChatBox/ChatMargins/ChatVBox"]
+layout_mode = 2
+text = "Chat"
+theme_override_font_sizes/font_size = 22
+
+[node name="ChatLog" type="RichTextLabel" parent="RightPanel/RightMargins/RightContent/ChatBox/ChatMargins/ChatVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+bbcode_enabled = true
+text = "[i]Player Post started Session[/i]"
+scroll_following = true
+autowrap_mode = 3
+
+[node name="ChatInput" type="LineEdit" parent="RightPanel/RightMargins/RightContent/ChatBox/ChatMargins/ChatVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Chat message field"
+
+; ============ BOTTOM BUTTONS ============
+
+[node name="StartSessionButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -240.0
+offset_top = -120.0
+offset_right = 240.0
+offset_bottom = -40.0
+text = "Start Session"
+
+[node name="CancelSessionButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 3
+anchor_top = 1.0
+anchor_left = 0.0
+anchor_right = 0.0
+anchor_bottom = 1.0
+offset_left = 80.0
+offset_top = -120.0
+offset_right = 440.0
+offset_bottom = -40.0
+text = "Cancel Session"

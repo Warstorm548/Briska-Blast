@@ -82,8 +82,8 @@ to verify the full flow without a Godot client.
 Symmetric-NAT players (~5–10% of consumer routers) cannot participate
 in this release because no TURN relay exists yet. TURN, the
 host-configurable min/max-pair schema, and WS-ticket auth are tracked
-in `docs/roadmap.md`. All known edge cases live in the new
-`docs/session-multiplayer-edge-cases.md`.
+in `docs/planning/roadmap.md`. All known edge cases live in the new
+`docs/architecture/session-multiplayer-edge-cases.md`.
 
 ### Added
 
@@ -190,7 +190,7 @@ in `docs/roadmap.md`. All known edge cases live in the new
 
 - TURN relay for symmetric-NAT players. Affected ~5–10% currently
   cannot participate; they see `kicked { reason: "peer_connection_unrecoverable" }`.
-  See `docs/roadmap.md`.
+  See `docs/planning/roadmap.md`.
 - Host-configurable `[min, max]` pair per gamemode (the host sends
   one value today; per-gamemode pair selection is a future shape).
 - WS-ticket auth — `secret_token` is sent cleartext in the
@@ -559,7 +559,7 @@ purpose. Defense-in-depth against runtime env tampering.
 None. All `update:*` Redis key names and meanings are preserved. v0.4.1 can
 discover and apply v0.4.2 through the existing GitHub Releases / Watchtower
 contract — neither was touched. The pre-merge checklist in
-`docs/changing-the-update-system.md` was walked end-to-end.
+`docs/server/changing-the-update-system.md` was walked end-to-end.
 
 ---
 
