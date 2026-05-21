@@ -5,6 +5,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.1] — 2026-05-20
+
+Patch release — two targeted fixes to the auto-update flow surfaced
+by the v0.5.0-dev.1 dev-server apply. No wire-format or behavioral
+changes to game endpoints.
+
+### Fixed
+
+- **`update:previous_version` not advancing across applies
+  (`server/src/update/task.rs`)** — observed on the
+  v0.4.7 → v0.5.0-dev.1 apply: `current_version` advanced to `0.5.0`
+  correctly, but `previous_version` remained at the stale `0.4.4`
+  value left by older racy applies, leaving the Rollback button
+  pointing at the wrong target.
+
+  Root cause: the three apply call sites (`UpdateCommand::ApplyNow`,
+  `maybe_apply`, `wait_and_apply`) did `pull` → `trigger_update` →
+  `store_previous_version`. Watchtower's HTTP-API request kills the
+  old container within roughly a second of accepting the trigger,
+  and Watchtower's log timing confirms the SIGTERM lands before the
+  post-trigger work has time to run — so step 3 never reaches Redis.
+
+  **Fix**: write `update:previous_version` **before** triggering
+  Watchtower. The pre-write is benign if `trigger_update` then fails
+  (`previous_version` equals `current_version`, making Rollback a
+  no-op — no worse than the old stale state). The `wait_and_apply`
+  path still gates `clear_schedule` on `trigger_update` success so a
+  failed apply leaves the schedule in place for retry.
+
+- **Noisy `redis get scheduled_at failed` warnings
+  (`server/src/update/task.rs`)** — when no schedule is queued
+  (the common case), `update:scheduled_at` is absent from Redis.
+  Three read sites annotated the result as `String`, so the absent
+  key returned a nil that tripped redis-rs's "Response type not
+  string compatible" type error and emitted a warning every
+  startup and every auto-apply tick. Behavior was unaffected (the
+  `unwrap_or_default()` catch turned it into "no schedule"), but
+  the log was misleading.
+
+  **Fix**: read as `Option<String>` in all three sites so a missing
+  key returns `Ok(None)` cleanly. Same observable behavior, no
+  more spurious warnings.
+
+### Verification
+
+The fix for the `previous_version` race is observable on the next
+dev-channel apply: after `v0.5.0-dev.1 → v0.5.1-dev.1` lands,
+`update:previous_version` should advance to `"0.5.0"` automatically
+with no manual `redis-cli SET` intervention.
+
+---
+
 ## [0.5.0] — 2026-05-20
 
 Minor release (breaking, pre-1.0). Replaces the 2-player UDP
