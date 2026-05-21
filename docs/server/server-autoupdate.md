@@ -20,7 +20,7 @@ The BriskaBlast server supports self-managed updates via a combination of:
 |---|---|---|
 | `stable` | `v1.2.3` | Full release |
 | `ea` (Early Access) | `v1.2.3-ea.1` | Pre-release |
-| `dev` (Experimental) | `v1.2.3-dev.1` | Pre-release |
+| `dev` | `v1.2.3-dev.1` | Pre-release |
 
 The channel is baked into the binary at compile time via `server/build.rs` reading the `RELEASE_CHANNEL` environment variable. The GitHub Actions release workflow sets this automatically based on the tag format.
 
@@ -201,6 +201,6 @@ To release:
 ```bash
 git tag v1.2.3        # stable
 git tag v1.2.3-ea.1   # early access
-git tag v1.2.3-dev.1  # dev/experimental
+git tag v1.2.3-dev.1  # dev (pre-release)
 git push origin <tag>
 ```
