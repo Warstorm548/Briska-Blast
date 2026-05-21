@@ -68,10 +68,14 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
 
     // recover any pending manual schedule that survived a restart
     if let Ok(mut conn) = state.redis.get().await {
+        // Read as Option<String> so a missing key returns Ok(None) cleanly
+        // instead of tripping serde's "nil is not String" type error and
+        // emitting a noisy warning every startup.
         let stored: String = conn
-            .get("update:scheduled_at")
+            .get::<_, Option<String>>("update:scheduled_at")
             .await
             .inspect_err(|e| tracing::warn!("redis get scheduled_at failed: {e}"))
+            .unwrap_or_default()
             .unwrap_or_default();
         match stored.parse::<i64>() {
             Ok(ts) => {
@@ -348,9 +352,10 @@ async fn should_apply_after_lock(conn: &mut deadpool_redis::Connection) -> bool 
         .inspect_err(|e| tracing::warn!("redis get rollback_locked failed: {e}"))
         .unwrap_or_default();
     let scheduled: String = conn
-        .get("update:scheduled_at")
+        .get::<_, Option<String>>("update:scheduled_at")
         .await
         .inspect_err(|e| tracing::warn!("redis get scheduled_at failed: {e}"))
+        .unwrap_or_default()
         .unwrap_or_default();
     let available: String = conn
         .get("update:available_version")
@@ -432,9 +437,10 @@ async fn wait_and_apply(ts: i64, state: AppState, client: Client) {
     let stored_ts: Option<i64> = match state.redis.get().await {
         Ok(mut conn) => {
             let raw: String = conn
-                .get("update:scheduled_at")
+                .get::<_, Option<String>>("update:scheduled_at")
                 .await
                 .inspect_err(|e| tracing::warn!("redis get scheduled_at failed: {e}"))
+                .unwrap_or_default()
                 .unwrap_or_default();
             raw.parse::<i64>().ok()
         }
