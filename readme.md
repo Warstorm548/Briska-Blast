@@ -27,7 +27,7 @@ Component changes are tracked in their respective changelogs: [`ServerChangeLog.
 When released, BriskaBlast will be launched through the **BriskaBlast Launcher**, which will handle installation, updates, and login. The launcher will let you choose which release channel to play on:
 
 - **Stable** — the main public release, recommended for most players
-- **Experimental** — early access to upcoming changes, may have rough edges
+- **Early Access (EA)** — opt-in to upcoming changes, may have rough edges
 
 ## Documentation
 
