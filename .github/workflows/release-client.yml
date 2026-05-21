@@ -9,6 +9,16 @@ name: Release — Client
 
 on:
   workflow_dispatch:
+    inputs:
+      channel:
+        description: "Release channel to bake into this build"
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - ea
+          - stable
 
 env:
   GODOT_VERSION: "4.6.3"
@@ -20,6 +30,31 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Detect release channel
+        id: channel
+        run: |
+          # workflow_dispatch: take the user-supplied input.
+          # push (when re-enabled per the header comment): mirror release-server.yml
+          # regex exactly so client + server tag conventions stay aligned.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CHANNEL="${{ inputs.channel }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            SEMVER='v[0-9]+\.[0-9]+\.[0-9]+'
+            if   [[ "$TAG" =~ ^${SEMVER}-ea\.[0-9]+$ ]];  then CHANNEL=ea
+            elif [[ "$TAG" =~ ^${SEMVER}-dev\.[0-9]+$ ]]; then CHANNEL=dev
+            elif [[ "$TAG" =~ ^${SEMVER}$ ]];             then CHANNEL=stable
+            else
+              echo "::error::Tag '$TAG' does not match any release channel pattern (stable: v1.2.3, ea: v1.2.3-ea.N, dev: v1.2.3-dev.N)"
+              exit 1
+            fi
+          fi
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          # Export to env so child processes (e.g. dotnet publish spawned by
+          # godot --headless --export-release) inherit RELEASE_CHANNEL.
+          echo "RELEASE_CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
+          echo "Building Briska Blast client on channel: $CHANNEL"
 
       - name: Install .NET 8 SDK
         run: |
@@ -95,16 +130,16 @@ jobs:
       - name: Package Linux tar.gz
         run: |
           cd client/export/linux
-          tar czf "../../../briskablast-client-${{ steps.version.outputs.version }}-linux.tar.gz" .
+          tar czf "../../../briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}-linux.tar.gz" .
 
       - name: Package Windows zip
         run: |
           cd client/export/windows
-          zip -qr "../../../briskablast-client-${{ steps.version.outputs.version }}-windows.zip" .
+          zip -qr "../../../briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}-windows.zip" .
 
       - uses: actions/upload-artifact@v7
         with:
-          name: briskablast-client-${{ steps.version.outputs.version }}
+          name: briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}
           path: |
             briskablast-client-*-linux.tar.gz
             briskablast-client-*-windows.zip
