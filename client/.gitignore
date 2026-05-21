@@ -1,0 +1,23 @@
+# Godot 4 cache + generated files
+.godot/
+.mono/
+.import/
+
+# .NET build outputs
+bin/
+obj/
+
+# IDE / editor local state
+*.csproj.user
+*.suo
+.vs/
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Local editor scratch
+*.tmp
+*.bak

@@ -458,7 +458,7 @@ Set it in `.env` rather than hardcoding in `docker-compose.yml`, so it doesn't a
 
 ### Future Hardening: Passkey Auth via Pocket ID
 
-Pocket ID is a self-hosted OIDC provider supporting passkey-only authentication. Integrating it would replace `ADMIN_PASSWORD` as the third-layer auth with phishing-resistant, origin-bound passkeys. Full integration design documented in [`docs/pocket-id-integration.md`](pocket-id-integration.md) — not yet implemented.
+Pocket ID is a self-hosted OIDC provider supporting passkey-only authentication. Integrating it would replace `ADMIN_PASSWORD` as the third-layer auth with phishing-resistant, origin-bound passkeys. Full integration design documented in [`docs/server/pocket-id-integration.md`](pocket-id-integration.md) — not yet implemented.
 
 ---
 

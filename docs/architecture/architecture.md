@@ -66,7 +66,7 @@ The Godot client uses equivalent C# types defined in `client/scripts/`.
 - `src/utils/` — pure utility functions
 
 ## Launcher (`launcher/`)
-Rust + Iced standalone binary that runs before the game. See [`devtools.md`](devtools.md) for the dev branch channel.
+Rust + Iced standalone binary that runs before the game. See [`devtools.md`](../dev/devtools.md) for the dev branch channel.
 - `src/ui/` — launcher window, screens, layout components
 - `src/auth/` — login, account creation, token/session storage
 - `src/updater/` — core update engine

@@ -38,20 +38,20 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 
 | Topic | File |
 |---|---|
-| Full package structure and module layout | [`docs/architecture.md`](docs/architecture.md) |
-| Dev environment setup and Docker instructions | [`docs/setup.md`](docs/setup.md) |
-| Manual testing with curl, admin panel tests | [`docs/testing.md`](docs/testing.md) |
-| Server endpoint design and WebRTC signaling flow | [`docs/protocol.md`](docs/protocol.md) |
-| Full networking, identity, and game design | [`docs/game-architecture-summary.md`](docs/game-architecture-summary.md) |
-| Launcher self-update and version enforcement | [`docs/launcher-update-and-version-validation.md`](docs/launcher-update-and-version-validation.md) |
-| Dev branch and release channel rules | [`docs/devtools.md`](docs/devtools.md) |
+| Full package structure and module layout | [`docs/architecture/architecture.md`](docs/architecture/architecture.md) |
+| Dev environment setup and Docker instructions | [`docs/dev/setup.md`](docs/dev/setup.md) |
+| Manual testing with curl, admin panel tests | [`docs/dev/testing.md`](docs/dev/testing.md) |
+| Server endpoint design and WebRTC signaling flow | [`docs/architecture/protocol.md`](docs/architecture/protocol.md) |
+| Full networking, identity, and game design | [`docs/architecture/game-architecture-summary.md`](docs/architecture/game-architecture-summary.md) |
+| Launcher self-update and version enforcement | [`docs/launcher/launcher-update-and-version-validation.md`](docs/launcher/launcher-update-and-version-validation.md) |
+| Dev branch and release channel rules | [`docs/dev/devtools.md`](docs/dev/devtools.md) |
 | Server change history | [`ServerChangeLog.md`](../ServerChangeLog.md) |
-| Deferred work and post-deployment follow-ups | [`docs/roadmap.md`](docs/roadmap.md) |
+| Deferred work and post-deployment follow-ups | [`docs/planning/roadmap.md`](docs/planning/roadmap.md) |
 
 ## Key Design Constraints
 
-- `shared/` is a Rust library crate — platform-agnostic, no OS-specific built-ins. See [`docs/protocol.md`](docs/protocol.md).
-- Dev tools ship on the `dev` branch only. See [`docs/devtools.md`](docs/devtools.md).
+- `shared/` is a Rust library crate — platform-agnostic, no OS-specific built-ins. See [`docs/architecture/protocol.md`](docs/architecture/protocol.md).
+- Dev tools ship on the `dev` branch only. See [`docs/dev/devtools.md`](docs/dev/devtools.md).
 - Server runtime config (`min_launcher_version`, `min_game_version`, admin password) lives in Redis and is managed via the admin panel — not hardcoded.
 - Bind address and ports (`GAME_PORT`, `ADMIN_PORT`) are deployment-time config via `.env` / `docker-compose.yml` — not managed at runtime.
 - Default admin password is `@admin` — seeded on first boot, must be changed immediately.

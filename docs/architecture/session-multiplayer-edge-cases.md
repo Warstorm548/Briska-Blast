@@ -27,7 +27,7 @@ TLS (`wss://`) — anything less leaks the token to anyone on the path.
 `/host` / `/join` responses. The launcher then opens the WS with
 `?ticket=<jwt-like-thing>` instead of replaying the raw token. Server
 verifies the ticket signature + expiry, never sees the secret on the
-wire. See the [WS-ticket auth roadmap entry](roadmap.md).
+wire. See the [WS-ticket auth roadmap entry](../planning/roadmap.md).
 
 ### Concurrent `/join` race
 
@@ -99,7 +99,7 @@ close socket) is wired but the trigger threshold is not yet
 implemented — every-pair-failed detection is the next step.
 
 **Future:** TURN relay so this group can play. See the [TURN relay
-roadmap entry](roadmap.md).
+roadmap entry](../planning/roadmap.md).
 
 ### Session TTL expires mid-flight
 
