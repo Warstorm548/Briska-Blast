@@ -68,10 +68,14 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
 
     // recover any pending manual schedule that survived a restart
     if let Ok(mut conn) = state.redis.get().await {
+        // Read as Option<String> so a missing key returns Ok(None) cleanly
+        // instead of tripping serde's "nil is not String" type error and
+        // emitting a noisy warning every startup.
         let stored: String = conn
-            .get("update:scheduled_at")
+            .get::<_, Option<String>>("update:scheduled_at")
             .await
             .inspect_err(|e| tracing::warn!("redis get scheduled_at failed: {e}"))
+            .unwrap_or_default()
             .unwrap_or_default();
         match stored.parse::<i64>() {
             Ok(ts) => {
@@ -154,13 +158,25 @@ pub async fn run(state: AppState, mut rx: mpsc::Receiver<UpdateCommand>) {
                         if let Err(e) = docker::pull_channel_image(channel).await {
                             tracing::warn!("ApplyNow pre-pull failed: {e}");
                         }
-                        let ok = watchtower::trigger_update(
-                            &client,
-                            &state.config.watchtower_url,
-                            &state.config.watchtower_token,
-                        ).await;
-                        if ok {
-                            store_previous_version(&state).await;
+                        // Persist the rollback target BEFORE triggering
+                        // Watchtower. The SIGTERM Watchtower sends to swap
+                        // the container races any post-trigger work, so a
+                        // write here is the only one guaranteed to land.
+                        //
+                        // If persistence FAILS (Redis blip), do not
+                        // trigger — swapping the container without a
+                        // correct rollback target is the original v0.5.0
+                        // bug. Operator can retry once Redis recovers.
+                        if store_previous_version(&state).await {
+                            let _ok = watchtower::trigger_update(
+                                &client,
+                                &state.config.watchtower_url,
+                                &state.config.watchtower_token,
+                            ).await;
+                        } else {
+                            tracing::warn!(
+                                "ApplyNow aborted: could not persist update:previous_version"
+                            );
                         }
                     }
                     Some(UpdateCommand::Schedule(ts)) => {
@@ -314,13 +330,19 @@ async fn maybe_apply(client: &Client, state: &AppState, channel: &str) {
         if let Err(e) = docker::pull_channel_image(channel).await {
             tracing::warn!("auto-apply pre-pull failed: {e}");
         }
-        let ok = watchtower::trigger_update(
-            client,
-            &state.config.watchtower_url,
-            &state.config.watchtower_token,
-        ).await;
-        if ok {
-            store_previous_version(state).await;
+        // See the ApplyNow handler above for the rationale on writing
+        // the rollback target before the Watchtower trigger, and on
+        // refusing to trigger if persistence failed.
+        if store_previous_version(state).await {
+            let _ok = watchtower::trigger_update(
+                client,
+                &state.config.watchtower_url,
+                &state.config.watchtower_token,
+            ).await;
+        } else {
+            tracing::warn!(
+                "auto-apply aborted: could not persist update:previous_version"
+            );
         }
     }
 }
@@ -343,9 +365,10 @@ async fn should_apply_after_lock(conn: &mut deadpool_redis::Connection) -> bool 
         .inspect_err(|e| tracing::warn!("redis get rollback_locked failed: {e}"))
         .unwrap_or_default();
     let scheduled: String = conn
-        .get("update:scheduled_at")
+        .get::<_, Option<String>>("update:scheduled_at")
         .await
         .inspect_err(|e| tracing::warn!("redis get scheduled_at failed: {e}"))
+        .unwrap_or_default()
         .unwrap_or_default();
     let available: String = conn
         .get("update:available_version")
@@ -427,9 +450,10 @@ async fn wait_and_apply(ts: i64, state: AppState, client: Client) {
     let stored_ts: Option<i64> = match state.redis.get().await {
         Ok(mut conn) => {
             let raw: String = conn
-                .get("update:scheduled_at")
+                .get::<_, Option<String>>("update:scheduled_at")
                 .await
                 .inspect_err(|e| tracing::warn!("redis get scheduled_at failed: {e}"))
+                .unwrap_or_default()
                 .unwrap_or_default();
             raw.parse::<i64>().ok()
         }
@@ -446,35 +470,59 @@ async fn wait_and_apply(ts: i64, state: AppState, client: Client) {
     if let Err(e) = docker::pull_channel_image(channel).await {
         tracing::warn!("scheduled apply pre-pull failed: {e}");
     }
-    let ok = watchtower::trigger_update(
-        &client,
-        &state.config.watchtower_url,
-        &state.config.watchtower_token,
-    ).await;
-    // Only mutate Redis state once Watchtower has actually accepted the
-    // trigger — a failed apply must not silently drop the schedule or the
-    // rollback target.
-    if ok {
-        if let Ok(mut conn) = state.redis.get().await {
-            store_previous_version_conn(&mut conn).await;
-            clear_schedule_conn(&mut conn).await;
+    // Persist the rollback target BEFORE triggering Watchtower (see the
+    // ApplyNow handler for the SIGTERM-race rationale). If persistence
+    // fails, abort the trigger — swapping without a correct rollback
+    // target was the original v0.5.0 bug.
+    if store_previous_version(&state).await {
+        let _ok = watchtower::trigger_update(
+            &client,
+            &state.config.watchtower_url,
+            &state.config.watchtower_token,
+        ).await;
+    } else {
+        tracing::warn!(
+            "scheduled apply aborted: could not persist update:previous_version"
+        );
+    }
+
+    // Clear scheduled_at UNCONDITIONALLY — whether the apply succeeded,
+    // the Watchtower trigger failed, or we aborted because we couldn't
+    // persist the rollback target, the schedule has already had its one
+    // shot. Leaving it populated would block every subsequent auto-apply
+    // tick via decide_should_apply (which treats a non-empty
+    // scheduled_at as "schedule pending, don't auto-apply") until the
+    // next server restart cleans it up. Operators who want a retry can
+    // schedule a new one from /admin.
+    clear_schedule(&state).await;
+}
+
+/// Persist `update:previous_version = current_version` and report whether
+/// the write actually landed. Callers use the return value to gate the
+/// Watchtower trigger so a Redis blip can't swap the container with a
+/// stale rollback target — the original v0.5.0 race.
+///
+/// Returns `false` if the connection couldn't be acquired or the SET
+/// failed (warning is logged in both cases).
+async fn store_previous_version(state: &AppState) -> bool {
+    match state.redis.get().await {
+        Ok(mut conn) => store_previous_version_conn(&mut conn).await,
+        Err(e) => {
+            tracing::warn!("redis pool acquire for previous_version failed: {e}");
+            false
         }
     }
 }
 
-async fn store_previous_version(state: &AppState) {
-    if let Ok(mut conn) = state.redis.get().await {
-        store_previous_version_conn(&mut conn).await;
-    }
-}
-
-async fn store_previous_version_conn(conn: &mut deadpool_redis::Connection) {
+async fn store_previous_version_conn(conn: &mut deadpool_redis::Connection) -> bool {
     let current = env!("CARGO_PKG_VERSION");
-    let _: () = conn
-        .set("update:previous_version", current)
-        .await
-        .inspect_err(|e| tracing::warn!("redis set previous_version failed: {e}"))
-        .unwrap_or(());
+    match conn.set::<_, _, ()>("update:previous_version", current).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!("redis set previous_version failed: {e}");
+            false
+        }
+    }
 }
 
 async fn clear_schedule(state: &AppState) {
