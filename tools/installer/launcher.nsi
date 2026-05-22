@@ -54,7 +54,10 @@ Section "Install"
   WriteRegStr HKLM "${ARP_KEY}" "Publisher"       "${PUBLISHER}"
   WriteRegStr HKLM "${ARP_KEY}" "URLInfoAbout"    "${HOME_URL}"
   WriteRegStr HKLM "${ARP_KEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKLM "${ARP_KEY}" "UninstallString" "$INSTDIR\Uninstall.exe"
+  ; Quoted — $INSTDIR resolves to "C:\Program Files\BriskaBlast\Launcher"
+  ; which has spaces. ARP launches UninstallString verbatim via CreateProcess,
+  ; which requires the executable path itself to be quoted.
+  WriteRegStr HKLM "${ARP_KEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegDWORD HKLM "${ARP_KEY}" "NoModify" 1
   WriteRegDWORD HKLM "${ARP_KEY}" "NoRepair" 1
 

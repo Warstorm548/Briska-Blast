@@ -178,6 +178,8 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     Some("Cannot update while the game is running.".into());
             } else if state.self_update_in_flight {
                 tracing::debug!("self-update already in flight, ignoring");
+            } else if state.update_check_in_flight {
+                tracing::debug!("update check in flight, ignoring start press");
             } else if !state.launcher_update_available
                 || state.launcher_available_version.is_empty()
             {

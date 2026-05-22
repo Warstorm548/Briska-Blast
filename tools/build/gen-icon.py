@@ -97,7 +97,9 @@ def render(size: int) -> bytes:
     outline_px = max(1.0, scale * 4)
 
     px = bytearray(size * size * 4)
-    pixel_at = lambda x, y: ((y * size + x) * 4)
+
+    def pixel_at(x: int, y: int) -> int:
+        return (y * size + x) * 4
 
     for y in range(size):
         for x in range(size):
