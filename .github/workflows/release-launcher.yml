@@ -167,6 +167,10 @@ jobs:
     needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/launcher-v')
+    # Default GITHUB_TOKEN has read-only contents scope; creating a release
+    # needs write. Mirrors release-server.yml job-level permissions.
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
