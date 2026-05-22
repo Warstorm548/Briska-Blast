@@ -1,18 +1,33 @@
 # Release — Launcher (Rust + Iced)
-# Temporarily disabled: trigger is manual only.
-# To re-enable, replace the `on` block with:
-#   on:
-#     push:
-#       tags: ['v*.*.*']
+#
+# Triggers:
+#   - workflow_dispatch    : build artifacts only (no GitHub Release publish)
+#   - push tag launcher-v* : build + publish to the matching GitHub Release
+#
+# Artifacts published per release (consumed by both end-users and the
+# launcher's in-app `self_update` binary-swap flow):
+#   Linux   :
+#     briskablast-launcher-<ver>-x86_64-unknown-linux-gnu.tar.gz   (self_update)
+#     briskablast-launcher_<ver>_amd64.deb                         (apt-style install)
+#     briskablast-launcher-<ver>-linux.AppImage                    (portable)
+#   Windows :
+#     briskablast-launcher-<ver>-x86_64-pc-windows-msvc.zip        (self_update)
+#     BriskaBlast-Launcher-Setup-<ver>.exe                         (NSIS installer)
+#
+# Tag schema: launcher-v<semver>  e.g. launcher-v0.3.0-dev.1
+# Schema is launcher-only — server's `v*.*.*-dev.N` tag stream is unaffected
+# (see plan doc / launcher-foundation §7).
 
 name: Release — Launcher
 
 on:
   workflow_dispatch:
+  push:
+    tags: ['launcher-v*']
 
 jobs:
   build-linux:
-    name: Build Linux (AppImage + tar.gz)
+    name: Build Linux (tar.gz + AppImage + .deb)
     runs-on: ubuntu-latest
 
     steps:
@@ -24,15 +39,27 @@ jobs:
         with:
           workspaces: launcher -> target
 
+      - name: Compute version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/launcher-v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/launcher-v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dispatch" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build release binary
         run: cargo build --release
         working-directory: launcher
 
-      - name: Package tar.gz
+      - name: Package tar.gz (self_update asset)
         run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          ARCHIVE="briskablast-launcher-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
           mkdir -p dist
           cp target/release/briskablast-launcher dist/
-          tar czf briskablast-launcher-linux.tar.gz -C dist briskablast-launcher
+          tar czf "${ARCHIVE}" -C dist briskablast-launcher
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
         working-directory: launcher
 
       - name: Download linuxdeploy
@@ -41,8 +68,6 @@ jobs:
           chmod +x linuxdeploy-x86_64.AppImage
 
       - name: Build AppImage
-        # Requires: launcher/assets/briskablast-launcher.desktop and launcher/assets/icon.png
-        # Fill in these asset paths when the files exist.
         run: |
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
@@ -50,18 +75,29 @@ jobs:
             --desktop-file launcher/assets/briskablast-launcher.desktop \
             --icon-file launcher/assets/icon.png \
             --output appimage
-        env:
-          OUTPUT: briskablast-launcher-linux.AppImage
+          # Rename to versioned filename.
+          VERSION="${{ steps.ver.outputs.version }}"
+          mv BriskaBlast_Launcher*.AppImage \
+            "briskablast-launcher-${VERSION}-linux.AppImage" 2>/dev/null || \
+            mv *.AppImage "briskablast-launcher-${VERSION}-linux.AppImage"
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Build .deb
+        run: cargo deb -p launcher --no-build
+        working-directory: .
 
       - uses: actions/upload-artifact@v7
         with:
           name: launcher-linux
           path: |
-            launcher/briskablast-launcher-linux.tar.gz
-            briskablast-launcher-linux.AppImage
+            launcher/briskablast-launcher-*-x86_64-unknown-linux-gnu.tar.gz
+            briskablast-launcher-*-linux.AppImage
+            target/debian/*.deb
 
   build-windows:
-    name: Build Windows (.exe installer)
+    name: Build Windows (zip + NSIS installer)
     runs-on: windows-latest
 
     steps:
@@ -73,25 +109,49 @@ jobs:
         with:
           workspaces: launcher -> target
 
+      - name: Compute version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/launcher-v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/launcher-v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dispatch" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build release binary
         run: cargo build --release
         working-directory: launcher
+
+      - name: Package zip (self_update asset)
+        shell: pwsh
+        run: |
+          $version = "${{ steps.ver.outputs.version }}"
+          $archive = "briskablast-launcher-$version-x86_64-pc-windows-msvc.zip"
+          Compress-Archive -Path "launcher/target/release/briskablast-launcher.exe" -DestinationPath $archive
 
       - name: Install NSIS
         run: choco install nsis --yes
 
       - name: Build installer
-        run: makensis tools/installer/launcher.nsi
+        shell: bash
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          makensis "/DVERSION=${VERSION}" tools/installer/launcher.nsi
+          mv BriskaBlast-Launcher-Setup.exe "BriskaBlast-Launcher-Setup-${VERSION}.exe"
 
       - uses: actions/upload-artifact@v7
         with:
           name: launcher-windows
-          path: BriskaBlast-Launcher-Setup.exe
+          path: |
+            briskablast-launcher-*-x86_64-pc-windows-msvc.zip
+            BriskaBlast-Launcher-Setup-*.exe
 
   release:
     name: Publish GitHub Release
     needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/launcher-v')
 
     steps:
       - uses: actions/download-artifact@v8

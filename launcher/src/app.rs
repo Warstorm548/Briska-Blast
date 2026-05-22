@@ -5,6 +5,7 @@
 use crate::channel::Channel;
 use crate::identity::Identity;
 use crate::ui::theme::{BAR_HEIGHT, ZONE_GAP};
+use crate::updater::{self, UpdateCheckOutcome};
 use crate::{mock, ui};
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Task, Theme};
@@ -43,6 +44,9 @@ pub enum Message {
     #[allow(dead_code)]
     GameSavePressed(Channel),
     StartLauncherUpdatePressed,
+    CheckForUpdatesPressed,
+    LauncherUpdateCheckDone(Result<UpdateCheckOutcome, String>),
+    SelfUpdateDone(Result<(), String>),
 }
 
 pub struct AppState {
@@ -53,6 +57,10 @@ pub struct AppState {
     pub branch_updates_available: Vec<Channel>,
     pub launcher_update_available: bool,
     pub launcher_available_version: String,
+    pub launcher_release_notes: String,
+    pub update_check_in_flight: bool,
+    pub self_update_in_flight: bool,
+    pub last_self_update_error: Option<String>,
     pub game_running: bool,
     pub center_view: CenterView,
 }
@@ -71,12 +79,32 @@ impl Default for AppState {
             visible_channels,
             server_reachable,
             branch_updates_available: mock::BRANCH_UPDATES_AVAILABLE.to_vec(),
-            launcher_update_available: mock::LAUNCHER_UPDATE_AVAILABLE,
-            launcher_available_version: mock::LAUNCHER_AVAILABLE_VERSION.to_string(),
+            launcher_update_available: false,
+            launcher_available_version: String::new(),
+            launcher_release_notes: String::new(),
+            update_check_in_flight: false,
+            self_update_in_flight: false,
+            last_self_update_error: None,
             game_running: false,
             center_view: CenterView::Default,
         }
     }
+}
+
+/// Iced boot — produces initial state and the first-launch GitHub Releases
+/// query that populates `launcher_update_available` / `launcher_available_version`.
+pub fn boot() -> (AppState, Task<Message>) {
+    let state = AppState {
+        update_check_in_flight: true,
+        ..AppState::default()
+    };
+    (
+        state,
+        Task::perform(
+            updater::check_for_update(),
+            Message::LauncherUpdateCheckDone,
+        ),
+    )
 }
 
 pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
@@ -114,9 +142,71 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 }
             }
         }
+        Message::CheckForUpdatesPressed => {
+            if !state.update_check_in_flight && !state.self_update_in_flight {
+                state.update_check_in_flight = true;
+                state.last_self_update_error = None;
+                return Task::perform(
+                    updater::check_for_update(),
+                    Message::LauncherUpdateCheckDone,
+                );
+            }
+        }
+        Message::LauncherUpdateCheckDone(result) => {
+            state.update_check_in_flight = false;
+            match result {
+                Ok(UpdateCheckOutcome::Available { version, notes }) => {
+                    state.launcher_update_available = true;
+                    state.launcher_available_version = version;
+                    state.launcher_release_notes = notes;
+                }
+                Ok(UpdateCheckOutcome::UpToDate) => {
+                    state.launcher_update_available = false;
+                    state.launcher_available_version.clear();
+                    state.launcher_release_notes.clear();
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "launcher update check failed");
+                    state.last_self_update_error = Some(format!("Update check failed: {e}"));
+                }
+            }
+        }
+        Message::StartLauncherUpdatePressed => {
+            if state.game_running {
+                tracing::warn!("refusing self-update: game is running");
+                state.last_self_update_error =
+                    Some("Cannot update while the game is running.".into());
+            } else if state.self_update_in_flight {
+                tracing::debug!("self-update already in flight, ignoring");
+            } else if !state.launcher_update_available
+                || state.launcher_available_version.is_empty()
+            {
+                tracing::debug!("no update available, ignoring start press");
+            } else {
+                state.self_update_in_flight = true;
+                state.last_self_update_error = None;
+                let version = state.launcher_available_version.clone();
+                return Task::perform(updater::run_self_update(version), Message::SelfUpdateDone);
+            }
+        }
+        Message::SelfUpdateDone(result) => {
+            state.self_update_in_flight = false;
+            match result {
+                Ok(()) => {
+                    // Binary on disk has been swapped. Exit so the next launch
+                    // runs the new code; `self_update`'s rename-trick cleanup
+                    // happens on that next launch.
+                    tracing::info!("self-update succeeded — exiting for relaunch");
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "self-update failed");
+                    state.last_self_update_error = Some(format!("Update failed: {e}"));
+                }
+            }
+        }
         Message::PlayPressed
         | Message::UpdatePressed
-        | Message::StartLauncherUpdatePressed
         | Message::UninstallChannel(_)
         | Message::VerifyChannel(_)
         | Message::GameSavePressed(_) => {}

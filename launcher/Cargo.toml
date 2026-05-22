@@ -1,10 +1,12 @@
 [package]
 name = "launcher"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
+description = "BriskaBlast Launcher — manages install, update, and launch of the BriskaBlast game across stable, ea, and dev channels."
+license = "AGPL-3.0-or-later"
 
 [[bin]]
-name = "launcher"
+name = "briskablast-launcher"
 path = "src/main.rs"
 
 [dependencies]
@@ -15,3 +17,24 @@ tracing            = "0.1"
 tracing-subscriber = { version = "0.3",  features = ["env-filter"] }
 dotenvy            = "0.15"
 shared             = { path = "../shared" }
+# Self-update: rename-trick binary swap via GitHub Releases. rustls keeps us
+# off the OpenSSL build path on Linux. self_update transitively pulls reqwest.
+self_update        = { version = "0.41", default-features = false, features = ["rustls", "compression-zip-deflate", "archive-zip"] }
+semver             = "1"
+tokio              = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+
+[package.metadata.deb]
+maintainer = "Warstorm548"
+copyright = "2026, Warstorm548"
+license-file = ["../LICENSE", "0"]
+section = "games"
+priority = "optional"
+extended-description = """\
+BriskaBlast Launcher — manages install, update, and launch of the BriskaBlast \
+game across stable, ea, and dev channels."""
+depends = "$auto"
+assets = [
+    ["target/release/briskablast-launcher", "usr/bin/", "755"],
+    ["assets/briskablast-launcher.desktop", "usr/share/applications/", "644"],
+    ["assets/icon.png", "usr/share/icons/hicolor/512x512/apps/briskablast-launcher.png", "644"],
+]

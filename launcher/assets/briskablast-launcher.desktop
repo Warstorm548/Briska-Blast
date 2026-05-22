@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=BriskaBlast Launcher
+GenericName=Game Launcher
+Comment=Launcher for BriskaBlast — multiplayer game
+Exec=briskablast-launcher
+Icon=briskablast-launcher
+Terminal=false
+Categories=Game;
+Keywords=briska;blast;briskablast;launcher;game;
+StartupNotify=true
+StartupWMClass=BriskaBlast Launcher
