@@ -149,7 +149,10 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
-          makensis "/DVERSION=${VERSION}" tools/installer/launcher.nsi
+          # `-D` instead of `/D`: Git Bash on Windows applies MSYS POSIX-path
+          # conversion to args starting with `/`, turning `/DVERSION=…` into
+          # `C:/Program Files/Git/DVERSION=…`. NSIS accepts both forms.
+          makensis "-DVERSION=${VERSION}" tools/installer/launcher.nsi
           mv BriskaBlast-Launcher-Setup.exe "BriskaBlast-Launcher-Setup-${VERSION}.exe"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
