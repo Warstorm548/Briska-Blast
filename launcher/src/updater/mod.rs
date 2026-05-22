@@ -8,6 +8,8 @@
 //! Empty sibling subdirs `branches/`, `downloader/`, `patcher/` are placeholders
 //! for the future per-channel game-files updater — out of scope on this slice.
 
+pub use cleanup::cleanup_stale_update_artifacts;
 pub use github::{check_for_update, run_self_update, UpdateCheckOutcome};
 
+mod cleanup;
 mod github;

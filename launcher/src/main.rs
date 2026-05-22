@@ -17,6 +17,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> iced::Result {
     init_tracing();
+    updater::cleanup_stale_update_artifacts();
     iced::application(app::boot, app::update, app::view)
         .title(app::title)
         .theme(app::theme)
