@@ -70,11 +70,15 @@ jobs:
 
       - name: Build AppImage
         run: |
+          # --icon-filename matches the desktop file's `Icon=briskablast-launcher`
+          # entry; without it linuxdeploy uses the source basename ("icon") and
+          # then fails with "Could not find suitable icon for Icon entry".
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
             --executable target/release/briskablast-launcher \
             --desktop-file launcher/assets/briskablast-launcher.desktop \
             --icon-file launcher/assets/icon.png \
+            --icon-filename briskablast-launcher \
             --output appimage
           # Rename to versioned filename.
           VERSION="${{ steps.ver.outputs.version }}"
@@ -133,7 +137,13 @@ jobs:
           Compress-Archive -Path "target/release/briskablast-launcher.exe" -DestinationPath $archive
 
       - name: Install NSIS
-        run: choco install nsis --yes
+        shell: pwsh
+        run: |
+          choco install nsis --yes
+          # `choco install` updates the user/system PATH in the registry, but the
+          # already-running GitHub Actions job inherits the PATH from job start.
+          # Propagate the NSIS dir to subsequent steps explicitly.
+          Add-Content -Path $env:GITHUB_PATH -Value "${env:ProgramFiles(x86)}\NSIS"
 
       - name: Build installer
         shell: bash
