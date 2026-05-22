@@ -5,6 +5,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.3.1] — 2026-05-22
+
+Hides the empty console window that Windows allocated behind the
+launcher GUI on release builds. Same v0.3.0 install + self-update
+mechanics; first real use of the `self_update` rename-trick swap will
+upgrade an installed v0.3.0-dev.5 launcher to this release.
+
+### Changed
+
+- **Windows release builds run under the `windows` subsystem**
+  (`launcher/src/main.rs`). Adds
+  `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`
+  at the crate root so `cargo build --release` produces a GUI-subsystem
+  PE on Windows — no more `conhost.exe` window behind the Iced window.
+  Debug builds keep the console so `cargo run -p launcher` still shows
+  tracing output during development. Non-Windows targets ignore the
+  attribute entirely (no-op on Linux).
+
+- **Version** 0.3.0 → 0.3.1. Needed so a `launcher-v0.3.1-dev.1` Release
+  parses as semver-greater than the installed v0.3.0 binary (a
+  `launcher-v0.3.0-dev.6` tag would parse as `0.3.0-dev.6`, which is
+  semver-LESS than `0.3.0` because pre-release suffixes are ordered
+  below the base version — so the running launcher would never offer
+  the update).
+
+### Notes
+
+- Side effect on Windows release builds: anything `tracing` writes to
+  stderr is dropped (no terminal attached). For deployed-launcher debug
+  visibility, a file appender on `tracing-subscriber` is the future
+  move; not in scope here.
+- This is the first release that lets us exercise the full end-to-end
+  self-update flow: install v0.3.0-dev.5's `setup.exe`, run it, click
+  "Check for Updates" → banner appears → "Start Update" → rename-trick
+  binary swap → relaunched binary's console window is gone.
+
+### Deferred (unchanged from 0.3.0)
+
+See the `[0.3.0]` Deferred section.
+
+---
+
 ## [0.3.0] — 2026-05-22
 
 First end-to-end install + self-update slice. The launcher now ships as a

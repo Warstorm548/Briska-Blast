@@ -1,6 +1,11 @@
 //! Launcher entry point. Synchronous main — Iced owns the async runtime
 //! via its `tokio` feature; we do not need `#[tokio::main]`.
 
+// Hide the Windows console window for release builds. Debug builds keep
+// it so `cargo run -p launcher` still shows tracing output. Non-Windows
+// targets ignore this attribute entirely.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod channel;
 mod identity;
