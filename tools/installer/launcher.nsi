@@ -37,7 +37,8 @@ UninstPage instfiles
 
 Section "Install"
   SetOutPath "$INSTDIR"
-  File "..\..\launcher\target\release\${APP_EXE}"
+  ; Workspace build — binary is at <repo>\target\release\, not launcher\target\.
+  File "..\..\target\release\${APP_EXE}"
   File "..\..\launcher\assets\icon.ico"
 
   WriteRegStr HKLM "Software\BriskaBlast\Launcher" "InstallDir" "$INSTDIR"

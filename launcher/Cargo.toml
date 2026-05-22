@@ -34,7 +34,9 @@ BriskaBlast Launcher — manages install, update, and launch of the BriskaBlast 
 game across stable, ea, and dev channels."""
 depends = "$auto"
 assets = [
-    ["target/release/briskablast-launcher", "usr/bin/", "755"],
+    # Path is relative to this Cargo.toml (launcher/). In a workspace build
+    # the binary lives at <repo>/target/release/, so we step up one level.
+    ["../target/release/briskablast-launcher", "usr/bin/", "755"],
     ["assets/briskablast-launcher.desktop", "usr/share/applications/", "644"],
     ["assets/icon.png", "usr/share/icons/hicolor/512x512/apps/briskablast-launcher.png", "644"],
 ]
