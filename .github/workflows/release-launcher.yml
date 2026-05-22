@@ -57,10 +57,11 @@ jobs:
           VERSION="${{ steps.ver.outputs.version }}"
           ARCHIVE="briskablast-launcher-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
           mkdir -p dist
+          # Workspace build — binary is at <repo>/target/release/, not
+          # launcher/target/release/. Step runs at repo root (no working-directory).
           cp target/release/briskablast-launcher dist/
-          tar czf "${ARCHIVE}" -C dist briskablast-launcher
+          tar czf "launcher/${ARCHIVE}" -C dist briskablast-launcher
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
-        working-directory: launcher
 
       - name: Download linuxdeploy
         run: |
@@ -71,7 +72,7 @@ jobs:
         run: |
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
-            --executable launcher/target/release/briskablast-launcher \
+            --executable target/release/briskablast-launcher \
             --desktop-file launcher/assets/briskablast-launcher.desktop \
             --icon-file launcher/assets/icon.png \
             --output appimage
@@ -128,7 +129,8 @@ jobs:
         run: |
           $version = "${{ steps.ver.outputs.version }}"
           $archive = "briskablast-launcher-$version-x86_64-pc-windows-msvc.zip"
-          Compress-Archive -Path "launcher/target/release/briskablast-launcher.exe" -DestinationPath $archive
+          # Workspace build — binary is at <repo>/target/release/, not launcher/target/.
+          Compress-Archive -Path "target/release/briskablast-launcher.exe" -DestinationPath $archive
 
       - name: Install NSIS
         run: choco install nsis --yes
