@@ -5,6 +5,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.3.2] — 2026-05-22
+
+Cleans up stale self-update artifacts that the `self_update` / `self-replace`
+rename-trick can leave behind in the install directory when the Windows
+deletion helper is killed (AV, crash, race with our own `process::exit(0)`
+right after the swap). Before this release, files like
+`.briskablast-launcher.<32-random>.__relocated__.exe` and
+`.briskablast-launcher.<32-random>.__selfdelete__.exe` would accumulate
+in the install dir over successive self-updates with no mop-up path.
+
+### Fixed
+
+- **Stale self-update orphans removed on startup**
+  (`launcher/src/updater/cleanup.rs`). New
+  `updater::cleanup_stale_update_artifacts()` runs once from `main`
+  between `init_tracing()` and `iced::application(...)`. It scans the
+  directory containing the running exe and removes files matching
+  `.<current_exe_stem>.*` whose name ends in one of the three
+  `self-replace` 1.5 suffixes: `.__relocated__.exe`, `.__selfdelete__.exe`,
+  `.__temp__.exe`. Symlinks are skipped (`symlink_metadata` + `is_file()`),
+  per-file failures are logged at `warn!` and swallowed so a locked file
+  never blocks startup. Pattern is anchored on the current binary's stem
+  rather than a hardcoded name, so a future renamed launcher binary still
+  scopes correctly. Includes a tempdir-based unit test covering the
+  three positive matches against three negative controls (the real exe,
+  a non-artifact dotfile, an artifact for a different binary stem).
+
+- **Version** 0.3.1 → 0.3.2. Patch bump — bugfix only, no API or install
+  layout changes from v0.3.1. Lets a `launcher-v0.3.2-dev.N` Release
+  parse as semver-greater than an installed v0.3.1.
+
+### Notes
+
+- Linux's `self-replace` overwrites the running exe via `tempfile` rename,
+  so leftovers there are vanishingly rare (only on a final-rename failure,
+  leaving a `.<stem>.__temp__*` file). Cleanup is harmless on Linux either
+  way — the suffix list either matches a real failed-update orphan or
+  no-ops.
+- Cleanup runs unconditionally on every launch, not just after an update.
+  A directory scan of a typical install dir is cheap, and the user-visible
+  bug class (helper killed mid-cleanup) means the orphan can outlive any
+  "did we just update" flag we'd otherwise gate on.
+
+### Deferred (unchanged from 0.3.1)
+
+See the `[0.3.0]` Deferred section.
+
+---
+
 ## [0.3.1] — 2026-05-22
 
 Hides the empty console window that Windows allocated behind the
