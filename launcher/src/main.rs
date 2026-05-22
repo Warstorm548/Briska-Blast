@@ -6,12 +6,13 @@ mod channel;
 mod identity;
 mod mock;
 mod ui;
+mod updater;
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> iced::Result {
     init_tracing();
-    iced::application(app::AppState::default, app::update, app::view)
+    iced::application(app::boot, app::update, app::view)
         .title(app::title)
         .theme(app::theme)
         .run()
