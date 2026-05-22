@@ -1,7 +1,7 @@
 //! Shared sizing constants + container style helpers so the five zones
 //! agree on dimensions and box boundaries.
 
-use iced::widget::container;
+use iced::widget::{button, container};
 use iced::{Background, Border, Color, Theme};
 
 pub const ZONE_GAP: u32 = 4;
@@ -33,5 +33,31 @@ pub fn menu_pane(_theme: &Theme) -> container::Style {
             radius: 0.0.into(),
         },
         ..container::Style::default()
+    }
+}
+
+pub fn tab_active(_theme: &Theme, _status: button::Status) -> button::Style {
+    button::Style {
+        background: Some(Background::Color(Color::from_rgba(1.0, 1.0, 1.0, 0.18))),
+        text_color: Color::WHITE,
+        border: Border {
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.6),
+            width: 1.5,
+            radius: 0.0.into(),
+        },
+        ..button::Style::default()
+    }
+}
+
+pub fn tab_inactive(_theme: &Theme, _status: button::Status) -> button::Style {
+    button::Style {
+        background: None,
+        text_color: Color::from_rgba(1.0, 1.0, 1.0, 0.7),
+        border: Border {
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.3),
+            width: 1.0,
+            radius: 0.0.into(),
+        },
+        ..button::Style::default()
     }
 }

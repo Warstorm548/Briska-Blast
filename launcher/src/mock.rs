@@ -43,4 +43,6 @@ pub const BRANCH_UPDATES_AVAILABLE: &[Channel] = &[Channel::Stable, Channel::Ea]
 
 pub const LAUNCHER_UPDATE_AVAILABLE: bool = true;
 
+pub const LAUNCHER_AVAILABLE_VERSION: &str = "0.2.1";
+
 pub const MOCK_PROGRESS_PERCENT: u8 = 35;
