@@ -1,7 +1,6 @@
 //! Top-level Iced state machine.
 //! AppState is the view-model the UI reads from; Message is the closed set
-//! of things the UI can ask to happen. v1 only meaningfully handles
-//! ChannelPicked; other messages log and no-op per the plan's acceptance.
+//! of things the UI can ask to happen.
 
 use crate::channel::Channel;
 use crate::identity::Identity;
@@ -11,6 +10,20 @@ use iced::widget::{column, container, row};
 use iced::{Element, Length, Task, Theme};
 use std::collections::BTreeMap;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    ChannelManagement,
+    Graphics,
+}
+
+#[derive(Debug, Clone)]
+pub enum CenterView {
+    Default,
+    Settings { tab: SettingsTab },
+    ChangeUsername { draft: String },
+    LauncherUpdate,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     PlayPressed,
@@ -19,6 +32,17 @@ pub enum Message {
     ChannelPicked(Channel),
     ChangeNamePressed,
     LauncherUpdatePressed,
+    CloseCenterMenu,
+    SettingsTabSelected(SettingsTab),
+    UsernameDraftChanged(String),
+    ConfirmUsernameChange,
+    #[allow(dead_code)]
+    UninstallChannel(Channel),
+    #[allow(dead_code)]
+    VerifyChannel(Channel),
+    #[allow(dead_code)]
+    GameSavePressed(Channel),
+    StartLauncherUpdatePressed,
 }
 
 pub struct AppState {
@@ -28,7 +52,9 @@ pub struct AppState {
     pub server_reachable: BTreeMap<Channel, bool>,
     pub branch_updates_available: Vec<Channel>,
     pub launcher_update_available: bool,
+    pub launcher_available_version: String,
     pub game_running: bool,
+    pub center_view: CenterView,
 }
 
 impl Default for AppState {
@@ -46,15 +72,54 @@ impl Default for AppState {
             server_reachable,
             branch_updates_available: mock::BRANCH_UPDATES_AVAILABLE.to_vec(),
             launcher_update_available: mock::LAUNCHER_UPDATE_AVAILABLE,
+            launcher_available_version: mock::LAUNCHER_AVAILABLE_VERSION.to_string(),
             game_running: false,
+            center_view: CenterView::Default,
         }
     }
 }
 
 pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
     tracing::debug!(?message, "ui message received");
-    if let Message::ChannelPicked(c) = message {
-        state.selected_channel = c;
+    match message {
+        Message::ChannelPicked(c) => state.selected_channel = c,
+        Message::OpenSettings => {
+            state.center_view = CenterView::Settings {
+                tab: SettingsTab::ChannelManagement,
+            };
+        }
+        Message::ChangeNamePressed => {
+            state.center_view = CenterView::ChangeUsername {
+                draft: state.identity.username.clone(),
+            };
+        }
+        Message::LauncherUpdatePressed => state.center_view = CenterView::LauncherUpdate,
+        Message::CloseCenterMenu => state.center_view = CenterView::Default,
+        Message::SettingsTabSelected(t) => {
+            if let CenterView::Settings { tab } = &mut state.center_view {
+                *tab = t;
+            }
+        }
+        Message::UsernameDraftChanged(s) => {
+            if let CenterView::ChangeUsername { draft } = &mut state.center_view {
+                *draft = s;
+            }
+        }
+        Message::ConfirmUsernameChange => {
+            if let CenterView::ChangeUsername { draft } = &state.center_view {
+                let trimmed = draft.trim();
+                if !trimmed.is_empty() {
+                    state.identity.username = trimmed.to_string();
+                    state.center_view = CenterView::Default;
+                }
+            }
+        }
+        Message::PlayPressed
+        | Message::UpdatePressed
+        | Message::StartLauncherUpdatePressed
+        | Message::UninstallChannel(_)
+        | Message::VerifyChannel(_)
+        | Message::GameSavePressed(_) => {}
     }
     Task::none()
 }

@@ -1,4 +1,4 @@
-//! Zone 3: title + "no menu selected" placeholder.
+//! Default center view: title + "no menu selected" placeholder.
 //! Foundation doc §5C: v1 center state.
 
 use crate::app::{AppState, Message};
