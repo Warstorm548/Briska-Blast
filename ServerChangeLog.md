@@ -52,9 +52,9 @@ identity-refresh endpoint the foundation doc has been planning.
   lexicographically.
 
 - **Version** 0.5.1 → 0.6.0. Minor bump — the `/register` request body
-  shape is incompatible with pre-0.6.0 launcher releases; pre-0.4.0
-  launchers will fail at boot until they're updated. Aligns with the
-  launcher v0.4.0 release.
+  shape is incompatible with launcher versions prior to v0.4.0, which
+  will fail at boot until they're updated. Aligns with the launcher
+  v0.4.0 release.
 
 ### Notes
 

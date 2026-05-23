@@ -5,13 +5,22 @@
 
 use crate::channel::Channel;
 use shared::protocol::messages::{RegisterRequest, RegisterResponse, UpdateUsernameRequest};
+use std::sync::OnceLock;
 use std::time::Duration;
 
-fn client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| e.to_string())
+/// Process-wide reqwest client. Initialised once on first call; reuse keeps
+/// the underlying connection pool warm across the per-launch /register
+/// fan-out and any subsequent /me/username calls, so we don't pay TLS setup
+/// every time. Build failure here is a "machine is broken" condition (TLS
+/// init); panicking is acceptable.
+fn http() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("reqwest client builder")
+    })
 }
 
 pub async fn register(
@@ -19,7 +28,7 @@ pub async fn register(
     req: RegisterRequest,
 ) -> Result<RegisterResponse, String> {
     let url = format!("https://{}/register", channel.host());
-    let resp = client()?
+    let resp = http()
         .post(&url)
         .json(&req)
         .send()
@@ -38,7 +47,7 @@ pub async fn update_username(
     req: UpdateUsernameRequest,
 ) -> Result<(), String> {
     let url = format!("https://{}/me/username", channel.host());
-    let resp = client()?
+    let resp = http()
         .post(&url)
         .json(&req)
         .send()

@@ -367,16 +367,27 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 // empty, but `on_submit` (Enter key) routes here too.
                 return Task::none();
             }
-            state.identity.username = trimmed;
-            state.welcome_draft.clear();
 
-            // Persist the identity file BEFORE any server reach-out so the
-            // file is present even if the launcher crashes between Confirm
-            // and the first /register response landing.
-            if let Err(e) = identity::save(&state.identity) {
-                tracing::warn!(error = %e, "failed to save initial identity");
+            // Build a candidate and persist BEFORE mutating shared state, so
+            // a save failure leaves both the on-disk file and AppState in
+            // their pre-Confirm form. The welcome screen stays up and the
+            // typed text in welcome_draft is preserved so the user can retry
+            // without retyping. We must NOT proceed to /register on a save
+            // failure: otherwise the server would record an identity we have
+            // no on-disk record of, and the next boot would issue a fresh
+            // player_id (different from the one already on the server).
+            let mut candidate = state.identity.clone();
+            candidate.username = trimmed;
+            if let Err(e) = identity::save(&candidate) {
+                tracing::warn!(
+                    error = %e,
+                    "failed to save initial identity; staying on welcome screen"
+                );
+                return Task::none();
             }
 
+            state.identity = candidate;
+            state.welcome_draft.clear();
             state.awaiting_username = false;
             return Task::batch(register_tasks(state));
         }

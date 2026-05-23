@@ -45,15 +45,28 @@ pub async fn users_page(
         else {
             continue;
         };
-        let username: String = conn.get(&key).await.unwrap_or_default();
-        let raw_flag: String = conn
-            .get(format!("player:{}:dev_flag", id))
-            .await
-            .unwrap_or_default();
+        // Read both as Option<String> so we can distinguish a missing key
+        // (the key was deleted between the KEYS scan and our GET — fine, just
+        // skip) from a real connection failure (must fail the request).
+        let username: Option<String> = match conn.get(&key).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(error = %e, key = %key, "redis read failed");
+                return Redirect::to("/admin/users?err=Redis+error").into_response();
+            }
+        };
+        let Some(username) = username else { continue };
+        let raw_flag: Option<String> = match conn.get(format!("player:{}:dev_flag", id)).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(error = %e, id = %id, "redis read failed");
+                return Redirect::to("/admin/users?err=Redis+error").into_response();
+            }
+        };
         users.push(UserRow {
             id: id.to_string(),
             username,
-            dev_flag: raw_flag == "true",
+            dev_flag: raw_flag.as_deref() == Some("true"),
         });
     }
 
@@ -133,10 +146,13 @@ pub async fn save_dev_flags(
             .map(|v| v == "on")
             .unwrap_or(false);
         let value = if checked { "true" } else { "false" };
-        let _: () = conn
-            .set(format!("player:{}:dev_flag", id), value)
+        if let Err(e) = conn
+            .set::<_, _, ()>(format!("player:{}:dev_flag", id), value)
             .await
-            .unwrap_or(());
+        {
+            tracing::error!(error = %e, id = %id, "failed to set dev_flag");
+            return Redirect::to("/admin/users?err=Redis+error").into_response();
+        }
     }
 
     Redirect::to("/admin/users?ok=Saved").into_response()
