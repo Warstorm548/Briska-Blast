@@ -62,6 +62,7 @@ async fn main() {
 
     let mut game_router = Router::new()
         .route("/register", post(api::register::register))
+        .route("/me/username", post(api::me::update_username))
         .route("/session/:code", get(api::session::get_session))
         .route("/session/:code", delete(api::session::close_session))
         .route("/ws/session/:code", get(signaling::ws::ws_handler))
@@ -94,6 +95,8 @@ async fn main() {
         .route("/admin/update/cancel", post(admin::dashboard::cancel_update))
         .route("/admin/update/settings", post(admin::dashboard::save_update_settings))
         .route("/admin/update/rollback", post(admin::dashboard::rollback_update))
+        .route("/admin/users", get(admin::users::users_page))
+        .route("/admin/users/dev-flag", post(admin::users::save_dev_flags))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

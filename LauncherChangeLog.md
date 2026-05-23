@@ -5,6 +5,107 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.4.0] — 2026-05-23
+
+Lights up the real identity + dev-flag pipeline. Until now `visible_channels`
+was hardcoded in `mock.rs`, identity was a `mock_identity()` stub with no
+file I/O, and the Settings → Game Channel Management section ignored
+`visible_channels` entirely by iterating `Channel::all()`. v0.4.0 replaces
+the mocks with a per-launch handshake against each channel server: identity
+is loaded from disk (or freshly registered), the dev server's response
+populates `dev_flag` for **this launch only**, and `state.visible_channels`
+is recomputed accordingly. The launcher's Settings tab and left-rail
+picker both now consume that list, so the Dev row is hidden everywhere
+unless an operator has flipped the user's dev_flag in the new admin Users
+tab on the dev server.
+
+Requires the matching server v0.6.0 (idempotent `/register` shape +
+`/admin/users`). Earlier servers will 4xx the boot register calls — the
+launcher tolerates this by leaving the per-channel row marked unreachable
+and keeping Dev hidden.
+
+### Added
+
+- **First-launch welcome screen** (`launcher/src/ui/welcome.rs`,
+  `launcher/src/app.rs`). On a launch with no username on file
+  (`state.identity.username.trim().is_empty()`), `view()` short-circuits
+  to a full-window centered welcome card with a text input + Confirm
+  button before the main 5-zone layout renders. Blank submissions are
+  rejected (Confirm is disabled, and the `on_submit` Enter-key path
+  defence-checks again). `boot()` holds back the 3 per-channel
+  `/register` tasks until the welcome flow completes, so the server's
+  first record of this user carries their chosen name rather than a
+  placeholder. The identity file is persisted **before** the first
+  /register call leaves the process, so a crash between Confirm and the
+  server response still leaves a usable file on disk and the next boot
+  skips straight to registration. Returning users (with a username on
+  file from a prior launch) never see this screen.
+
+- **`launcher/src/paths.rs`** (new). All launcher-managed user data lives
+  under `<install_dir>/data/` next to the binary:
+  `data/identity.json` for the credential file and `data/saves/<channel>/`
+  reserved for the existing per-channel "Game Save" buttons. This is
+  explicitly the "for the time being" choice — colocation is easier to
+  inspect / back up / reset during pre-stable development. Known
+  limitation: `.deb` installs land the binary in `/usr/bin/` which isn't
+  user-writable; portable installs (tarball, NSIS) work fine. Hardened
+  XDG / `%APPDATA%` placement is deferred.
+
+- **Identity file I/O** (`launcher/src/identity.rs`). New `load()`
+  reads `data/identity.json` (returns `Ok(None)` on first run); new
+  `save()` writes atomically via tmp-file + rename and chmods `0600`
+  on Unix. Parse / I/O failures fall through to fresh registration —
+  a corrupted identity file is self-healing on next launch.
+
+- **`launcher/src/server_api.rs`** (new). Thin reqwest-backed client for
+  `POST /register` and `POST /me/username` against
+  `https://{channel.host()}/...`. 10s timeout, rustls-tls only.
+
+- **Per-launch `/register` calls** in `app::boot`
+  (`launcher/src/app.rs`). On every launch — not just first run — the
+  launcher fires three parallel `register` tasks alongside the existing
+  GitHub update check, passing any prior creds it has cached so the
+  server reuses the same `player_id`. The dev server's `dev_flag` field
+  drives `state.dev_flag` and the recomputed `state.visible_channels =
+  [Stable, Ea(, Dev if dev_flag)]`. Server is the source of truth; the
+  flag is never persisted on the user's machine. The dev server being
+  unreachable explicitly forces `dev_flag = false` (foundation §3
+  visibility-matrix row "No / — / (unknowable) / No").
+
+- **Username change fan-out** in `Message::ConfirmUsernameChange`. After
+  the local rename + identity-file rewrite, the launcher fires one
+  `update_username` task per channel where it has credentials. Failures
+  are logged but don't block the UI — the next boot's `/register` will
+  resync the server in any case.
+
+### Changed
+
+- **Settings → Game Channel Management actually consumes
+  `visible_channels`** (`launcher/src/ui/center/settings.rs`).
+  `channels_section()` and `important_files_section()` now iterate
+  `&state.visible_channels` instead of `Channel::all()`. This is the bug
+  the v0.4.0 work was named after — the dev row no longer appears in
+  Settings for unflagged users.
+
+- **`mock.rs` no longer fakes identity or visibility**. `mock_identity()`
+  and `VISIBLE_CHANNELS` are gone. The only mock that remains is
+  `BRANCH_UPDATES_AVAILABLE`, which a future slice will replace once the
+  game-files update stream lands.
+
+- **Default `visible_channels` is `[Stable, Ea]`**. Before any server
+  response arrives — and on every cold launch — the Dev row stays hidden.
+
+- **`Channel` gains a `dir_name()` const** returning the lowercase form
+  used both in the serde rename and the new `data/saves/<channel>/`
+  directory structure.
+
+- **Version** 0.3.3 → 0.4.0. Minor bump — `data/identity.json` is a new
+  file, the launcher now makes outbound HTTPS calls on every boot, and
+  the launcher requires server v0.6.0. No migration of pre-v0.4.0
+  installations is needed: there was no on-disk identity to migrate.
+
+---
+
 ## [0.3.3] — 2026-05-23
 
 Adds a third tab to the Settings center pane — **Launcher Options** — that

@@ -39,6 +39,16 @@ impl Channel {
             Channel::Dev => "Dev",
         }
     }
+
+    /// Lowercase identifier used on disk (`data/saves/<dir_name>/`) and in
+    /// serde wire format. Matches the `rename_all = "lowercase"` above.
+    pub const fn dir_name(self) -> &'static str {
+        match self {
+            Channel::Stable => "stable",
+            Channel::Ea => "ea",
+            Channel::Dev => "dev",
+        }
+    }
 }
 
 impl fmt::Display for Channel {
