@@ -75,7 +75,124 @@ input:checked + .slider:before { transform: translateX(16px); background: #fff; 
 .auto-settings { margin-left: 4px; margin-bottom: 4px; }
 select { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; padding: 6px 8px; font-size: 0.875rem; }
 input[type=datetime-local] { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; padding: 6px 8px; font-size: 0.875rem; }
+.nav-left { display: flex; align-items: center; gap: 18px; }
+.nav-link { color: #8b949e; text-decoration: none; font-size: 0.85rem; padding-bottom: 2px; border-bottom: 2px solid transparent; }
+.nav-link:hover { color: #c9d1d9; }
+.nav-link-active { color: #e94560; border-bottom-color: #e94560; }
+.user-table { width: 100%; border-collapse: collapse; }
+.user-table th, .user-table td { padding: 8px 6px; text-align: left; border-bottom: 1px solid #21262d; font-size: 0.85rem; }
+.user-table th { color: #8b949e; font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; }
+.user-table td.empty { color: #6e7681; text-align: center; padding: 18px 6px; }
+.mono { font-family: ui-monospace, SFMono-Regular, monospace; }
 ";
+
+fn nav_html(active: &str) -> String {
+    let dash_active = if active == "dashboard" { " nav-link-active" } else { "" };
+    let users_active = if active == "users" { " nav-link-active" } else { "" };
+    format!(
+        r#"<nav>
+  <div class="nav-left">
+    <span class="brand">Briska Blast Admin</span>
+    <a href="/admin/dashboard" class="nav-link{dash_active}">Dashboard</a>
+    <a href="/admin/users" class="nav-link{users_active}">Users</a>
+  </div>
+  <form method="POST" action="/admin/logout" style="margin:0">
+    <button type="submit" class="btn btn-sm">Logout</button>
+  </form>
+</nav>"#
+    )
+}
+
+pub struct UserRow {
+    pub id: String,
+    pub username: String,
+    pub dev_flag: bool,
+}
+
+pub fn users_page(
+    users: &[UserRow],
+    q: &str,
+    field: &str,
+    message: Option<(bool, String)>,
+) -> String {
+    let nav = nav_html("users");
+    let msg_html = match &message {
+        Some((true, text)) => format!(r#"<div class="msg-ok">&#10003; {}</div>"#, escape(text)),
+        Some((false, text)) => format!(r#"<div class="msg-err">&#10007; {}</div>"#, escape(text)),
+        None => String::new(),
+    };
+
+    let field_username_sel = if field == "id" { "" } else { " selected" };
+    let field_id_sel = if field == "id" { " selected" } else { "" };
+    let q_attr = escape(q);
+    let count = users.len();
+
+    let rows_html = if users.is_empty() {
+        r#"<tr><td colspan="3" class="empty">No users match.</td></tr>"#.to_string()
+    } else {
+        users
+            .iter()
+            .map(|u| {
+                let chk = if u.dev_flag { " checked" } else { "" };
+                let id_e = escape(&u.id);
+                let name_e = escape(&u.username);
+                format!(
+                    r#"<tr><td class="mono">{id_e}</td><td>{name_e}</td><td><input type="checkbox" name="dev_{id_e}"{chk}></td></tr>"#
+                )
+            })
+            .collect::<String>()
+    };
+
+    let known_ids = users
+        .iter()
+        .map(|u| u.id.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let known_ids_attr = escape(&known_ids);
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Briska Blast — Admin Users</title>
+  <style>{CSS}</style>
+</head>
+<body>
+<div class="page">
+  <div class="card">
+    {nav}
+    <div style="height:14px"></div>
+    {msg_html}
+    <div class="section">
+      <p class="section-title">Users</p>
+      <p class="section-sub">{count} player(s) on this server. Tick the Dev box to grant dev-channel access; untick to revoke.</p>
+      <form method="GET" action="/admin/users" class="row" style="margin-bottom:14px">
+        <input type="text" name="q" value="{q_attr}" placeholder="Search…">
+        <select name="field">
+          <option value="username"{field_username_sel}>by username</option>
+          <option value="id"{field_id_sel}>by id</option>
+        </select>
+        <button type="submit" class="btn btn-sm">Search</button>
+        <a href="/admin/users" class="btn btn-sm" style="text-decoration:none;display:inline-block">Clear</a>
+      </form>
+      <form method="POST" action="/admin/users/dev-flag">
+        <input type="hidden" name="known_ids" value="{known_ids_attr}">
+        <table class="user-table">
+          <thead><tr><th>ID</th><th>Username</th><th>Dev</th></tr></thead>
+          <tbody>{rows_html}</tbody>
+        </table>
+        <button type="submit" class="btn btn-primary" style="margin-top:14px">Confirm changes</button>
+      </form>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+"#
+    )
+}
 
 pub fn login_page(error: Option<&str>) -> String {
     let err_html = error
@@ -257,6 +374,7 @@ pub fn dashboard_page(data: &DashboardData) -> String {
         String::new()
     };
 
+    let nav = nav_html("dashboard");
     let min_launcher = escape(&data.min_launcher_version);
     let min_game = escape(&data.min_game_version);
     let game_port = data.game_port;
@@ -277,13 +395,9 @@ pub fn dashboard_page(data: &DashboardData) -> String {
 <body>
 <div class="page">
   <div class="card">
-    <nav>
-      <span class="brand">Briska Blast Admin</span>
-      <form method="POST" action="/admin/logout" style="margin:0">
-        <button type="submit" class="btn btn-sm">Logout</button>
-      </form>
-    </nav>
+    {nav}
 
+    <div style="height:14px"></div>
     {default_pw_warn}{msg_html}
 
     <div class="section">

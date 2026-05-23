@@ -5,6 +5,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.0] — 2026-05-23
+
+First cut of the per-user **dev_flag** pipeline that gates the launcher's
+Dev-channel UI. Adds an admin "Users" tab to grant/revoke dev access,
+widens the player_id space, and reshapes `/register` into the per-launch
+identity-refresh endpoint the foundation doc has been planning.
+
+### Added
+
+- **`POST /register` is now idempotent** (`server/src/api/register.rs`).
+  The launcher sends a `RegisterRequest { username, prior_player_id,
+  prior_secret_token }` on every boot. When the prior creds match Redis,
+  the server reuses the existing `player_id` and refreshes the stored
+  username; when they don't match (corrupted launcher identity file) the
+  server falls through to fresh issuance instead of 401-ing. The response
+  now carries `username` (echo-back) and `dev_flag` (read from
+  `player:<id>:dev_flag`, default `false`). Username trimmed and capped at
+  32 chars; rate-limit unchanged (5/min per IP).
+
+- **`POST /me/username`** (`server/src/api/me.rs`). Updates
+  `player:<id>:username` after token validation via the existing
+  `validate_player` helper. Returns `204 No Content`. New
+  `rl_me_username` per-IP rate limiter mirrors `rl_register` (5/min). Used
+  by the launcher's username change UI.
+
+- **Admin `/admin/users` tab** (`server/src/admin/users.rs`,
+  `server/src/admin/templates.rs`). New page lists every player by id +
+  username with a Dev-access checkbox per row. Search bar filters by
+  username or by id. A single Confirm-changes button submits a hidden
+  `known_ids` field plus the visible checkboxes;
+  `POST /admin/users/dev-flag` writes `player:<id>:dev_flag = "true"|"false"`
+  per known id (refuses to write for ids with no token-hash record, so a
+  tampered form can't manufacture players). Existing `Dashboard` ↔ `Users`
+  nav is shared between both pages via a new `nav_html(active)` helper in
+  `templates.rs`; CSS-only styling, no JS.
+
+### Changed
+
+- **`PlayerId::from_counter` width 7 → 9** in `shared/src/types/player.rs`.
+  Newly issued ids are now zero-padded to 9 digits
+  (`PlayerId::from_counter(42).to_string() == "000000042"`). Existing
+  7-digit ids in Redis remain valid — they're stored as plain strings and
+  match by hash, not by width. The admin Users tab numerically sorts ids
+  so the two widths interleave by counter value rather than
+  lexicographically.
+
+- **Version** 0.5.1 → 0.6.0. Minor bump — the `/register` request body
+  shape is incompatible with launcher versions prior to v0.4.0, which
+  will fail at boot until they're updated. Aligns with the launcher
+  v0.4.0 release.
+
+### Notes
+
+- Auth on `/admin/users*` reuses the existing `require_session()` cookie
+  gate. CSRF protection / per-admin rate limiting are explicitly deferred
+  — user direction: "will harden the routes for this later on this just a
+  start."
+- Game client / signaling paths are untouched. The dev_flag is consumed
+  by the launcher UI only; server-side rejection of dev-channel routes
+  based on the flag is a follow-up.
+
+---
+
 ## [0.5.1] — 2026-05-20
 
 Patch release — two targeted fixes to the auto-update flow surfaced

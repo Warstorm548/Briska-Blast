@@ -1,5 +1,6 @@
 pub mod host;
 pub mod join;
+pub mod me;
 pub mod register;
 pub mod session;
 pub mod start;

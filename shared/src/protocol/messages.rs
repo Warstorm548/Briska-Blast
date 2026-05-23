@@ -3,10 +3,34 @@ use serde::{Deserialize, Serialize};
 use crate::types::gamemode::GameMode;
 use crate::types::session::SessionStatus;
 
-#[derive(Debug, Serialize, Deserialize)]
+/// Sent by the launcher on every boot. `prior_*` are present when the launcher
+/// has a cached identity for this channel — the server reuses the existing
+/// player_id when the token hash matches, otherwise it falls through to a
+/// fresh issuance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterRequest {
+    pub username: String,
+    pub prior_player_id: Option<String>,
+    pub prior_secret_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterResponse {
     pub player_id: String,
     pub secret_token: String,
+    /// Echo of the username the server now has on file for this player.
+    pub username: String,
+    /// Server-side per-user gate. The dev channel UI in the launcher is
+    /// hidden unless this is `true` on the dev server's response — the
+    /// launcher never persists this; the server is the source of truth.
+    pub dev_flag: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateUsernameRequest {
+    pub player_id: String,
+    pub secret_token: String,
+    pub username: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

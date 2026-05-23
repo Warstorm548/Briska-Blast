@@ -2,7 +2,6 @@
 //! Matches mockup Example Imgs/LuncherSettings.png.
 
 use crate::app::{AppState, Message, SettingsTab};
-use crate::channel::Channel;
 use crate::ui::theme::{self, TITLE_SIZE, ZONE_GAP};
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Element, Length};
@@ -59,9 +58,11 @@ fn tab_button(
 
 fn body<'a>(state: &'a AppState, active: SettingsTab) -> Element<'a, Message> {
     match active {
-        SettingsTab::ChannelManagement => column![channels_section(), important_files_section()]
-            .spacing(ZONE_GAP * 4)
-            .into(),
+        SettingsTab::ChannelManagement => {
+            column![channels_section(state), important_files_section(state)]
+                .spacing(ZONE_GAP * 4)
+                .into()
+        }
         SettingsTab::Graphics => container(text("Coming soon.").size(16))
             .center_x(Length::Fill)
             .center_y(Length::Fill)
@@ -72,9 +73,10 @@ fn body<'a>(state: &'a AppState, active: SettingsTab) -> Element<'a, Message> {
     }
 }
 
-fn channels_section() -> Element<'static, Message> {
+fn channels_section(state: &AppState) -> Element<'static, Message> {
     let mut col = column![text("Channels").size(20)].spacing(ZONE_GAP);
-    for c in Channel::all() {
+    for c in &state.visible_channels {
+        let c = *c;
         col = col.push(
             row![
                 bordered_cell(c.label(), 120.0),
@@ -87,9 +89,10 @@ fn channels_section() -> Element<'static, Message> {
     col.into()
 }
 
-fn important_files_section() -> Element<'static, Message> {
+fn important_files_section(state: &AppState) -> Element<'static, Message> {
     let mut col = column![text("Game Important Files").size(20)].spacing(ZONE_GAP);
-    for c in Channel::all() {
+    for c in &state.visible_channels {
+        let c = *c;
         col = col.push(
             row![
                 bordered_cell(c.label(), 120.0),
