@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [0.3.3] — 2026-05-22
+## [0.3.3] — 2026-05-23
 
 Adds a third tab to the Settings center pane — **Launcher Options** — that
 inline-renders the existing launcher update controls (current version,
