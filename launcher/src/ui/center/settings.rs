@@ -7,9 +7,9 @@ use crate::ui::theme::{self, TITLE_SIZE, ZONE_GAP};
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Element, Length};
 
-pub fn view(_state: &AppState, active: SettingsTab) -> Element<'_, Message> {
+pub fn view(state: &AppState, active: SettingsTab) -> Element<'_, Message> {
     container(
-        column![header_row(), tab_bar(active), body(active)].spacing(ZONE_GAP * 3),
+        column![header_row(), tab_bar(active), body(state, active)].spacing(ZONE_GAP * 3),
     )
     .style(theme::menu_pane)
     .width(Length::Fill)
@@ -32,6 +32,7 @@ fn tab_bar(active: SettingsTab) -> Element<'static, Message> {
     row![
         tab_button("Game Channel Management", SettingsTab::ChannelManagement, active),
         tab_button("Game Graphics Settings", SettingsTab::Graphics, active),
+        tab_button("Launcher Options", SettingsTab::LauncherOptions, active),
     ]
     .spacing(ZONE_GAP)
     .into()
@@ -56,7 +57,7 @@ fn tab_button(
         .into()
 }
 
-fn body(active: SettingsTab) -> Element<'static, Message> {
+fn body<'a>(state: &'a AppState, active: SettingsTab) -> Element<'a, Message> {
     match active {
         SettingsTab::ChannelManagement => column![channels_section(), important_files_section()]
             .spacing(ZONE_GAP * 4)
@@ -67,6 +68,7 @@ fn body(active: SettingsTab) -> Element<'static, Message> {
             .width(Length::Fill)
             .height(Length::Fill)
             .into(),
+        SettingsTab::LauncherOptions => super::launcher_update::content(state),
     }
 }
 

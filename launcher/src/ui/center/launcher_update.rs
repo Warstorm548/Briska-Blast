@@ -12,6 +12,29 @@ use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Element, Length};
 
 pub fn view(state: &AppState) -> Element<'_, Message> {
+    let header = row![
+        text("Launcher Update").size(TITLE_SIZE),
+        Space::new().width(Length::Fill),
+        button(text("Close")).on_press(Message::CloseCenterMenu).padding(8),
+    ]
+    .align_y(Alignment::Center);
+
+    container(
+        column![header, content(state)]
+            .spacing(ZONE_GAP * 4)
+            .align_x(Alignment::Center),
+    )
+    .style(theme::menu_pane)
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .padding(16)
+    .into()
+}
+
+/// The version + availability + buttons + status block, without the outer
+/// `menu_pane` container or the "Launcher Update" header row. Reused by the
+/// Settings → Launcher Options tab, which provides its own header/container.
+pub fn content(state: &AppState) -> Element<'_, Message> {
     let current = env!("CARGO_PKG_VERSION");
     let available = state.launcher_available_version.as_str();
 
@@ -79,30 +102,13 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
         Space::new().height(Length::Fixed(1.0)).into()
     };
 
-    let body = column![
+    column![
         text(format!("Current version: {current}")).size(16),
         availability_cell,
         buttons,
         status_line,
     ]
     .spacing(ZONE_GAP * 3)
-    .align_x(Alignment::Center);
-
-    let header = row![
-        text("Launcher Update").size(TITLE_SIZE),
-        Space::new().width(Length::Fill),
-        button(text("Close")).on_press(Message::CloseCenterMenu).padding(8),
-    ]
-    .align_y(Alignment::Center);
-
-    container(
-        column![header, body]
-            .spacing(ZONE_GAP * 4)
-            .align_x(Alignment::Center),
-    )
-    .style(theme::menu_pane)
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .padding(16)
+    .align_x(Alignment::Center)
     .into()
 }

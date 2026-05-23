@@ -5,6 +5,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.3.3] — 2026-05-23
+
+Adds a third tab to the Settings center pane — **Launcher Options** — that
+inline-renders the existing launcher update controls (current version,
+availability cell, *Check for Updates* / *Start Update* buttons, status line).
+Previously the launcher update view was only reachable via the top-bar
+"Update available" banner, which is itself only clickable once GitHub
+Releases reports a newer launcher. A user who wanted to verify their
+installed version or manually re-run the update check had no entry point
+when no update was being advertised. The new tab gives that flow a
+permanent, always-accessible home in Settings.
+
+### Added
+
+- **Settings → Launcher Options tab** (`launcher/src/ui/center/settings.rs`,
+  `launcher/src/app.rs`). New `SettingsTab::LauncherOptions` variant joins
+  the existing `ChannelManagement` and `Graphics` tabs; selecting it renders
+  the launcher update controls inline beneath the Settings tab bar. No new
+  messages — the existing `CheckForUpdatesPressed` and
+  `StartLauncherUpdatePressed` flows are reused as-is, so the in-flight /
+  game-running / no-update-available safety gates still apply identically.
+
+### Changed
+
+- **`launcher_update::view` split into `view` + `content`**
+  (`launcher/src/ui/center/launcher_update.rs`). The inner version /
+  availability / buttons / status block moved into a new public
+  `content(state)` helper. `view(state)` keeps wrapping it with the
+  standalone "Launcher Update" header and `menu_pane` container so the
+  top-bar banner entry point (`CenterView::LauncherUpdate`) is visually
+  unchanged. The Settings tab calls `content(state)` directly to avoid a
+  duplicate header / Close button inside the Settings pane.
+
+- **Version** 0.3.2 → 0.3.3. Patch bump — UX-only addition. No changes to
+  the update logic, GitHub Releases query, install layout, or any public
+  API. The new entry point routes through the same code paths a top-bar
+  banner click already used.
+
+---
+
 ## [0.3.2] — 2026-05-22
 
 Cleans up stale self-update artifacts that the `self_update` / `self-replace`

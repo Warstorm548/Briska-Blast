@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 pub enum SettingsTab {
     ChannelManagement,
     Graphics,
+    LauncherOptions,
 }
 
 #[derive(Debug, Clone)]
