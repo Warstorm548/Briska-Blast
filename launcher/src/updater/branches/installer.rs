@@ -11,7 +11,15 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
+
+/// Max time to establish a TCP+TLS connection to GitHub's asset CDN.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Max total time for a single download. Generous to accommodate the
+/// expected ~100MB-1GB game artifacts on slow links; trips only when a
+/// connection genuinely hangs rather than capping legitimate downloads.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub const MANIFEST_FILENAME: &str = "installed.json";
 
@@ -70,7 +78,10 @@ pub fn select_platform_asset(release: &GameRelease) -> Option<&ReleaseAsset> {
     const NEEDLE: &str = "windows.zip";
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     const NEEDLE: &str = "unsupported";
-    release.assets.iter().find(|a| a.name.contains(NEEDLE))
+    // ends_with rather than contains so we don't accidentally pick a
+    // companion file like `…linux.tar.gz.sha256` or `…windows.zip.sig` if
+    // checksum / signature assets are ever attached alongside the artifact.
+    release.assets.iter().find(|a| a.name.ends_with(NEEDLE))
 }
 
 /// Download + extract + manifest. The chosen install dir is
@@ -112,6 +123,8 @@ where
 
     let client = reqwest::Client::builder()
         .user_agent("briskablast-launcher")
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(DOWNLOAD_TIMEOUT)
         .build()
         .map_err(|e| format!("http client build: {e}"))?;
     let resp = client

@@ -540,9 +540,37 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 tracing::warn!("InstallConfirmed for Dev without dev_flag — refusing");
                 return Task::none();
             }
+            // Refuse the install if /register never produced creds for this
+            // channel — InstallComplete's identity-update step would silently
+            // no-op (channels.get_mut returns None), leaving install metadata
+            // unpersisted and orphaning the on-disk files.
+            if !state.identity.channels.contains_key(&channel) {
+                tracing::warn!(
+                    ?channel,
+                    "InstallConfirmed for {channel} with missing credentials — refusing"
+                );
+                return Task::none();
+            }
             if state.install_in_progress.is_some() {
                 return Task::none();
             }
+            // Parse the expected version up front so the staleness check
+            // inside the async task compares Version-to-Version (handles
+            // canonical-form differences like `1.2.3-dev.1` vs an equivalent
+            // non-canonical string) instead of doing string equality. A
+            // parse failure here is an upstream contract bug — log loudly
+            // but proceed; the downstream installer is the safety net.
+            let expected_version = match semver::Version::parse(&version) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        version,
+                        "expected version from install prompt is not valid semver"
+                    );
+                    None
+                }
+            };
             state.install_in_progress = Some(channel);
             return Task::perform(
                 async move {
@@ -551,12 +579,14 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         return Err("release disappeared from GitHub between check and install"
                             .to_string());
                     };
-                    if release.version.to_string() != version {
-                        tracing::warn!(
-                            expected = %version,
-                            actual = %release.version,
-                            "release version changed between check and install"
-                        );
+                    if let Some(expected) = expected_version.as_ref() {
+                        if &release.version != expected {
+                            tracing::warn!(
+                                expected = %expected,
+                                actual = %release.version,
+                                "release version changed between check and install"
+                            );
+                        }
                     }
                     crate::updater::branches::download_and_install(
                         channel,

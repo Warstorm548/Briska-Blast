@@ -23,12 +23,25 @@ fn update_cell(state: &AppState) -> Element<'_, Message> {
     // becomes "Install <Channel> Game" and routes to the install prompt.
     // The installed-but-outdated / installed-and-up-to-date label states
     // land in Stage 4 (version detection + state machine).
-    let installed = state
-        .identity
-        .channels
-        .get(&state.selected_channel)
-        .and_then(|c| c.install_location.as_ref())
-        .is_some();
+    // Treat a channel as installed only when BOTH install_location AND
+    // installed_version are present — InstallComplete writes both
+    // atomically, so a half-set state means something corrupted the row.
+    // Falling back to "not installed" is the safer rendering: it prompts
+    // the user to re-install rather than offering a "Play" / "Update"
+    // button that points at incomplete metadata.
+    let installed = match state.identity.channels.get(&state.selected_channel) {
+        Some(c) if c.install_location.is_some() && c.installed_version.is_some() => true,
+        Some(c) if c.install_location.is_some() != c.installed_version.is_some() => {
+            tracing::warn!(
+                channel = %state.selected_channel,
+                has_location = c.install_location.is_some(),
+                has_version = c.installed_version.is_some(),
+                "channel install state inconsistent — treating as not installed"
+            );
+            false
+        }
+        _ => false,
+    };
     let label: String = if state.install_in_progress == Some(state.selected_channel) {
         "Installing\u{2026}".into()
     } else if installed {

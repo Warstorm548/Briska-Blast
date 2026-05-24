@@ -85,26 +85,44 @@ fn latest_release_blocking(channel: Channel) -> Result<Option<GameRelease>, Stri
 }
 
 /// Anchored channel match. The stripped form (no `game-v` prefix) is:
-///   stable -> "1.2.3"           (no dash)
-///   ea     -> "1.2.3-ea.4"
-///   dev    -> "1.2.3-dev.5"
-/// The build counter N must be purely numeric — rejects `1.2.3-dev.1-foo`.
+///   stable -> "1.2.3"           (no prerelease at all)
+///   ea     -> "1.2.3-ea.4"      (prerelease == "ea.<N>")
+///   dev    -> "1.2.3-dev.5"     (prerelease == "dev.<N>")
+///
+/// Parses through `semver::Version` and inspects the prerelease identifiers
+/// directly, so a substring like `-dev.` appearing mid-prerelease (e.g.
+/// `1.2.3-pre-dev.1`) doesn't accidentally classify a non-channel build as
+/// belonging to dev. The first identifier must equal the channel marker
+/// exactly; the second must be a non-empty numeric counter; nothing after.
 fn parse_for_channel(stripped: &str, channel: Channel) -> Option<Version> {
-    let suffix = match channel {
+    let v = Version::parse(stripped).ok()?;
+    match channel {
         Channel::Stable => {
-            if stripped.contains('-') {
+            if v.pre.is_empty() {
+                Some(v)
+            } else {
+                None
+            }
+        }
+        Channel::Ea | Channel::Dev => {
+            let marker = if matches!(channel, Channel::Ea) { "ea" } else { "dev" };
+            let pre = v.pre.as_str();
+            let mut parts = pre.split('.');
+            if parts.next()? != marker {
                 return None;
             }
-            return Version::parse(stripped).ok();
+            let counter = parts.next()?;
+            if counter.is_empty() || !counter.chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            // Reject anything beyond exactly `<marker>.<N>` — e.g. a third
+            // dotted identifier — so the channel suffix stays anchored.
+            if parts.next().is_some() {
+                return None;
+            }
+            Some(v)
         }
-        Channel::Ea => "-ea.",
-        Channel::Dev => "-dev.",
-    };
-    let (_base, after) = stripped.split_once(suffix)?;
-    if after.is_empty() || !after.chars().all(|c| c.is_ascii_digit()) {
-        return None;
     }
-    Version::parse(stripped).ok()
 }
 
 #[cfg(test)]
@@ -136,5 +154,15 @@ mod tests {
     fn rejects_non_numeric_build_counter() {
         assert!(parse_for_channel("1.2.3-dev.foo", Channel::Dev).is_none());
         assert!(parse_for_channel("1.2.3-dev.1-extra", Channel::Dev).is_none());
+    }
+
+    /// Regression: previous substring-split would accept `-dev.` appearing
+    /// anywhere in the prerelease (e.g. `pre-dev.1`), mis-classifying
+    /// non-channel builds as dev. The semver-aware check rejects them.
+    #[test]
+    fn rejects_unanchored_channel_marker() {
+        assert!(parse_for_channel("1.2.3-pre-dev.1", Channel::Dev).is_none());
+        assert!(parse_for_channel("1.2.3-rc-ea.1", Channel::Ea).is_none());
+        assert!(parse_for_channel("1.2.3-dev.1.extra", Channel::Dev).is_none());
     }
 }
