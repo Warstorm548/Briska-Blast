@@ -104,19 +104,120 @@ where
     let asset_name = asset.name.clone();
     let asset_url = asset.download_url.clone();
 
-    let install_dir = install_root.join(channel.dir_name());
-    if install_dir.exists() {
-        tokio::fs::remove_dir_all(&install_dir)
-            .await
-            .map_err(|e| format!("clean install dir: {e}"))?;
-    }
-    tokio::fs::create_dir_all(&install_dir)
-        .await
-        .map_err(|e| format!("create install dir: {e}"))?;
+    // Transactional install: all destructive work happens in a uuid-suffixed
+    // STAGING sibling of the final install dir. A mid-download / mid-extract
+    // failure leaves the live install on disk untouched. Only the final
+    // rename (staging → install_dir) commits the new version, with the prior
+    // install moved aside first so we can roll back if that rename itself
+    // fails. Both sides of the swap live under `install_root` so they share
+    // a filesystem and the renames are atomic.
+    let final_install_dir = install_root.join(channel.dir_name());
+    let staging_dir = install_root.join(format!(
+        ".{}.staging-{}",
+        channel.dir_name(),
+        uuid::Uuid::new_v4()
+    ));
 
-    // Download into a temp file at the install dir root; we delete it after
-    // a successful extract. Leaving it on failure helps post-mortem debugging.
-    let temp_archive = install_dir.join(format!(".download-{asset_name}"));
+    let executable: String = match stage_install(
+        &release,
+        channel.dir_name(),
+        &asset_name,
+        &asset_url,
+        &staging_dir,
+        &on_progress,
+    )
+    .await
+    {
+        Ok(exe) => exe,
+        Err(e) => {
+            // Best-effort cleanup. Leaving the staging dir behind is
+            // worse than the alternative — but the live install dir is
+            // untouched, which is the load-bearing invariant here.
+            if let Err(cleanup) = tokio::fs::remove_dir_all(&staging_dir).await {
+                tracing::warn!(
+                    error = %cleanup,
+                    path = %staging_dir.display(),
+                    "failed to clean staging dir after install error (non-fatal)"
+                );
+            }
+            return Err(e);
+        }
+    };
+
+    // Atomic swap. If a prior install exists, move it aside under a
+    // dot-prefixed name first; on a failed swap we put it back. Both
+    // renames are atomic on the same filesystem.
+    let had_prior = final_install_dir.exists();
+    let old_aside = if had_prior {
+        let stamp = Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
+        let aside =
+            install_root.join(format!(".{}.old-{stamp}", channel.dir_name()));
+        tokio::fs::rename(&final_install_dir, &aside)
+            .await
+            .map_err(|e| format!("move old install aside: {e}"))?;
+        Some(aside)
+    } else {
+        None
+    };
+
+    if let Err(e) = tokio::fs::rename(&staging_dir, &final_install_dir).await {
+        // Roll back: restore the old install.
+        if let Some(aside) = &old_aside {
+            if let Err(restore) = tokio::fs::rename(aside, &final_install_dir).await {
+                tracing::error!(
+                    error = %restore,
+                    aside = %aside.display(),
+                    install_dir = %final_install_dir.display(),
+                    "FAILED to restore old install after staging-swap failure"
+                );
+            }
+        }
+        let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+        return Err(format!("swap staging \u{2192} install dir: {e}"));
+    }
+
+    // Clean up the moved-aside old install. Best effort — the new install
+    // already succeeded so a lingering `.channel.old-<stamp>` dir is just
+    // disk noise (dot-prefixed, not user-visible).
+    if let Some(aside) = old_aside {
+        if let Err(e) = tokio::fs::remove_dir_all(&aside).await {
+            tracing::warn!(
+                error = %e,
+                aside = %aside.display(),
+                "failed to remove old install dir after swap (non-fatal)"
+            );
+        }
+    }
+
+    on_progress(InstallProgress::Done);
+
+    Ok(InstallResult {
+        install_dir: final_install_dir,
+        version: release.version.to_string(),
+        executable,
+    })
+}
+
+/// Inner stage of `download_and_install` — does the download, extraction,
+/// and manifest write into `staging_dir`. Returns the resolved executable's
+/// relative path on success. Any error is propagated unchanged; cleanup of
+/// `staging_dir` is the caller's responsibility.
+async fn stage_install<F>(
+    release: &GameRelease,
+    channel_dir_name: &str,
+    asset_name: &str,
+    asset_url: &str,
+    staging_dir: &Path,
+    on_progress: &F,
+) -> Result<String, String>
+where
+    F: Fn(InstallProgress) + Send + 'static,
+{
+    tokio::fs::create_dir_all(staging_dir)
+        .await
+        .map_err(|e| format!("create staging dir: {e}"))?;
+
+    let temp_archive = staging_dir.join(format!(".download-{asset_name}"));
 
     let client = reqwest::Client::builder()
         .user_agent("briskablast-launcher")
@@ -125,7 +226,7 @@ where
         .build()
         .map_err(|e| format!("http client build: {e}"))?;
     let resp = client
-        .get(&asset_url)
+        .get(asset_url)
         .send()
         .await
         .map_err(|e| format!("download request: {e}"))?
@@ -162,11 +263,11 @@ where
 
     on_progress(InstallProgress::Extracting);
 
-    let install_dir_clone = install_dir.clone();
+    let staging_clone = staging_dir.to_path_buf();
     let temp_archive_clone = temp_archive.clone();
-    let asset_name_clone = asset_name.clone();
+    let asset_name_clone = asset_name.to_string();
     let executable = tokio::task::spawn_blocking(move || {
-        extract_archive_blocking(&temp_archive_clone, &install_dir_clone, &asset_name_clone)
+        extract_archive_blocking(&temp_archive_clone, &staging_clone, &asset_name_clone)
     })
     .await
     .map_err(|e| format!("extract join: {e}"))??;
@@ -177,24 +278,18 @@ where
 
     let manifest = InstalledManifest {
         version: release.version.to_string(),
-        channel: channel.dir_name().to_string(),
+        channel: channel_dir_name.to_string(),
         installed_at: Utc::now().to_rfc3339(),
         executable: executable.clone(),
     };
-    let manifest_path = install_dir.join(MANIFEST_FILENAME);
+    let manifest_path = staging_dir.join(MANIFEST_FILENAME);
     let manifest_json = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| format!("manifest serialize: {e}"))?;
     tokio::fs::write(&manifest_path, manifest_json)
         .await
         .map_err(|e| format!("manifest write: {e}"))?;
 
-    on_progress(InstallProgress::Done);
-
-    Ok(InstallResult {
-        install_dir,
-        version: release.version.to_string(),
-        executable,
-    })
+    Ok(executable)
 }
 
 fn extract_archive_blocking(archive: &Path, dest: &Path, name: &str) -> Result<String, String> {
@@ -316,6 +411,37 @@ pub async fn uninstall_install(
         // Nothing on disk — treat as success so the caller can still
         // clear identity.json. The user did ask for "uninstalled", after all.
         return Ok(());
+    }
+
+    // Defence-in-depth: the launcher computes install_dir as
+    // <user-picked install_root>/<channel.dir_name()>/, but
+    // identity.json could be hand-edited to point install_location
+    // somewhere else (e.g. /home/user, /etc). Before `remove_dir_all`
+    // we canonicalize and require the final path component to match
+    // the channel_dir_name passed in. Anything else returns Err — the
+    // launcher will surface the message on the uninstall prompt
+    // rather than wiping an unrelated directory.
+    let canonical = tokio::fs::canonicalize(&install_dir).await.map_err(|e| {
+        format!(
+            "canonicalize install_dir {}: {e}",
+            install_dir.display()
+        )
+    })?;
+    let last = canonical
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| {
+            format!(
+                "install_dir {} has no terminal component",
+                canonical.display()
+            )
+        })?;
+    if last != channel_dir_name {
+        return Err(format!(
+            "install_dir {} does not end in expected channel name {:?} — refusing to remove",
+            canonical.display(),
+            channel_dir_name
+        ));
     }
 
     if keep_saves {

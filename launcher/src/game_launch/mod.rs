@@ -58,6 +58,13 @@ pub async fn spawn_and_wait(
     }
 
     let handoff_path = write_handoff(&username).await?;
+    // RAII guard — removes the handoff file on scope exit (including the
+    // early-return `?` from spawn / wait failures below) so a crashing
+    // launcher can't leave secret-shaped temp files behind. If the game
+    // already consumed and deleted it, the remove just sees NotFound and
+    // is silently ignored by the Drop impl.
+    let _handoff_cleanup = HandoffCleanup::new(handoff_path.clone());
+
     tracing::info!(
         ?channel,
         exe = %exe_path.display(),
@@ -86,20 +93,41 @@ pub async fn spawn_and_wait(
         .map_err(|e| format!("wait on game process: {e}"))?;
     tracing::info!(?channel, ?status, "game process exited");
 
-    // If the game never read the handoff file, clean it up now so we
-    // don't leave secrets-shaped temp files around. `tokio::fs::remove_file`
-    // is fine if the file is already gone — we map NotFound to Ok.
-    if let Err(e) = tokio::fs::remove_file(&handoff_path).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(
-                error = %e,
-                path = %handoff_path.display(),
-                "failed to remove handoff temp file"
-            );
+    // Cleanup happens via the HandoffCleanup Drop impl when this function
+    // returns (success or error). No explicit remove_file call needed.
+    Ok(status.code())
+}
+
+/// RAII guard that removes a handoff temp file when dropped. Uses the
+/// blocking `std::fs::remove_file` because Drop can't be async; the file
+/// is small and the operation is microseconds. Silently ignores NotFound
+/// (game already deleted it) and warns on any other error.
+struct HandoffCleanup {
+    path: Option<PathBuf>,
+}
+
+impl HandoffCleanup {
+    fn new(path: PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+}
+
+impl Drop for HandoffCleanup {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %path.display(),
+                        "failed to remove handoff temp file on cleanup"
+                    );
+                }
+            }
         }
     }
-
-    Ok(status.code())
 }
 
 async fn write_handoff(username: &str) -> Result<PathBuf, String> {
