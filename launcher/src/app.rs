@@ -728,7 +728,16 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             // The same Sender is cloned for the closure callback; the
             // outer clone fires the final Complete event once the .await
             // on download_and_install resolves.
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<InstallStreamEvent>();
+            //
+            // Bounded channel — Progress has latest-state semantics so we
+            // try_send and drop on full (the next chunk's event arrives
+            // shortly anyway). Complete is one-shot and must not be
+            // dropped, so it uses the awaited send. Capacity 32 covers
+            // ~half a second of progress events at a 64ms Iced frame and
+            // a multi-MB/s download.
+            const INSTALL_STREAM_CAPACITY: usize = 32;
+            let (tx, rx) =
+                tokio::sync::mpsc::channel::<InstallStreamEvent>(INSTALL_STREAM_CAPACITY);
             let tx_progress = tx.clone();
             tokio::spawn(async move {
                 let result: Result<crate::updater::branches::InstallResult, String> = async {
@@ -753,24 +762,31 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         release,
                         install_root,
                         move |progress| {
-                            let _ = tx_progress.send(InstallStreamEvent::Progress(progress));
+                            // Drop on full / receiver-dropped — progress is
+                            // safe to skip (the next event corrects the
+                            // displayed fraction); blocking the callback
+                            // would stall the actual download loop.
+                            let _ =
+                                tx_progress.try_send(InstallStreamEvent::Progress(progress));
                         },
                     )
                     .await
                 }
                 .await;
-                let _ = tx.send(InstallStreamEvent::Complete(result));
+                // Completion must not be dropped — `send().await` waits
+                // for capacity. If the receiver has been dropped we don't
+                // care (no UI to update); the `let _ =` absorbs that.
+                let _ = tx.send(InstallStreamEvent::Complete(result)).await;
             });
-            let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).map(
-                move |ev| match ev {
+            let stream =
+                tokio_stream::wrappers::ReceiverStream::new(rx).map(move |ev| match ev {
                     InstallStreamEvent::Progress(progress) => {
                         Message::DownloadProgress { channel, progress }
                     }
                     InstallStreamEvent::Complete(result) => {
                         Message::InstallComplete { channel, result }
                     }
-                },
-            );
+                });
             return Task::stream(stream);
         }
         Message::DownloadProgress { channel, progress } => {

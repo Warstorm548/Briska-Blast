@@ -99,15 +99,31 @@ fn progress_cell(state: &AppState) -> Element<'_, Message> {
             fraction,
             bytes_now,
             bytes_total,
-        }) => (
-            (*fraction).clamp(0.0, 1.0),
-            format!(
-                "Downloading \u{2014} {:.0}% ({} / {})",
-                fraction * 100.0,
-                format_bytes(*bytes_now),
-                format_bytes(*bytes_total),
-            ),
-        ),
+        }) => {
+            // When the server omits Content-Length, bytes_total is 0 and
+            // fraction is meaningless. Render an indeterminate bar (0)
+            // and drop the percent / total from the label rather than
+            // showing "0% (… / 0 B)".
+            if *bytes_total > 0 {
+                (
+                    (*fraction).clamp(0.0, 1.0),
+                    format!(
+                        "Downloading \u{2014} {:.0}% ({} / {})",
+                        fraction * 100.0,
+                        format_bytes(*bytes_now),
+                        format_bytes(*bytes_total),
+                    ),
+                )
+            } else {
+                (
+                    0.0,
+                    format!(
+                        "Downloading \u{2014} {} (unknown total)",
+                        format_bytes(*bytes_now)
+                    ),
+                )
+            }
+        }
         Some(InstallProgress::Extracting) => (1.0, "Extracting\u{2026}".to_string()),
         Some(InstallProgress::Done) => (1.0, "Done.".to_string()),
         None => (0.0, "Idle".to_string()),
