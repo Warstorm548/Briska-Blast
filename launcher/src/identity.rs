@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Write;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Identity {
@@ -22,6 +23,41 @@ pub struct ChannelCreds {
     /// Hex; never displayed in UI. Redacted in Debug output so accidental
     /// `tracing::debug!(?identity, …)` calls cannot leak the token.
     pub secret_token: String,
+    /// Per-channel game install directory chosen by the user during the
+    /// install-location modal (`<picked_root>/<channel.dir_name()>/`).
+    /// `None` until the channel's game is installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_location: Option<PathBuf>,
+    /// Game version currently installed at `install_location`. Mirrors the
+    /// `version` field of `installed.json` written by the installer. Used
+    /// by Stage 4's update-check to detect drift against GitHub Releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_version: Option<String>,
+}
+
+impl ChannelCreds {
+    /// Build a creds row from a fresh `/register` response. install_location
+    /// and installed_version stay None until the game is installed for this
+    /// channel (Stage 3 install flow).
+    pub fn from_register(player_id: String, secret_token: String) -> Self {
+        Self {
+            player_id,
+            secret_token,
+            install_location: None,
+            installed_version: None,
+        }
+    }
+
+    /// Parsed `installed_version` semver, but only when both that AND
+    /// `install_location` are present — a half-set row is treated as not
+    /// installed (matches the bottom-bar half-state guard from Stage 3).
+    /// Returns `None` when the version string fails to parse, so an
+    /// upstream corruption can't crash version comparisons.
+    pub fn parsed_installed_version(&self) -> Option<semver::Version> {
+        let _loc = self.install_location.as_ref()?;
+        let ver_str = self.installed_version.as_ref()?;
+        semver::Version::parse(ver_str).ok()
+    }
 }
 
 impl fmt::Debug for ChannelCreds {
@@ -29,6 +65,8 @@ impl fmt::Debug for ChannelCreds {
         f.debug_struct("ChannelCreds")
             .field("player_id", &self.player_id)
             .field("secret_token", &"<redacted>")
+            .field("install_location", &self.install_location)
+            .field("installed_version", &self.installed_version)
             .finish()
     }
 }

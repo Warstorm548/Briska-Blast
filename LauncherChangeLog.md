@@ -5,6 +5,389 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.8.0] — 2026-05-24
+
+Wires the three previously-dead Settings → Game Channel Management
+buttons (Uninstall, Verify File Integrity, Game Save) to real per-channel
+actions. The launcher's per-channel lifecycle is now complete: install
+→ update → play → verify → uninstall.
+
+Stage 7 of the launcher game-install pipeline plan. Final stage before
+the feat-branch → dev merge.
+
+### Added
+
+- **Uninstall flow** with a confirmation prompt
+  (`launcher/src/ui/center/uninstall_confirm.rs`, new
+  `CenterView::UninstallConfirm` route). Prompt shows the channel,
+  installed version, resolved install dir, and a "Keep player data for
+  future reinstall?" Yes/No radio (foundation §2). On confirm:
+  - if Keep, `<install_dir>/saves/` is moved to a **timestamped**
+    sibling at `<install_root>/.briska-saves-backup/<channel>/<rfc3339>/`
+    so a re-install / re-uninstall cycle never overwrites prior saves;
+  - then `<install_dir>` is removed wholesale;
+  - then `install_location` and `installed_version` are cleared from the
+    channel row of `identity.json`, and `state.verify_results` for that
+    channel is dropped.
+  Uninstall is intentionally allowed regardless of `state.dev_flag` so a
+  previously-flagged user who got revoked can still clean up orphan dev
+  files. Errors keep the prompt open with an inline status line.
+- **Verify File Integrity flow** — cheap variant per the Stage 7
+  decision: re-reads `<install>/installed.json`, confirms the manifest's
+  named executable still exists on disk. Outcome cached in
+  `state.verify_results: BTreeMap<Channel, VerifyOutcome>` and surfaced
+  inline in the channel row as `— / ✓ Verified vX.Y.Z / ✗ Manifest
+  missing / ✗ Manifest unreadable / ✗ Executable missing`. Per-file
+  hashing + saves-dir-intact mode were captured in
+  `docs/planning/roadmap.md` as deferred options.
+- **Game Save button** opens the channel's `<install>/saves/` directory
+  in the OS file manager (new `open = "5"` dep, cross-platform xdg-open
+  / explorer / Finder). Saves dir is created on demand if it doesn't
+  exist yet.
+- **`updater::branches` primitives**: `uninstall_install(install_dir,
+  channel_dir_name, keep_saves)`, `verify_install(install_dir)`,
+  `VerifyOutcome` enum, `SAVES_BACKUP_DIRNAME` constant.
+
+### Changed
+
+- **`UninstallChannel(Channel)`, `VerifyChannel(Channel)`,
+  `GameSavePressed(Channel)`** lose their `#[allow(dead_code)]` — all
+  three are now wired end-to-end.
+- **Settings → Game Channel Management** rows disable their
+  Uninstall / Verify buttons when the channel has no install on record
+  (and during `install_in_progress` / `game_running`). The Game Save
+  button in the "Game Important Files" section follows the same rule.
+- **Settings rows widen** to include the new verify status cell next to
+  Verify File Integrity.
+
+### Dev gating
+
+- `VerifyChannel` and `GameSavePressed` defence-in-depth refuse
+  `Channel::Dev` when `state.dev_flag` is false. `UninstallChannel`
+  intentionally does **not** — orphan-cleanup is allowed for revoked
+  users.
+
+### Deps
+
+- New: `open = "5"` for cross-platform file-manager launch.
+
+### Roadmap additions
+
+`docs/planning/roadmap.md` gained:
+- **Per-file hash manifest + deep Verify File Integrity** (re-hash every
+  file at install time, compare on Verify).
+- **Saves-dir intact verify mode** (alt cheap variant; pairs with the
+  future saves-relocation work).
+
+---
+
+## [0.7.1] — 2026-05-24
+
+Bottom progress bar wired through to real install events. The
+`download_and_install` callback that fed `tracing::debug` since Stage 3
+now feeds an `iced::widget::progress_bar` plus a human-readable label
+("Downloading — 64% (122 MiB / 192 MiB)" / "Extracting…" / "Done."). The
+last mocked piece of the launcher UI — `MOCK_PROGRESS_PERCENT` — is gone;
+`mock.rs` is deleted, no module remains to maintain.
+
+Stage 6 (and final code stage before Stage 7's uninstall wiring + the
+feat-branch → dev merge) of the launcher game-install pipeline plan.
+
+### Added
+
+- **`AppState.download_progress: Option<InstallProgress>`**
+  (`launcher/src/app.rs`) — last progress event from the active install
+  pipeline. `None` between installs.
+- **`Message::DownloadProgress { channel, progress }`** — per-chunk
+  download/extract event, mapped 1:1 from the internal
+  `InstallStreamEvent::Progress` variant. Stale-channel events (i.e.
+  events for a channel that's no longer `install_in_progress`) are
+  discarded by the handler.
+- **Streaming `InstallConfirmed` task** — the install pipeline now drives
+  an `iced::Task::stream` over a tokio `UnboundedReceiver`, so the
+  bottom-bar widget updates in real time during the download instead of
+  jumping straight from idle to complete on InstallComplete. The single
+  `tokio::spawn` owns the work and writes Progress / Complete events
+  into the channel; the receiver is adapted via
+  `tokio_stream::wrappers::UnboundedReceiverStream` and the events are
+  `.map`-ped to the matching public Message variants via
+  `futures_util::StreamExt`.
+
+### Changed
+
+- **`InstallProgress`** (`launcher/src/updater/branches/installer.rs`)
+  fields are no longer `#[allow(dead_code)]` — `bytes_now`,
+  `bytes_total`, and `fraction` are now consumed by the new
+  `bottom_bar::progress_cell`.
+- **`bottom_bar::progress_cell`** renders an `iced::widget::progress_bar`
+  plus a label line. `format_bytes` helper formats bytes/KiB/MiB/GiB
+  appropriately for the human-readable counter.
+
+### Removed
+
+- **`launcher/src/mock.rs`** — deleted along with `MOCK_PROGRESS_PERCENT`
+  and the comments explaining the prior mocks. `mod mock` dropped from
+  `main.rs`. No mocked UI state remains.
+
+### Deps
+
+- New: `tokio-stream = "0.1"` for `UnboundedReceiverStream`.
+
+### Deferred to Stage 7
+
+- Per-channel **Uninstall** + **Verify** + **Game Save** buttons in the
+  Settings → Game Channel Management tab. `Message::UninstallChannel`,
+  `Message::VerifyChannel`, and `Message::GameSavePressed` variants
+  exist as `#[allow(dead_code)]` no-ops; Stage 7 wires the destructive
+  uninstall (confirm modal → `tokio::fs::remove_dir_all` → clear
+  `install_location` / `installed_version` on the identity row), the
+  verify path (re-read `installed.json`, sanity-check the executable
+  exists), and the saves-folder open action. Captured in the plan's
+  staging table; needed before the final feat-branch → dev push.
+
+---
+
+## [0.7.0] — 2026-05-24
+
+Play button now actually launches the installed game. With an installed
+channel selected and no install in flight, pressing Play writes a
+one-shot handoff JSON to the OS temp dir (`{"username": "..."}`, perms
+`0600` on unix), spawns the channel's game executable with
+`--launcher-handoff <path>`, and awaits exit. The game reads + deletes
+the handoff file on startup (Stage 1's `LaunchArgs.FromLauncher`),
+returning the username to `SessionContext.LocalUsername` before any UI
+renders. While the game is running the bottom-right button reads
+`Running`, the bottom-left button is disabled with `Running`, and the
+channel selector collapses to a static label so a mid-session channel
+switch can't race the spawned process.
+
+Stage 5 of the launcher game-install pipeline plan. Only the bottom
+progress bar's mock-percent display remains for Stage 6.
+
+### Added
+
+- **`launcher/src/game_launch/`** (new module): `spawn_and_wait(channel,
+  install_dir, username)` reads the per-install `installed.json` to find
+  the executable, writes a uuid-named handoff file under `std::env::
+  temp_dir()`, spawns the binary with `tokio::process::Command` so the
+  wait is awaitable, returns the exit code (or `None` for signal exits).
+  Cleans up the handoff file on exit in case the game never read it.
+  Unit-tested for handoff JSON round-trip + path uniqueness.
+- **`Message::GameExited { channel, result }`** (`launcher/src/app.rs`)
+  fires when the spawned game process exits; clears `state.game_running`.
+- **`PlayPressed` handler** (`launcher/src/app.rs`) — was a no-op through
+  0.6.x. Now validates `(installed_version present, install_location
+  present, no install in flight, not Dev-without-flag)`, sets
+  `game_running = true`, and dispatches the spawn task. The half-state
+  guard from Stage 3 is the gate — `ChannelCreds::parsed_installed_version`
+  must return `Some(_)` for Play to proceed.
+
+### Changed
+
+- **`updater::branches::installed_manifest`** is now publicly re-exported
+  (was `#[allow(dead_code)]` in Stage 3) — game_launch reads it on every
+  Play to resolve the executable's relative path inside the install dir.
+- **Channel picker** (`launcher/src/ui/left_rail.rs`) collapses to a
+  static `text` label while `game_running` is true. Re-renders as the
+  interactive `pick_list` as soon as `GameExited` clears the flag
+  (foundation §5E).
+- **Cargo.toml**: `tokio` feature flags gain `"process"` (async
+  `Command::spawn` + `.wait()`); new `uuid = { version = "1", features
+  = ["v4"] }` for unique handoff filenames.
+
+### Dev gating
+
+- `PlayPressed` refuses `Channel::Dev` when `state.dev_flag` is false
+  (defence-in-depth — the channel selector hides Dev under that
+  condition).
+
+### Handoff protocol invariants
+
+- Filename: `${TMPDIR}/briskablast-handoff-<uuid>.json` (v4 random uuid).
+- Perms: `0600` on unix; best-effort (failure logged, not fatal).
+- Lifecycle: launcher writes pre-spawn; game reads + deletes on
+  startup; launcher removes any leftover on game exit.
+- Payload schema is stable per `client/src/core/LaunchArgs.cs:Handoff`
+  — only `username` for now, with room to add `player_id`,
+  `secret_token`, `server_url` later (roadmap items).
+
+### Deferred to Stage 6
+
+- The `progress_cell` in `bottom_bar.rs` still shows the
+  `MOCK_PROGRESS_PERCENT` placeholder. Stage 6 wires the real
+  `InstallProgress` events (already emitted by `download_and_install`)
+  through to an `iced::widget::progress_bar`.
+
+---
+
+## [0.6.0] — 2026-05-24
+
+Per-channel version detection on boot, plus the full bottom-left button
+state machine. The launcher now queries GitHub Releases for the latest
+`game-v*` tag of every visible channel on launch, caches the result in
+`state.available_versions`, and derives both the bottom-left button label
+and the top-bar "Updates available" banner from real installed-vs-available
+comparisons. The Stage 3 stub label `Update` is gone; the button now cycles
+through `Install <Channel> Game` / `Update to vX.Y.Z` / `Up to date —
+vX.Y.Z` / `Installing…` / `Running` per the foundation table.
+
+Stage 4 of the launcher game-install pipeline plan. Stage 5 wires Play;
+Stage 6 polishes the progress bar.
+
+### Added
+
+- **`AppState::available_versions: BTreeMap<Channel, semver::Version>`**
+  (`launcher/src/app.rs`) — populated by per-launch fan-out of
+  `updater::branches::latest_release(channel)` for every visible
+  channel. Dev's fetch fires only when the dev `/register` response
+  returns `dev_flag = true`, so unflagged users never reach the GitHub
+  API for the dev channel (foundation §3 defence-in-depth).
+- **`recompute_branch_updates_available`** (`launcher/src/app.rs`) —
+  derives `state.branch_updates_available` from real `(installed,
+  available)` pairs, filtered to `visible_channels` so the dev channel
+  never leaks into the top-bar banner for an unflagged user. Called
+  from every handler that mutates available / installed / visible
+  state.
+- **`Message::LatestReleaseFetched { channel, result }`** — the
+  per-channel release-discovery completion. Late-arriving Dev fetches
+  after a dev_flag revoke are dropped at the handler so the cache
+  can't be poisoned.
+- **`ChannelCreds::parsed_installed_version`** (`launcher/src/identity.rs`)
+  — returns the parsed `semver::Version` only when both
+  `install_location` and `installed_version` are present, so the
+  half-state guard from the Stage 3 review is the single source of
+  truth for "is this channel actually installed?" across `bottom_bar`
+  and `recompute_branch_updates_available`.
+
+### Changed
+
+- **Bottom-left button** (`launcher/src/ui/bottom_bar.rs`) is now fully
+  state-driven from `(installed_version, available_versions[channel],
+  game_running, install_in_progress)`. Labels cycle: `Install <C> Game`
+  (enabled iff a release exists), `Update to vX.Y.Z` (enabled iff
+  newer), `Up to date — vX.Y.Z` (disabled), `Installing…` (disabled),
+  `Running` (disabled).
+- **Top-bar banner** (`launcher/src/ui/top_bar.rs`) consumes the same
+  derived list; the previous `mock::BRANCH_UPDATES_AVAILABLE` constant
+  is retired (replaced with an explanatory note in `mock.rs`).
+- **`Message::UpdatePressed` handler** (`launcher/src/app.rs`) handles
+  both the install-fresh and update-outdated routes. The install prompt
+  is opened with `available` pre-populated from the boot cache (no
+  re-fetch when the cache is warm); for the update path,
+  `install_root` is pre-filled from the existing install_location so
+  the user isn't asked to re-pick the folder.
+- **`RegisterDone(Dev)` handler** now spawns the Dev `latest_release`
+  task when `dev_flag` flips true, and drops any cached Dev version
+  when it flips false or the dev server is unreachable. Keeps
+  `available_versions` in lockstep with the visibility gate.
+
+### Boot order
+
+The fan-out shape on a launch with an existing username:
+1. `updater::check_for_update` (launcher self-update, unchanged).
+2. `register_tasks` — one /register per `Channel::all()`.
+3. `latest_release_tasks` — one GitHub query per *visible* channel
+   (Stable + Ea up front; Dev follows RegisterDone(Dev, Ok)).
+
+First-launch users follow the welcome flow; the same fan-out runs after
+`ConfirmWelcomeUsername` persists the chosen name.
+
+### Deferred to later stages
+
+- **Stage 5** — Play button spawn (with the Stage 1 `--launcher-handoff`
+  temp-file).
+- **Stage 6** — Bottom progress bar reads the existing
+  `InstallProgress::Downloading { fraction, bytes_now, bytes_total }`
+  events (already emitted, currently only traced).
+
+---
+
+## [0.5.0] — 2026-05-23
+
+Per-channel game-files install pipeline. The bottom-left button is now
+channel-aware: when the selected channel has no game installed, it reads
+`Install <Channel> Game` and routes to a new center-pane install prompt
+that lets the user pick a folder and confirm. On confirm, the launcher
+queries GitHub Releases (filtered by `game-v*` tags + channel suffix),
+downloads the platform-appropriate artifact, extracts it into
+`<chosen_root>/<channel>/`, and writes an `installed.json` manifest plus
+new `install_location` / `installed_version` fields on the channel's row
+of `identity.json`. Dev channel is fully gated behind `dev_flag` — the
+launcher refuses to query GitHub, open the install prompt, or run the
+download for `Channel::Dev` unless the cached dev_flag is true.
+
+Stage 3 of the launcher game-install pipeline plan. Stage 4 wires the
+"installed-but-outdated" detection on top; Stage 5 wires Play; Stage 6
+polishes the progress bar.
+
+### Added
+
+- **`launcher/src/updater/branches/`** (new module — replaces the
+  `.gitkeep` placeholder reserved in foundation §8):
+  - `github::latest_release(channel)` — lists GitHub Releases via
+    `self_update::backends::github::ReleaseList`, filters by `game-v`
+    prefix and anchored channel suffix (mirrors `release-client.yml`'s
+    regex). Returns the highest-semver `GameRelease`, or `None` if no
+    matching release is published yet. Unit-tested for stable / ea / dev
+    parsing.
+  - `installer::download_and_install` — picks the platform asset
+    (`linux.tar.gz` / `windows.zip` substring match), streams the
+    download with `reqwest`'s `bytes_stream` + `Content-Length` for
+    fractional progress, extracts via `tar`+`flate2` (linux) or `zip`
+    (windows), writes `<install_dir>/installed.json` with version,
+    channel, RFC3339 install timestamp, and the resolved executable
+    relative path. Progress is reported through an `InstallProgress`
+    callback now wired to `tracing::debug` (Stage 6 will route the
+    fractional bytes to the bottom progress bar).
+- **`ChannelCreds` extended** with two new optional fields,
+  `install_location: Option<PathBuf>` and `installed_version:
+  Option<String>` (`launcher/src/identity.rs`). `#[serde(default)]` on
+  both keeps pre-0.5.0 identity files forward-compatible. New helper
+  `ChannelCreds::from_register` builds a row from a `/register`
+  response, and the `RegisterDone` handler now preserves any prior
+  install state so a routine register refresh does not wipe the
+  channel's install record.
+- **`CenterView::InstallPrompt`** (`launcher/src/ui/center/install_prompt.rs`,
+  `launcher/src/app.rs`) — new center-pane route showing channel, latest
+  available version, an OS-native folder picker (`rfd::AsyncFileDialog`),
+  and Confirm / Cancel buttons. Confirm is disabled until both a folder
+  and a fetched version are present.
+- **Bottom-left button** is now state-driven for the not-installed case
+  (`launcher/src/ui/bottom_bar.rs`): label switches between `Install
+  <Channel> Game`, `Update` (Stage-4 placeholder), and `Installing…`
+  while a download is in flight. The press is disabled while the game
+  is running OR an install is in flight.
+
+### Changed
+
+- **`launcher/src/updater/mod.rs`** now declares `pub mod branches`
+  alongside the existing self-update modules. Module docs updated to
+  describe the new sibling.
+- **`reqwest` features** gain `stream` (chunked download); `tokio` gains
+  `fs` for async file I/O in the installer.
+
+### Dev gating
+
+- `Message::UpdatePressed` refuses to act on `Channel::Dev` when
+  `state.dev_flag` is false (defence-in-depth — the channel selector
+  already hides Dev under that condition).
+- `Message::InstallConfirmed` re-checks the dev flag before kicking off
+  the download.
+
+### Deferred to later stages
+
+- **Stage 4** — per-boot fan-out of `latest_release(channel)` into a
+  cached `state.available_versions` map, the full bottom-left button
+  state machine (Update to vX.Y.Z / Up to date — vX.Y.Z), and the top
+  banner derivation from real version diffs.
+- **Stage 5** — Play button wires through to spawning the game
+  executable with the username temp-file handoff from Stage 1.
+- **Stage 6** — bottom progress bar consumes the existing
+  `InstallProgress::Downloading { fraction, bytes_now, bytes_total }`
+  events (already emitted, currently only traced).
+
+---
+
 ## [0.4.0] — 2026-05-23
 
 Lights up the real identity + dev-flag pipeline. Until now `visible_channels`

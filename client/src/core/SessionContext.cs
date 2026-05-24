@@ -14,9 +14,18 @@ public partial class SessionContext : Node
     public int HostIndex { get; set; } = -1;
     public bool LocalPlayerIsHost { get; set; }
 
+    public string LocalUsername { get; private set; } = "Player Username 1";
+
     public override void _Ready()
     {
         Instance = this;
+
+        var handoff = LaunchArgs.FromLauncher;
+        if (handoff?.Username?.Trim() is { Length: > 0 } name)
+        {
+            LocalUsername = name;
+            GD.Print("SessionContext: launcher-supplied username accepted.");
+        }
     }
 
     public void StartHostSession(string code, string mode, int maxPlayers)
@@ -25,7 +34,7 @@ public partial class SessionContext : Node
         GameMode = mode;
         MaxPlayers = maxPlayers;
         PlayerNames.Clear();
-        PlayerNames.Add("Player Username 1");
+        PlayerNames.Add(LocalUsername);
         HostIndex = 0;
         LocalPlayerIsHost = true;
     }

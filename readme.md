@@ -15,10 +15,10 @@ Pre-alpha. Components are built in dependency order — server first, then game 
 | Component | Status |
 |---|---|
 | Matchmaking server (Rust + Axum + Redis) | **v0.5.1** — deployed. Player registration, session host/join with 2–4 player capacity, WebSocket signaling for WebRTC peer setup, admin panel, self-update system. |
-| Game client (Godot 4 + C#) | **v0.1.0** — menu UI scaffold only. No playable game scene yet; no networking yet. |
+| Game client (Godot 4 + C#) | **v0.2.0** — menu UI scaffold plus launcher-handoff (`--launcher-handoff` reads username from a one-shot temp JSON). No playable game scene yet; no networking yet. |
 | Launcher (Rust + Iced) | Not started. Players will eventually install and update the game through it. |
 
-Component changes are tracked in their respective changelogs: [`ServerChangeLog.md`](ServerChangeLog.md), [`ClientChangeLog.md`](ClientChangeLog.md).
+Component changes are tracked in their respective changelogs: [`ServerChangeLog.md`](ServerChangeLog.md), [`GameChangeLog.md`](GameChangeLog.md), [`LauncherChangeLog.md`](LauncherChangeLog.md).
 
 ## How to Get the Game
 
