@@ -21,10 +21,10 @@ public partial class SessionContext : Node
         Instance = this;
 
         var handoff = LaunchArgs.FromLauncher;
-        if (handoff?.Username is { Length: > 0 } name)
+        if (handoff?.Username?.Trim() is { Length: > 0 } name)
         {
             LocalUsername = name;
-            GD.Print($"SessionContext: using launcher-supplied username '{name}'.");
+            GD.Print("SessionContext: launcher-supplied username accepted.");
         }
     }
 
