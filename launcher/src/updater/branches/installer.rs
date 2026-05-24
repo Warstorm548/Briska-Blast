@@ -253,3 +253,107 @@ pub async fn installed_manifest(install_dir: &Path) -> Result<Option<InstalledMa
         Err(e) => Err(format!("manifest read: {e}")),
     }
 }
+
+/// Subdirectory of the install_root (the parent of the install_dir) where
+/// saves are moved when the user picks "Keep saves" during uninstall. Per
+/// the Stage 7 design: backups are timestamped so a re-install / re-uninstall
+/// cycle never overwrites prior saves.
+pub const SAVES_BACKUP_DIRNAME: &str = ".briska-saves-backup";
+
+/// Outcome of a Verify File Integrity check. The diagnostic payloads
+/// (`ManifestUnreadable`'s string, `ExecutableMissing`'s path) are surfaced
+/// via the `?outcome` Debug formatter on the VerifyComplete tracing log;
+/// the inline status cell in Settings shows only a short label. Allow
+/// dead_code so the fields can be promoted to a hover tooltip later
+/// without rewriting the enum.
+#[derive(Debug, Clone)]
+pub enum VerifyOutcome {
+    Ok {
+        version: String,
+    },
+    ManifestMissing,
+    ManifestUnreadable(#[allow(dead_code)] String),
+    ExecutableMissing {
+        #[allow(dead_code)]
+        expected: PathBuf,
+    },
+}
+
+/// Cheap integrity check — read the install manifest and confirm the
+/// executable file it names actually exists on disk. Catches the common
+/// breakage (user deleted the exe by hand, install dir moved). Per-file
+/// hashing is deferred (roadmap).
+pub async fn verify_install(install_dir: PathBuf) -> VerifyOutcome {
+    let manifest = match installed_manifest(&install_dir).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return VerifyOutcome::ManifestMissing,
+        Err(e) => return VerifyOutcome::ManifestUnreadable(e),
+    };
+    let exe = install_dir.join(&manifest.executable);
+    match tokio::fs::metadata(&exe).await {
+        Ok(_) => VerifyOutcome::Ok {
+            version: manifest.version,
+        },
+        Err(_) => VerifyOutcome::ExecutableMissing { expected: exe },
+    }
+}
+
+/// Tear down a channel's installation. `install_dir` is the resolved
+/// `<install_root>/<channel.dir_name()>/` recorded in identity.json.
+///
+/// `keep_saves` honours foundation §2's "Keep player data for future
+/// reinstall?" prompt — when true, `<install_dir>/saves/` is moved to a
+/// **timestamped** sibling under `<install_root>/.briska-saves-backup/
+/// <channel.dir_name()>/<rfc3339>/` before the install dir is removed so
+/// a subsequent reinstall + re-uninstall cycle never overwrites a prior
+/// backup. When false the saves go with the install.
+pub async fn uninstall_install(
+    install_dir: PathBuf,
+    channel_dir_name: &'static str,
+    keep_saves: bool,
+) -> Result<(), String> {
+    if !install_dir.exists() {
+        // Nothing on disk — treat as success so the caller can still
+        // clear identity.json. The user did ask for "uninstalled", after all.
+        return Ok(());
+    }
+
+    if keep_saves {
+        let saves = install_dir.join("saves");
+        if saves.exists() {
+            let install_root = install_dir.parent().ok_or_else(|| {
+                format!(
+                    "install_dir {} has no parent — cannot place saves backup",
+                    install_dir.display()
+                )
+            })?;
+            let stamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+            let backup_dir = install_root
+                .join(SAVES_BACKUP_DIRNAME)
+                .join(channel_dir_name)
+                .join(stamp);
+            if let Some(parent) = backup_dir.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| format!("create saves backup parent: {e}"))?;
+            }
+            tokio::fs::rename(&saves, &backup_dir).await.map_err(|e| {
+                format!(
+                    "move {} → {}: {e}",
+                    saves.display(),
+                    backup_dir.display()
+                )
+            })?;
+            tracing::info!(
+                from = %saves.display(),
+                to = %backup_dir.display(),
+                "saves backed up before uninstall"
+            );
+        }
+    }
+
+    tokio::fs::remove_dir_all(&install_dir)
+        .await
+        .map_err(|e| format!("remove install dir {}: {e}", install_dir.display()))?;
+    Ok(())
+}

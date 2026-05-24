@@ -2,7 +2,9 @@
 //! Matches mockup Example Imgs/LuncherSettings.png.
 
 use crate::app::{AppState, Message, SettingsTab};
+use crate::channel::Channel;
 use crate::ui::theme::{self, TITLE_SIZE, ZONE_GAP};
+use crate::updater::branches::VerifyOutcome;
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Element, Length};
 
@@ -73,15 +75,31 @@ fn body<'a>(state: &'a AppState, active: SettingsTab) -> Element<'a, Message> {
     }
 }
 
-fn channels_section(state: &AppState) -> Element<'static, Message> {
+fn channels_section(state: &AppState) -> Element<'_, Message> {
     let mut col = column![text("Channels").size(20)].spacing(ZONE_GAP);
+    // Buttons are disabled when no install is on record for the channel,
+    // or when an install / play action is already in flight. Stage 7
+    // change — Stage 3-6's settings tab unconditionally enabled them.
+    let busy = state.install_in_progress.is_some() || state.game_running;
     for c in &state.visible_channels {
         let c = *c;
+        let installed = state
+            .identity
+            .channels
+            .get(&c)
+            .map(|creds| creds.install_location.is_some() && creds.installed_version.is_some())
+            .unwrap_or(false);
+        let actionable = installed && !busy;
         col = col.push(
             row![
                 bordered_cell(c.label(), 120.0),
-                cell_button("Uninstall", Message::UninstallChannel(c)),
-                cell_button("Verify File Integrity", Message::VerifyChannel(c)),
+                cell_button_maybe("Uninstall", Message::UninstallChannel(c), actionable),
+                cell_button_maybe(
+                    "Verify File Integrity",
+                    Message::VerifyChannel(c),
+                    actionable,
+                ),
+                verify_status_cell(state, c),
             ]
             .spacing(ZONE_GAP),
         );
@@ -89,14 +107,21 @@ fn channels_section(state: &AppState) -> Element<'static, Message> {
     col.into()
 }
 
-fn important_files_section(state: &AppState) -> Element<'static, Message> {
+fn important_files_section(state: &AppState) -> Element<'_, Message> {
     let mut col = column![text("Game Important Files").size(20)].spacing(ZONE_GAP);
+    let busy = state.install_in_progress.is_some() || state.game_running;
     for c in &state.visible_channels {
         let c = *c;
+        let installed = state
+            .identity
+            .channels
+            .get(&c)
+            .map(|creds| creds.install_location.is_some() && creds.installed_version.is_some())
+            .unwrap_or(false);
         col = col.push(
             row![
                 bordered_cell(c.label(), 120.0),
-                cell_button("Game Save", Message::GameSavePressed(c)),
+                cell_button_maybe("Game Save", Message::GameSavePressed(c), installed && !busy),
                 container(Space::new().width(Length::Fill))
                     .style(theme::bordered)
                     .width(Length::Fill)
@@ -108,6 +133,23 @@ fn important_files_section(state: &AppState) -> Element<'static, Message> {
     col.into()
 }
 
+fn verify_status_cell(state: &AppState, channel: Channel) -> Element<'_, Message> {
+    let label = match state.verify_results.get(&channel) {
+        None => "\u{2014}".to_string(), // em dash — not yet verified this launch
+        Some(VerifyOutcome::Ok { version }) => format!("\u{2713} Verified v{version}"),
+        Some(VerifyOutcome::ManifestMissing) => "\u{2717} Manifest missing".to_string(),
+        Some(VerifyOutcome::ManifestUnreadable(_)) => "\u{2717} Manifest unreadable".to_string(),
+        Some(VerifyOutcome::ExecutableMissing { .. }) => "\u{2717} Executable missing".to_string(),
+    };
+    container(text(label).size(13))
+        .style(theme::bordered)
+        .padding(8)
+        .center_y(Length::Fill)
+        .width(Length::Fill)
+        .height(Length::Fixed(36.0))
+        .into()
+}
+
 fn bordered_cell(label: &'static str, width: f32) -> Element<'static, Message> {
     container(text(label))
         .style(theme::bordered)
@@ -116,10 +158,26 @@ fn bordered_cell(label: &'static str, width: f32) -> Element<'static, Message> {
         .into()
 }
 
+#[allow(dead_code)] // kept for parity with other Settings rows; may be re-used
 fn cell_button(label: &'static str, msg: Message) -> Element<'static, Message> {
     button(text(label))
         .on_press(msg)
         .width(Length::Fill)
         .padding(8)
         .into()
+}
+
+/// Same as `cell_button` but drops `.on_press` when `enabled` is false so
+/// Iced renders the button non-interactive (foundation §5E pattern reused
+/// from the bottom-bar Update / Play cells).
+fn cell_button_maybe(
+    label: &'static str,
+    msg: Message,
+    enabled: bool,
+) -> Element<'static, Message> {
+    let mut btn = button(text(label)).width(Length::Fill).padding(8);
+    if enabled {
+        btn = btn.on_press(msg);
+    }
+    btn.into()
 }

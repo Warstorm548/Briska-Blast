@@ -1,6 +1,6 @@
 [package]
 name = "launcher"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2021"
 description = "BriskaBlast Launcher — manages install, update, and launch of the BriskaBlast game across stable, ea, and dev channels."
 license = "AGPL-3.0-or-later"
@@ -33,6 +33,10 @@ futures-util       = "0.3"
 # Adapts a tokio mpsc Receiver into a Stream so the per-chunk download
 # progress (Stage 6) can drive an Iced Task::stream for live UI updates.
 tokio-stream       = "0.1"
+# Cross-platform "open this path in the user's file manager" — Settings →
+# Game Important Files → Game Save (Stage 7). Linux xdg-open / Windows
+# explorer / macOS open. Sync API; called from spawn_blocking.
+open               = "5"
 tar                = "0.4"
 flate2             = "1"
 zip                = { version = "2", default-features = false, features = ["deflate"] }

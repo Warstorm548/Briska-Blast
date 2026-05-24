@@ -86,3 +86,23 @@ Work intentionally deferred until after the initial production deployment of the
   - Code-signing brainstorm (Azure Trusted Signing as cheapest viable cert) — same release window, bundle these together.
   - Identity file I/O (still deferred per [`launcher-foundation.md`](../launcher/launcher-foundation.md) §8 Open Items) — if option (B) lands, the identity-dir path question (`%APPDATA%` vs `%LOCALAPPDATA%`) gets re-litigated.
   - The `self_update` `.__old__*` orphan left in the install dir post-swap is a related but separate papercut: it's cleaned on next reboot (or next launch) regardless of which option above lands. Worth verifying whichever path is chosen also cleans the orphan as a side effect.
+
+### server requrments for luncher to be able to contact servers
+
+- should have a new feild in the server to pottenial block calls to the server if the luncher is to out of date to safley handle the luncher and for itself
+
+- Luncher Scans for existing games installs buttom check + option on frist boot of luncher when no game file path directory found
+
+### Per-file hash manifest + deep Verify File Integrity
+
+- **What**: Extend `<install>/installed.json` to record a `files: { "<relpath>": "sha256:<hex>" }` map written at install time. Stage 7's `Verify File Integrity` button currently just re-reads the manifest and checks the executable exists; with per-file hashes the same button could re-hash the on-disk tree and report which files are missing or corrupted. Would also enable "Re-download corrupted files only" rather than a full reinstall.
+- **Why deferred**: The Stage 7 cheap check (exe + manifest exists) catches the realistic breakage modes today — user deletes the exe by hand, install dir gets moved. Per-file hashing is a meaningfully bigger change: extends the installer's write path, the manifest schema, the verify task (sync hashing of potentially-GB of game files needs spawn_blocking + chunked I/O), and the UI to surface per-file failures. Wait until disk-corruption / partial-extraction reports actually appear in user feedback.
+- **Trigger to start**: First real user report of a partially-extracted install OR the move to A/B install slots (foundation §7), where per-slot hashes would also serve the rollback decision.
+- **Related**: `launcher/src/updater/branches/installer.rs::VerifyOutcome` — current minimal variants (`Ok`, `ManifestMissing`, `ManifestUnreadable`, `ExecutableMissing`) would gain `FilesMissing { paths }` / `FilesChanged { paths }` variants.
+
+### Saves-dir intact verify mode
+
+- **What**: An alternative cheap variant of Verify File Integrity that confirms the executable exists AND `<install>/saves/` exists (creating it on demand if not). Catches the failure mode where a user clears the install dir but forgets `saves/`, or moves the install and leaves saves behind.
+- **Why deferred**: Stage 7 takes the simpler exe-only path because the saves layout itself is still in flux — saves currently live colocated under the install dir for Stage 1 testing convenience, but the roadmap also tracks moving them to a platform-standard data dir for stable. Verifying the colocated layout would be wasted work if the dir moves.
+- **Trigger to start**: Saves layout stabilises (after the platform-standard data dir migration) OR the keep-saves-on-uninstall flow accumulates real users whose backups end up orphaned.
+- **Related**: `Saves dir relocation` (above) — both items land together once saves move out of the install dir.
