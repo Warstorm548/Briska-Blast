@@ -109,9 +109,27 @@ async fn write_handoff(username: &str) -> Result<PathBuf, String> {
     let payload = serde_json::to_vec(&Handoff { username })
         .map_err(|e| format!("serialize handoff: {e}"))?;
 
+    // On unix, atomically create the file with 0o600 from the start so a
+    // racing local process can't observe it world-readable in the window
+    // between create() and a chmod. create_new(true) also makes us bail
+    // (rather than overwrite) if the path was somehow pre-created — extra
+    // belt for the random-uuid suspenders. On non-unix targets we fall
+    // back to the standard create — Windows file perms aren't expressible
+    // through OpenOptionsExt and the handoff payload is non-sensitive in
+    // Stage 5 anyway (username only; no secret yet).
+    #[cfg(unix)]
+    let mut f = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .await
+        .map_err(|e| format!("create handoff: {e}"))?;
+    #[cfg(not(unix))]
     let mut f = tokio::fs::File::create(&path)
         .await
         .map_err(|e| format!("create handoff: {e}"))?;
+
     f.write_all(&payload)
         .await
         .map_err(|e| format!("write handoff: {e}"))?;
@@ -119,17 +137,6 @@ async fn write_handoff(username: &str) -> Result<PathBuf, String> {
         .await
         .map_err(|e| format!("flush handoff: {e}"))?;
     drop(f);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        if let Err(e) = std::fs::set_permissions(&path, perms) {
-            // Non-fatal — the handoff is short-lived and only contains
-            // the username (no secret yet, per Stage 1). Warn and move on.
-            tracing::warn!(error = %e, path = %path.display(), "chmod 0600 handoff failed");
-        }
-    }
 
     Ok(path)
 }
