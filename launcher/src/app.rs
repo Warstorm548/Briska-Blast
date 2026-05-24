@@ -23,9 +23,23 @@ pub enum SettingsTab {
 #[derive(Debug, Clone)]
 pub enum CenterView {
     Default,
-    Settings { tab: SettingsTab },
-    ChangeUsername { draft: String },
+    Settings {
+        tab: SettingsTab,
+    },
+    ChangeUsername {
+        draft: String,
+    },
     LauncherUpdate,
+    /// Per-channel game install prompt — opened by clicking the bottom-left
+    /// "Install <Channel> Game" button when that channel has no install on
+    /// disk. The latest_release fetch is kicked off when the prompt opens
+    /// and writes into `available`; the folder picker writes `install_root`.
+    InstallPrompt {
+        channel: Channel,
+        install_root: Option<std::path::PathBuf>,
+        available: Option<String>,
+        error: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +74,23 @@ pub enum Message {
     },
     WelcomeDraftChanged(String),
     ConfirmWelcomeUsername,
+    // ---- Stage 3: per-channel game install pipeline ----
+    /// Open the OS-native folder picker for the install_prompt route.
+    PickInstallLocation,
+    /// Result of the folder picker; `None` if the user cancelled.
+    InstallLocationPicked(Option<std::path::PathBuf>),
+    /// `latest_release` task finished for the currently-open install_prompt.
+    InstallPromptLatestFetched {
+        channel: Channel,
+        result: Result<Option<crate::updater::branches::GameRelease>, String>,
+    },
+    /// User confirmed the install prompt — kick off download_and_install.
+    InstallConfirmed,
+    /// download_and_install finished; updates identity.json on success.
+    InstallComplete {
+        channel: Channel,
+        result: Result<crate::updater::branches::InstallResult, String>,
+    },
 }
 
 pub struct AppState {
@@ -87,6 +118,10 @@ pub struct AppState {
     /// Live text in the welcome screen's input field.
     pub welcome_draft: String,
     pub center_view: CenterView,
+    /// Set while a per-channel install / update is downloading + extracting.
+    /// Used to disable buttons that would conflict (Play, Update, channel
+    /// switch) and to drive the "Installing…" UI state on the prompt.
+    pub install_in_progress: Option<Channel>,
 }
 
 impl Default for AppState {
@@ -118,6 +153,7 @@ impl Default for AppState {
             awaiting_username: false,
             welcome_draft: String::new(),
             center_view: CenterView::Default,
+            install_in_progress: None,
         }
     }
 }
@@ -316,13 +352,17 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         Message::RegisterDone { channel, result } => {
             match result {
                 Ok(resp) => {
-                    state.identity.channels.insert(
-                        channel,
-                        ChannelCreds {
-                            player_id: resp.player_id,
-                            secret_token: resp.secret_token,
-                        },
-                    );
+                    // Preserve install_location / installed_version if this
+                    // channel was already installed. /register only refreshes
+                    // identity creds; it must not wipe Stage 3 install state.
+                    let prior = state.identity.channels.remove(&channel);
+                    let mut creds =
+                        ChannelCreds::from_register(resp.player_id, resp.secret_token);
+                    if let Some(p) = prior {
+                        creds.install_location = p.install_location;
+                        creds.installed_version = p.installed_version;
+                    }
+                    state.identity.channels.insert(channel, creds);
                     // Server is canonical for username; reflect any drift back
                     // into state.identity.
                     state.identity.username = resp.username;
@@ -391,8 +431,214 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             state.awaiting_username = false;
             return Task::batch(register_tasks(state));
         }
+        Message::UpdatePressed => {
+            let channel = state.selected_channel;
+            // Defence-in-depth: the channel selector hides Dev when
+            // !dev_flag, so this should be unreachable in practice. Logged
+            // and refused if it ever fires.
+            if channel == Channel::Dev && !state.dev_flag {
+                tracing::warn!("UpdatePressed for Dev without dev_flag — refusing");
+                return Task::none();
+            }
+            if state.install_in_progress.is_some() {
+                tracing::debug!(
+                    in_progress = ?state.install_in_progress,
+                    "install already in flight — ignoring"
+                );
+                return Task::none();
+            }
+            let installed = state
+                .identity
+                .channels
+                .get(&channel)
+                .and_then(|c| c.install_location.as_ref())
+                .is_some();
+            if installed {
+                // Stage 4 will handle update-when-installed. Stage 3 only
+                // routes the "not installed" path.
+                tracing::debug!(?channel, "channel already installed — Stage 4 path pending");
+                return Task::none();
+            }
+            state.center_view = CenterView::InstallPrompt {
+                channel,
+                install_root: None,
+                available: None,
+                error: None,
+            };
+            return Task::perform(
+                crate::updater::branches::latest_release(channel),
+                move |result| Message::InstallPromptLatestFetched { channel, result },
+            );
+        }
+        Message::InstallPromptLatestFetched { channel, result } => {
+            if let CenterView::InstallPrompt {
+                channel: pc,
+                available,
+                error,
+                ..
+            } = &mut state.center_view
+            {
+                // Guard against a late arrival after the user navigated away
+                // or switched channels — only apply when the prompt is still
+                // on the same channel.
+                if *pc != channel {
+                    return Task::none();
+                }
+                match result {
+                    Ok(Some(release)) => {
+                        *available = Some(release.version.to_string());
+                        *error = None;
+                    }
+                    Ok(None) => {
+                        *error = Some(
+                            "No game release published for this channel yet.".to_string(),
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, ?channel, "latest_release fetch failed");
+                        *error = Some(format!("Could not reach GitHub Releases: {e}"));
+                    }
+                }
+            }
+        }
+        Message::PickInstallLocation => {
+            return Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose game install location")
+                        .pick_folder()
+                        .await
+                        .map(|fh| fh.path().to_path_buf())
+                },
+                Message::InstallLocationPicked,
+            );
+        }
+        Message::InstallLocationPicked(picked) => {
+            if let Some(path) = picked {
+                if let CenterView::InstallPrompt { install_root, .. } = &mut state.center_view {
+                    *install_root = Some(path);
+                }
+            }
+        }
+        Message::InstallConfirmed => {
+            // Snapshot the prompt state — we need owned values for the async
+            // task. If any piece is missing the Confirm button shouldn't be
+            // pressable; logged + ignored as defence-in-depth.
+            let (channel, install_root, version) = if let CenterView::InstallPrompt {
+                channel,
+                install_root: Some(root),
+                available: Some(v),
+                ..
+            } = &state.center_view
+            {
+                (*channel, root.clone(), v.clone())
+            } else {
+                tracing::warn!("InstallConfirmed with incomplete prompt state");
+                return Task::none();
+            };
+            if channel == Channel::Dev && !state.dev_flag {
+                tracing::warn!("InstallConfirmed for Dev without dev_flag — refusing");
+                return Task::none();
+            }
+            // Refuse the install if /register never produced creds for this
+            // channel — InstallComplete's identity-update step would silently
+            // no-op (channels.get_mut returns None), leaving install metadata
+            // unpersisted and orphaning the on-disk files.
+            if !state.identity.channels.contains_key(&channel) {
+                tracing::warn!(
+                    ?channel,
+                    "InstallConfirmed for {channel} with missing credentials — refusing"
+                );
+                return Task::none();
+            }
+            if state.install_in_progress.is_some() {
+                return Task::none();
+            }
+            // Parse the expected version up front so the staleness check
+            // inside the async task compares Version-to-Version (handles
+            // canonical-form differences like `1.2.3-dev.1` vs an equivalent
+            // non-canonical string) instead of doing string equality. A
+            // parse failure here is an upstream contract bug — log loudly
+            // but proceed; the downstream installer is the safety net.
+            let expected_version = match semver::Version::parse(&version) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        version,
+                        "expected version from install prompt is not valid semver"
+                    );
+                    None
+                }
+            };
+            state.install_in_progress = Some(channel);
+            return Task::perform(
+                async move {
+                    let fresh = crate::updater::branches::latest_release(channel).await?;
+                    let Some(release) = fresh else {
+                        return Err("release disappeared from GitHub between check and install"
+                            .to_string());
+                    };
+                    if let Some(expected) = expected_version.as_ref() {
+                        if &release.version != expected {
+                            tracing::warn!(
+                                expected = %expected,
+                                actual = %release.version,
+                                "release version changed between check and install"
+                            );
+                        }
+                    }
+                    crate::updater::branches::download_and_install(
+                        channel,
+                        release,
+                        install_root,
+                        |progress| tracing::debug!(?progress, "install progress"),
+                    )
+                    .await
+                },
+                move |result| Message::InstallComplete { channel, result },
+            );
+        }
+        Message::InstallComplete { channel, result } => {
+            state.install_in_progress = None;
+            match result {
+                Ok(info) => {
+                    if let Some(creds) = state.identity.channels.get_mut(&channel) {
+                        creds.install_location = Some(info.install_dir.clone());
+                        creds.installed_version = Some(info.version.clone());
+                    }
+                    if let Err(e) = identity::save(&state.identity) {
+                        tracing::warn!(
+                            error = %e,
+                            ?channel,
+                            "failed to persist identity after install"
+                        );
+                    }
+                    tracing::info!(
+                        ?channel,
+                        version = %info.version,
+                        exe = %info.executable,
+                        install_dir = %info.install_dir.display(),
+                        "game install complete"
+                    );
+                    state.center_view = CenterView::Default;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, ?channel, "game install failed");
+                    if let CenterView::InstallPrompt {
+                        channel: pc,
+                        error: prompt_error,
+                        ..
+                    } = &mut state.center_view
+                    {
+                        if *pc == channel {
+                            *prompt_error = Some(format!("Install failed: {e}"));
+                        }
+                    }
+                }
+            }
+        }
         Message::PlayPressed
-        | Message::UpdatePressed
         | Message::UninstallChannel(_)
         | Message::VerifyChannel(_)
         | Message::GameSavePressed(_) => {}

@@ -6,6 +6,7 @@ use iced::Element;
 
 pub mod change_username;
 pub mod default;
+pub mod install_prompt;
 pub mod launcher_update;
 pub mod settings;
 
@@ -15,5 +16,6 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
         CenterView::Settings { tab } => settings::view(state, *tab),
         CenterView::ChangeUsername { draft } => change_username::view(state, draft),
         CenterView::LauncherUpdate => launcher_update::view(state),
+        CenterView::InstallPrompt { .. } => install_prompt::dispatch(state, &state.center_view),
     }
 }
