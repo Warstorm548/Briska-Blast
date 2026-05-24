@@ -9,6 +9,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.2.3] — 2026-05-24
+
+Third iteration on the headless .NET export. v0.2.2's verify step
+caught another empty-of-C# .pck. The verbose log was decisive:
+
+```
+.NET: GodotPlugins initialized
+.NET: Failed to load project assembly      ← happens HERE, before any publish
+[scan filesystem]
+ERROR: Failed to create an autoload, script 'SettingsManager.cs' is not compiling.
+```
+
+The assembly load failure is in Godot's RUNTIME initialisation,
+**before** the export plugin's `BuildManager.PublishProjectBlocking`
+would fire. Autoload registration then cascades because the C# scripts
+can't compile against a missing assembly. By the time the export
+plugin runs, the project is in a broken state and the publish is
+skipped — no C# in the .pck.
+
+### Why v0.2.2 didn't reach the publish step
+
+Godot's editor-mode runtime reads the project assembly from
+`.godot/mono/temp/bin/<Configuration>/<AssemblyName>.dll`. The default
+configuration when not specified is `Debug`. We weren't building Debug
+at all in v0.2.2 (the maintainer-confirmed repo assumed clean bootstrap
+auto-builds), so `bin/Debug/BriskaBlast.dll` didn't exist, and the
+assembly load failed at runtime init.
+
+### Fixed
+
+- **`.github/workflows/release-client.yml`**: re-added a single
+  `dotnet build` step (default Debug, no `-c` flag) right after
+  `dotnet restore` and before `Pre-import resources`. Populates
+  `bin/Debug/BriskaBlast.dll` so Godot's runtime can load the
+  assembly during initialisation. Autoload registration then
+  succeeds, and the export plugin can do its own publish for the
+  export configuration.
+
+### Unchanged from v0.2.2
+
+- Still no manual `dotnet publish` (Godot's export plugin handles it
+  once autoloads work).
+- Still no `--editor --quit` warm-up (placebo).
+- `dotnet/embed_build_outputs=true` in `export_presets.cfg`.
+- `--verbose` on `--export-release`.
+- Verify-pck-size canary — kept as the safety net.
+
+### If this still fails
+
+Option C from research: build artifacts locally with the Godot editor
+GUI (which works), CI reduced to packaging + uploading. Headless export
+on 4.6.3 in this environment may simply be broken in a way that needs
+manual workaround.
+
+---
+
 ## [0.2.2] — 2026-05-24
 
 Iteration on v0.2.1's headless .NET export fix. The v0.2.1 workflow

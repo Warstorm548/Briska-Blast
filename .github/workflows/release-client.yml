@@ -150,6 +150,22 @@ jobs:
         run: dotnet restore
         working-directory: client
 
+      # v0.2.2's verify step caught a still-empty .pck and the verbose log
+      # showed `.NET: Failed to load project assembly` BEFORE Godot's
+      # internal `BuildManager.PublishProjectBlocking` would have run.
+      # That cascade means autoload registration fails → export plugin
+      # never gets to its publish step → empty-of-C# .pck ships.
+      #
+      # Godot's editor-mode runtime reads the project assembly from
+      # `.godot/mono/temp/bin/<Configuration>/` where the default
+      # configuration is Debug. `dotnet build` (no `-c`) populates
+      # `bin/Debug/BriskaBlast.dll` so the runtime can load it, autoload
+      # registration succeeds, and the export plugin can do its own
+      # publish for the export config.
+      - name: dotnet build (Debug — populates bin/Debug/ for editor runtime)
+        run: dotnet build
+        working-directory: client
+
       - name: Pre-import resources
         run: godot --headless --import
         working-directory: client
