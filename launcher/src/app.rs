@@ -5,13 +5,23 @@
 use crate::channel::Channel;
 use crate::identity::{self, ChannelCreds, Identity};
 use crate::server_api;
+use crate::ui;
 use crate::ui::theme::{BAR_HEIGHT, ZONE_GAP};
 use crate::updater::{self, UpdateCheckOutcome};
-use crate::ui;
+use futures_util::StreamExt;
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Task, Theme};
 use shared::protocol::messages::{RegisterRequest, RegisterResponse, UpdateUsernameRequest};
 use std::collections::BTreeMap;
+
+/// Internal pipe between the spawned download task and the Iced stream
+/// adapter — see the `InstallConfirmed` handler. Not surfaced as a
+/// public Message because the variants here are mapped 1:1 onto two
+/// existing user-facing Messages (DownloadProgress, InstallComplete).
+enum InstallStreamEvent {
+    Progress(crate::updater::branches::InstallProgress),
+    Complete(Result<crate::updater::branches::InstallResult, String>),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
@@ -91,6 +101,12 @@ pub enum Message {
         channel: Channel,
         result: Result<crate::updater::branches::InstallResult, String>,
     },
+    /// Per-chunk download / extract progress event from the installer
+    /// pipeline (Stage 6). Drives the bottom-bar progress widget.
+    DownloadProgress {
+        channel: Channel,
+        progress: crate::updater::branches::InstallProgress,
+    },
     /// Boot-time per-channel `latest_release` query landed (Stage 4). Drives
     /// the bottom-left button's state machine and the top "Updates
     /// available" banner. One fires per visible channel; Dev's fires only
@@ -146,6 +162,10 @@ pub struct AppState {
     /// available + no installed; `Up to date — vX.Y.Z` when no available
     /// but an install is on disk).
     pub available_versions: BTreeMap<Channel, semver::Version>,
+    /// Latest InstallProgress event from the active download / extract.
+    /// Drives the bottom-bar progress widget (Stage 6). `None` between
+    /// installs; cleared on InstallComplete.
+    pub download_progress: Option<crate::updater::branches::InstallProgress>,
 }
 
 impl Default for AppState {
@@ -182,6 +202,7 @@ impl Default for AppState {
             center_view: CenterView::Default,
             install_in_progress: None,
             available_versions: BTreeMap::new(),
+            download_progress: None,
         }
     }
 }
@@ -699,12 +720,33 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 }
             };
             state.install_in_progress = Some(channel);
-            return Task::perform(
-                async move {
+            state.download_progress = None;
+            // Drive the install with two channels: a tokio::spawn task that
+            // owns the download (and produces Progress events into an mpsc
+            // sender as it streams), and a Task::stream that consumes the
+            // matching receiver and emits Messages into the Iced runtime.
+            // The same Sender is cloned for the closure callback; the
+            // outer clone fires the final Complete event once the .await
+            // on download_and_install resolves.
+            //
+            // Bounded channel — Progress has latest-state semantics so we
+            // try_send and drop on full (the next chunk's event arrives
+            // shortly anyway). Complete is one-shot and must not be
+            // dropped, so it uses the awaited send. Capacity 32 covers
+            // ~half a second of progress events at a 64ms Iced frame and
+            // a multi-MB/s download.
+            const INSTALL_STREAM_CAPACITY: usize = 32;
+            let (tx, rx) =
+                tokio::sync::mpsc::channel::<InstallStreamEvent>(INSTALL_STREAM_CAPACITY);
+            let tx_progress = tx.clone();
+            tokio::spawn(async move {
+                let result: Result<crate::updater::branches::InstallResult, String> = async {
                     let fresh = crate::updater::branches::latest_release(channel).await?;
                     let Some(release) = fresh else {
-                        return Err("release disappeared from GitHub between check and install"
-                            .to_string());
+                        return Err(
+                            "release disappeared from GitHub between check and install"
+                                .to_string(),
+                        );
                     };
                     if let Some(expected) = expected_version.as_ref() {
                         if &release.version != expected {
@@ -719,15 +761,46 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         channel,
                         release,
                         install_root,
-                        |progress| tracing::debug!(?progress, "install progress"),
+                        move |progress| {
+                            // Drop on full / receiver-dropped — progress is
+                            // safe to skip (the next event corrects the
+                            // displayed fraction); blocking the callback
+                            // would stall the actual download loop.
+                            let _ =
+                                tx_progress.try_send(InstallStreamEvent::Progress(progress));
+                        },
                     )
                     .await
-                },
-                move |result| Message::InstallComplete { channel, result },
-            );
+                }
+                .await;
+                // Completion must not be dropped — `send().await` waits
+                // for capacity. If the receiver has been dropped we don't
+                // care (no UI to update); the `let _ =` absorbs that.
+                let _ = tx.send(InstallStreamEvent::Complete(result)).await;
+            });
+            let stream =
+                tokio_stream::wrappers::ReceiverStream::new(rx).map(move |ev| match ev {
+                    InstallStreamEvent::Progress(progress) => {
+                        Message::DownloadProgress { channel, progress }
+                    }
+                    InstallStreamEvent::Complete(result) => {
+                        Message::InstallComplete { channel, result }
+                    }
+                });
+            return Task::stream(stream);
+        }
+        Message::DownloadProgress { channel, progress } => {
+            // Late events for a stale channel can arrive if the user
+            // cancels and starts another install before the previous
+            // stream drains. Discard those.
+            if state.install_in_progress != Some(channel) {
+                return Task::none();
+            }
+            state.download_progress = Some(progress);
         }
         Message::InstallComplete { channel, result } => {
             state.install_in_progress = None;
+            state.download_progress = None;
             match result {
                 Ok(info) => {
                     if let Some(creds) = state.identity.channels.get_mut(&channel) {

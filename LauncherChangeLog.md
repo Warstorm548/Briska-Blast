@@ -5,6 +5,72 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.1] — 2026-05-24
+
+Bottom progress bar wired through to real install events. The
+`download_and_install` callback that fed `tracing::debug` since Stage 3
+now feeds an `iced::widget::progress_bar` plus a human-readable label
+("Downloading — 64% (122 MiB / 192 MiB)" / "Extracting…" / "Done."). The
+last mocked piece of the launcher UI — `MOCK_PROGRESS_PERCENT` — is gone;
+`mock.rs` is deleted, no module remains to maintain.
+
+Stage 6 (and final code stage before Stage 7's uninstall wiring + the
+feat-branch → dev merge) of the launcher game-install pipeline plan.
+
+### Added
+
+- **`AppState.download_progress: Option<InstallProgress>`**
+  (`launcher/src/app.rs`) — last progress event from the active install
+  pipeline. `None` between installs.
+- **`Message::DownloadProgress { channel, progress }`** — per-chunk
+  download/extract event, mapped 1:1 from the internal
+  `InstallStreamEvent::Progress` variant. Stale-channel events (i.e.
+  events for a channel that's no longer `install_in_progress`) are
+  discarded by the handler.
+- **Streaming `InstallConfirmed` task** — the install pipeline now drives
+  an `iced::Task::stream` over a tokio `UnboundedReceiver`, so the
+  bottom-bar widget updates in real time during the download instead of
+  jumping straight from idle to complete on InstallComplete. The single
+  `tokio::spawn` owns the work and writes Progress / Complete events
+  into the channel; the receiver is adapted via
+  `tokio_stream::wrappers::UnboundedReceiverStream` and the events are
+  `.map`-ped to the matching public Message variants via
+  `futures_util::StreamExt`.
+
+### Changed
+
+- **`InstallProgress`** (`launcher/src/updater/branches/installer.rs`)
+  fields are no longer `#[allow(dead_code)]` — `bytes_now`,
+  `bytes_total`, and `fraction` are now consumed by the new
+  `bottom_bar::progress_cell`.
+- **`bottom_bar::progress_cell`** renders an `iced::widget::progress_bar`
+  plus a label line. `format_bytes` helper formats bytes/KiB/MiB/GiB
+  appropriately for the human-readable counter.
+
+### Removed
+
+- **`launcher/src/mock.rs`** — deleted along with `MOCK_PROGRESS_PERCENT`
+  and the comments explaining the prior mocks. `mod mock` dropped from
+  `main.rs`. No mocked UI state remains.
+
+### Deps
+
+- New: `tokio-stream = "0.1"` for `UnboundedReceiverStream`.
+
+### Deferred to Stage 7
+
+- Per-channel **Uninstall** + **Verify** + **Game Save** buttons in the
+  Settings → Game Channel Management tab. `Message::UninstallChannel`,
+  `Message::VerifyChannel`, and `Message::GameSavePressed` variants
+  exist as `#[allow(dead_code)]` no-ops; Stage 7 wires the destructive
+  uninstall (confirm modal → `tokio::fs::remove_dir_all` → clear
+  `install_location` / `installed_version` on the identity row), the
+  verify path (re-read `installed.json`, sanity-check the executable
+  exists), and the saves-folder open action. Captured in the plan's
+  staging table; needed before the final feat-branch → dev push.
+
+---
+
 ## [0.7.0] — 2026-05-24
 
 Play button now actually launches the installed game. With an installed

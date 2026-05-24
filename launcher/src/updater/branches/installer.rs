@@ -41,16 +41,13 @@ pub struct InstalledManifest {
 
 /// Stream-of-progress emitted by `download_and_install`. The fraction is
 /// 0.0..=1.0; Extracting/Done are discrete states with no fraction. Stage 6
-/// reads these fields to drive the bottom progress bar — they're still
-/// emitted in Stage 3 (via tracing::debug only) so the wiring path works.
+/// routes these through `Message::DownloadProgress` into the bottom
+/// progress bar widget.
 #[derive(Debug, Clone)]
 pub enum InstallProgress {
     Downloading {
-        #[allow(dead_code)]
         fraction: f32,
-        #[allow(dead_code)]
         bytes_now: u64,
-        #[allow(dead_code)]
         bytes_total: u64,
     },
     Extracting,
