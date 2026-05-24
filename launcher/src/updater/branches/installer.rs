@@ -225,8 +225,19 @@ where
         .timeout(DOWNLOAD_TIMEOUT)
         .build()
         .map_err(|e| format!("http client build: {e}"))?;
+    // `asset_url` is the GitHub REST API endpoint
+    // (https://api.github.com/repos/.../releases/assets/<id>), inherited
+    // unchanged from self_update::backends::github's `asset["url"]` parser.
+    // Without the Accept header below the API returns the asset's JSON
+    // metadata (~few hundred bytes) instead of the binary, which silently
+    // gets saved as `.download-foo.zip` and later surfaces as a confusing
+    // "zip open: Could not find EOCD" error in the extractor. This header
+    // mirrors what self_update itself sets at update.rs:234 in its own
+    // (working) launcher self-update path. See:
+    //   https://docs.github.com/en/rest/releases/assets
     let resp = client
         .get(asset_url)
+        .header(reqwest::header::ACCEPT, "application/octet-stream")
         .send()
         .await
         .map_err(|e| format!("download request: {e}"))?
@@ -273,37 +284,75 @@ where
         .map_err(|e| format!("close archive: {e}"))?;
     drop(file);
 
-    // Verify download completeness. reqwest's `bytes_stream` ends silently
-    // when the connection closes — a server-side timeout or network blip
-    // mid-stream produces a short file with NO error from the stream
-    // itself, which then surfaces inside the extractor as a confusing
-    // "Could not find EOCD" / corrupted archive error. Catch it here so
-    // the user sees the real cause: a truncated download.
-    if total > 0 && downloaded != total {
-        return Err(format!(
-            "download truncated: wrote {downloaded} bytes, expected {total} \
-             (content-length) — connection likely dropped mid-stream; retry"
-        ));
-    }
-    // Defence-in-depth: confirm the file on disk matches what we wrote
-    // before letting the extractor touch it. If these diverge, the
-    // problem is buffering / a file-handle race, not the network.
+    // Verify the file on disk is actually an archive of the expected kind
+    // BEFORE handing it to the extractor. This supersedes v0.8.1's
+    // Content-Length-based truncation checks — those were guards for a
+    // narrower failure mode (mid-stream truncation with a known total)
+    // and didn't fire on the real-world bug, where `total = 0` and the
+    // file was a small JSON metadata response from the GitHub API
+    // (missing Accept header — now fixed above). A 4-byte magic-byte
+    // check covers BOTH cases: truncated AND wrong-content.
+    //
+    //   zip   = PK\x03\x04  (50 4b 03 04)
+    //   gzip  = 1f 8b
+    //
+    // ZIP signature ref: https://en.wikipedia.org/wiki/ZIP_(file_format)
     let on_disk = tokio::fs::metadata(&temp_archive)
         .await
         .map(|m| m.len())
         .map_err(|e| format!("stat temp archive: {e}"))?;
-    if total > 0 && on_disk != total {
-        return Err(format!(
-            "temp archive size mismatch: on-disk {on_disk} bytes vs {total} \
-             content-length (downloaded {downloaded}). File handle race?"
-        ));
+    {
+        use tokio::io::AsyncReadExt;
+        let mut head = [0u8; 4];
+        let mut f = tokio::fs::File::open(&temp_archive)
+            .await
+            .map_err(|e| format!("open temp archive for magic check: {e}"))?;
+        let n = f
+            .read(&mut head)
+            .await
+            .map_err(|e| format!("read temp archive magic: {e}"))?;
+        if n < 4 {
+            return Err(format!(
+                "downloaded archive is only {n} bytes — far smaller than \
+                 the expected game asset. Likely an error response or \
+                 stub instead of the real binary."
+            ));
+        }
+        let expected: &[u8] = if asset_name.ends_with(".tar.gz") {
+            &[0x1f, 0x8b]
+        } else if asset_name.ends_with(".zip") {
+            &[0x50, 0x4b, 0x03, 0x04]
+        } else {
+            &[]
+        };
+        if !expected.is_empty() && !head.starts_with(expected) {
+            // Include a sample of the file content so the next failure
+            // report is self-diagnostic (`{"url":...}` ⇒ JSON metadata
+            // from a missing Accept header; `<html>` ⇒ HTML error page).
+            let sample = tokio::fs::read(&temp_archive)
+                .await
+                .map(|b| {
+                    String::from_utf8_lossy(&b[..b.len().min(256)]).into_owned()
+                })
+                .unwrap_or_default();
+            let kind = if asset_name.ends_with(".tar.gz") {
+                "tar.gz"
+            } else {
+                "zip"
+            };
+            return Err(format!(
+                "downloaded content is not a recognised {kind} archive \
+                 (first 4 bytes: {head:02x?}, on-disk size: {on_disk}, \
+                 sample: {sample:?})"
+            ));
+        }
     }
-    tracing::debug!(
+    tracing::info!(
         downloaded,
         total,
         on_disk,
         archive = %temp_archive.display(),
-        "download complete, handing off to extractor"
+        "download complete, magic bytes ok, handing off to extractor"
     );
 
     on_progress(InstallProgress::Extracting);

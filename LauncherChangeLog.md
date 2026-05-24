@@ -5,6 +5,63 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.8.2] — 2026-05-24
+
+Root-cause hotfix for the v0.8.0 / v0.8.1 install failure
+`install failed: zip open: invalid archive: Could not find EOCD`.
+v0.8.1's Content-Length checks did not fire because the underlying
+problem wasn't a truncated download — it was a **wrong-content
+download**.
+
+### Diagnosis (three-way confirmed)
+
+`self_update::backends::github::ReleaseList` parses `asset["url"]` (the
+GitHub REST API endpoint, NOT `browser_download_url`) into
+`ReleaseAsset.download_url`. Our `launcher/src/updater/branches/
+github.rs:78` forwards that field straight into our wrapper, so we
+**were** hitting the right URL — but the GitHub API returns an asset's
+JSON metadata (~few hundred bytes) when called without an
+`Accept: application/octet-stream` header. We saved that JSON as
+`.download-foo.zip`, the extractor unsurprisingly couldn't find an
+EOCD record, the user got the cryptic message.
+
+`self_update`'s own download path (`self_update-0.41.0/src/update.rs:234`)
+sets exactly this header, which is why the launcher's **binary
+self-update** path has worked all along — only our hand-rolled
+**game-files** download was missing it.
+
+Verified by an online research agent (citing
+`https://docs.github.com/en/rest/releases/assets`), a cargo-registry
+source-code read of self_update, and re-reading our own code. All three
+agreed on root cause + fix.
+
+### Fixed
+
+- **`Accept: application/octet-stream` header** is now set on the GET
+  in `stage_install` (`launcher/src/updater/branches/installer.rs`).
+  This is the single line that fixes the user-reported bug.
+- **Magic-byte sniff** added post-download. Confirms the file on disk
+  starts with `PK\x03\x04` (zip) or `1f 8b` (gzip) before the extractor
+  ever opens it. On mismatch, the error includes the first 4 bytes and
+  a 256-byte sample of the file content — so the next failure (if any)
+  carries its own diagnosis (`{"url":...}` ⇒ JSON metadata regression,
+  `<html>` ⇒ CDN error page, etc.) without needing more telemetry.
+- **Logging level**: the pre-extract `downloaded / total / on_disk`
+  trace is now `tracing::info!` instead of `tracing::debug!` so users
+  running from a terminal see byte counts without env-filter changes.
+
+### Removed
+
+- v0.8.1's `if total > 0 && downloaded != total` Content-Length-based
+  truncation check and the `on_disk != total` cross-check. Both were
+  superseded by the magic-byte sniff (which covers both truncated AND
+  wrong-content cases without depending on Content-Length being set).
+  Their tracing::debug log moved up to info-level.
+
+### No new deps; no schema changes.
+
+---
+
 ## [0.8.1] — 2026-05-24
 
 Hotfix for a v0.8.0-reported install failure surfacing as
