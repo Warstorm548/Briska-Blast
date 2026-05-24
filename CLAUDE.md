@@ -46,6 +46,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Launcher self-update and version enforcement | [`docs/launcher/launcher-update-and-version-validation.md`](docs/launcher/launcher-update-and-version-validation.md) |
 | Launcher UI layout, identity file, channel gating, state variants | [`docs/launcher/launcher-foundation.md`](docs/launcher/launcher-foundation.md) |
 | Dev branch and release channel rules | [`docs/dev/devtools.md`](docs/dev/devtools.md) |
+| Release tag namespaces (server / launcher / game) | [`docs/dev/release-tagging.md`](docs/dev/release-tagging.md) |
 | Server change history | [`ServerChangeLog.md`](../ServerChangeLog.md) |
 | Game change history | [`GameChangeLog.md`](GameChangeLog.md) |
 | Launcher change history | [`LauncherChangeLog.md`](../LauncherChangeLog.md) |

@@ -1,11 +1,18 @@
-# Release — Client (Godot 4.6.3 + C# / .NET 8)
-# Temporarily disabled: trigger is manual only.
-# To re-enable, replace the `on` block with:
-#   on:
-#     push:
-#       tags: ['v*.*.*']
+# Release — Game (Godot 4.6.3 + C# / .NET 8)
+#
+# Triggers:
+#   - workflow_dispatch     : build artifacts only (no GitHub Release publish)
+#   - push tag game-v*      : build + publish to the matching GitHub Release
+#
+# Tag schema: game-v<semver>(-{ea,dev}.N)?
+#   stable : game-v1.2.3
+#   ea     : game-v1.2.3-ea.4
+#   dev    : game-v1.2.3-dev.5
+#
+# The `game-v` prefix keeps this namespace distinct from the server's bare
+# `v*.*.*` and the launcher's `launcher-v*` (see docs/dev/release-tagging.md).
 
-name: Release — Client
+name: Release — Game
 
 on:
   workflow_dispatch:
@@ -19,6 +26,8 @@ on:
           - dev
           - ea
           - stable
+  push:
+    tags: ['game-v*']
 
 env:
   GODOT_VERSION: "4.6.3"
@@ -27,6 +36,10 @@ jobs:
   build:
     name: Export Linux + Windows
     runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+      prerelease: ${{ steps.channel.outputs.prerelease }}
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - uses: actions/checkout@v6
@@ -34,27 +47,30 @@ jobs:
       - name: Detect release channel
         id: channel
         run: |
-          # workflow_dispatch: take the user-supplied input.
-          # push (when re-enabled per the header comment): mirror release-server.yml
-          # regex exactly so client + server tag conventions stay aligned.
+          # workflow_dispatch: take the user-supplied input (no publish, prerelease moot).
+          # push tag game-v*: parse channel + prerelease flag from the tag, mirroring
+          # release-server.yml's anchored-regex approach so suffix-only tags like
+          # `game-v1.2.3-readme` don't get misclassified.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             CHANNEL="${{ inputs.channel }}"
+            PRERELEASE=false
           else
             TAG="${GITHUB_REF_NAME}"
-            SEMVER='v[0-9]+\.[0-9]+\.[0-9]+'
-            if   [[ "$TAG" =~ ^${SEMVER}-ea\.[0-9]+$ ]];  then CHANNEL=ea
-            elif [[ "$TAG" =~ ^${SEMVER}-dev\.[0-9]+$ ]]; then CHANNEL=dev
-            elif [[ "$TAG" =~ ^${SEMVER}$ ]];             then CHANNEL=stable
+            SEMVER='game-v[0-9]+\.[0-9]+\.[0-9]+'
+            if   [[ "$TAG" =~ ^${SEMVER}-ea\.[0-9]+$ ]];  then CHANNEL=ea;     PRERELEASE=true
+            elif [[ "$TAG" =~ ^${SEMVER}-dev\.[0-9]+$ ]]; then CHANNEL=dev;    PRERELEASE=true
+            elif [[ "$TAG" =~ ^${SEMVER}$ ]];             then CHANNEL=stable; PRERELEASE=false
             else
-              echo "::error::Tag '$TAG' does not match any release channel pattern (stable: v1.2.3, ea: v1.2.3-ea.N, dev: v1.2.3-dev.N)"
+              echo "::error::Tag '$TAG' does not match any release channel pattern (stable: game-v1.2.3, ea: game-v1.2.3-ea.N, dev: game-v1.2.3-dev.N)"
               exit 1
             fi
           fi
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           # Export to env so child processes (e.g. dotnet publish spawned by
           # godot --headless --export-release) inherit RELEASE_CHANNEL.
           echo "RELEASE_CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
-          echo "Building Briska Blast client on channel: $CHANNEL"
+          echo "Building Briska Blast game on channel: $CHANNEL (prerelease=$PRERELEASE)"
 
       - name: Install .NET 8 SDK
         run: |
@@ -143,3 +159,30 @@ jobs:
           path: |
             briskablast-client-*-linux.tar.gz
             briskablast-client-*-windows.zip
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/game-v')
+    # Default GITHUB_TOKEN has read-only contents scope; creating a release
+    # needs write. Mirrors release-server.yml / release-launcher.yml.
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: briskablast-client-${{ needs.build.outputs.channel }}-${{ needs.build.outputs.version }}
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: |
+            artifacts/briskablast-client-*-linux.tar.gz
+            artifacts/briskablast-client-*-windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
