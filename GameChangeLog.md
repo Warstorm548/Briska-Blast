@@ -9,6 +9,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.2.2] — 2026-05-24
+
+Iteration on v0.2.1's headless .NET export fix. The v0.2.1 workflow
+added an editor warm-up + explicit `dotnet publish` + `dotnet build
+-c Release` thinking these would populate the paths Godot's export
+plugin needs. They didn't — the verify step (correctly) caught the
+broken artifact and refused to publish. v0.2.2 reads Godot 4.6's
+ExportPlugin source directly and strips the placebos.
+
+### Why v0.2.1 didn't work
+
+Reading `godotengine/godot@4.6` source:
+- `modules/mono/editor/GodotTools/.../Export/ExportPlugin.cs` shows
+  ExportPlugin **internally** runs `dotnet publish` to
+  `<ProjectBaseOutputPath>/godot-publish-dotnet/<Configuration>-<RID>/`
+  and reads the assembly back from there.
+- `modules/mono/editor/.../Sdk.props` sets the SDK output to
+  `.godot/mono/temp/bin/<Configuration>/` — `bin/Debug/` for the
+  default editor and the Godot-internal `godot-publish-dotnet/`
+  subdir for exports.
+- Our v0.2.1 manual `dotnet publish -c ExportRelease -r linux-x64`
+  wrote to `.godot/mono/temp/bin/ExportRelease/linux-x64/{,publish/}` —
+  a directory Godot never reads. Same for our `dotnet build -c
+  Release` (`bin/Release/` is also dead code from Godot's perspective).
+- `godot --headless --editor --quit` warm-up tried to load the project
+  assembly from `bin/Debug/`, found nothing (we only built Release),
+  failed silently, did nothing useful.
+
+A maintainer-confirmed working pipeline
+([Stalker2106/godot-ci-test](https://github.com/Stalker2106/godot-ci-test/blob/master/.github/workflows/main.yaml))
+runs only `godot --headless --export-release` on a clean checkout —
+no manual `dotnet build`, no `dotnet publish`, no `--editor --quit`.
+
+### Fixed
+
+- **`.github/workflows/release-client.yml`**: removed the three
+  placebo steps from v0.2.1 (`dotnet build --configuration Release`,
+  `Editor warm-up`, `dotnet publish (Linux/Windows ExportRelease)`).
+  Kept the single useful addition: `dotnet restore` to warm the NuGet
+  cache, and the verify-pck-size canary. The workflow now matches the
+  minimal-working pattern in the maintainer-confirmed reference repo.
+
+### Unchanged from v0.2.1
+
+- `dotnet/embed_build_outputs=true` on both presets (still correct).
+- `--verbose` on `--export-release` (still useful for diagnostics).
+- Verify steps after each export — the canary that caught v0.2.1's
+  failure, kept in place to catch any future regression too.
+
+### No game behaviour changes
+
+- Same as v0.2.1 — this is exclusively a release-pipeline iteration.
+
+---
+
 ## [0.2.1] — 2026-05-24
 
 Fix-only release for the **headless `.NET` export pipeline**. v0.2.0
