@@ -87,11 +87,11 @@ Work intentionally deferred until after the initial production deployment of the
   - Identity file I/O (still deferred per [`launcher-foundation.md`](../launcher/launcher-foundation.md) §8 Open Items) — if option (B) lands, the identity-dir path question (`%APPDATA%` vs `%LOCALAPPDATA%`) gets re-litigated.
   - The `self_update` `.__old__*` orphan left in the install dir post-swap is a related but separate papercut: it's cleaned on next reboot (or next launch) regardless of which option above lands. Worth verifying whichever path is chosen also cleans the orphan as a side effect.
 
-### server requrments for luncher to be able to contact servers
+### server requirements for launcher to be able to contact servers
 
-- should have a new feild in the server to pottenial block calls to the server if the luncher is to out of date to safley handle the luncher and for itself
+- should have a new field in the server to potential block calls to the server if the launcher is to out of date to safely handle the launcher and for itself
 
-- Luncher Scans for existing games installs buttom check + option on frist boot of luncher when no game file path directory found
+- Launcher Scans for existing games installs bottom check + option on first boot of launcher when no game file path directory found
 
 ### Per-file hash manifest + deep Verify File Integrity
 

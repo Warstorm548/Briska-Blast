@@ -80,7 +80,9 @@ fn channels_section(state: &AppState) -> Element<'_, Message> {
     // Buttons are disabled when no install is on record for the channel,
     // or when an install / play action is already in flight. Stage 7
     // change — Stage 3-6's settings tab unconditionally enabled them.
-    let busy = state.install_in_progress.is_some() || state.game_running;
+    let busy = state.install_in_progress.is_some()
+        || state.uninstall_in_progress.is_some()
+        || state.game_running;
     for c in &state.visible_channels {
         let c = *c;
         let installed = state
@@ -109,7 +111,9 @@ fn channels_section(state: &AppState) -> Element<'_, Message> {
 
 fn important_files_section(state: &AppState) -> Element<'_, Message> {
     let mut col = column![text("Game Important Files").size(20)].spacing(ZONE_GAP);
-    let busy = state.install_in_progress.is_some() || state.game_running;
+    let busy = state.install_in_progress.is_some()
+        || state.uninstall_in_progress.is_some()
+        || state.game_running;
     for c in &state.visible_channels {
         let c = *c;
         let installed = state

@@ -327,7 +327,12 @@ pub async fn uninstall_install(
                     install_dir.display()
                 )
             })?;
-            let stamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+            // Millisecond precision avoids a collision when two
+            // uninstalls land in the same calendar second (e.g. test
+            // harnesses, rapid retries). The `%.3f` chrono token writes
+            // `.NNN` with a literal dot — filesystem-safe on Linux,
+            // macOS, and Windows (no `:`).
+            let stamp = Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
             let backup_dir = install_root
                 .join(SAVES_BACKUP_DIRNAME)
                 .join(channel_dir_name)

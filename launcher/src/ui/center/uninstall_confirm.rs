@@ -90,9 +90,17 @@ fn content<'a>(
     // Confirm button is disabled while another install / uninstall might
     // already be in flight (defence-in-depth — the Settings buttons already
     // disable themselves in that case but the prompt could outlive a state
-    // change).
-    let can_uninstall = state.install_in_progress.is_none() && !state.game_running;
-    let mut uninstall_btn = button(text("Uninstall")).padding(8);
+    // change). uninstall_in_progress also guards against a fast double
+    // press of this Confirm button itself.
+    let can_uninstall = state.install_in_progress.is_none()
+        && state.uninstall_in_progress.is_none()
+        && !state.game_running;
+    let mut uninstall_btn = button(text(if state.uninstall_in_progress == Some(channel) {
+        "Uninstalling\u{2026}"
+    } else {
+        "Uninstall"
+    }))
+    .padding(8);
     if can_uninstall {
         uninstall_btn = uninstall_btn.on_press(Message::UninstallConfirmed);
     }

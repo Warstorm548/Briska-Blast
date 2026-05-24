@@ -201,6 +201,10 @@ pub struct AppState {
     /// the inline status cell in Settings → Game Channel Management. Not
     /// persisted — fresh on every launcher launch.
     pub verify_results: BTreeMap<Channel, crate::updater::branches::VerifyOutcome>,
+    /// Set while a per-channel uninstall is running. Prevents a fast
+    /// double-press of Confirm from spawning two destructive tasks
+    /// against the same install dir.
+    pub uninstall_in_progress: Option<Channel>,
 }
 
 impl Default for AppState {
@@ -239,6 +243,7 @@ impl Default for AppState {
             available_versions: BTreeMap::new(),
             download_progress: None,
             verify_results: BTreeMap::new(),
+            uninstall_in_progress: None,
         }
     }
 }
@@ -963,9 +968,13 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             // dev_flag so a previously-flagged user who got revoked can
             // still clean up orphan dev files. We do still need a
             // complete install row to act on, and we won't proceed while
-            // an install is in flight or the game is running.
-            if state.install_in_progress.is_some() || state.game_running {
-                tracing::debug!(?channel, "UninstallChannel refused — install in flight or game running");
+            // an install is in flight, an uninstall is already running,
+            // or the game is running.
+            if state.install_in_progress.is_some()
+                || state.uninstall_in_progress.is_some()
+                || state.game_running
+            {
+                tracing::debug!(?channel, "UninstallChannel refused — busy");
                 return Task::none();
             }
             let Some(creds) = state.identity.channels.get(&channel) else {
@@ -1006,9 +1015,20 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 tracing::warn!("UninstallConfirmed without an active UninstallConfirm view");
                 return Task::none();
             };
-            if state.install_in_progress.is_some() || state.game_running {
+            // Re-check the busy gate on Confirm too — defence-in-depth
+            // against a Confirm press that races a state change after
+            // the prompt was opened.
+            if state.install_in_progress.is_some()
+                || state.uninstall_in_progress.is_some()
+                || state.game_running
+            {
                 return Task::none();
             }
+            // Record the in-flight uninstall BEFORE returning the task so
+            // a fast second Confirm press (or any other Uninstall
+            // affordance) is rejected by the busy gates above and in the
+            // UI. Cleared by UninstallComplete.
+            state.uninstall_in_progress = Some(channel);
             tracing::info!(?channel, keep_saves, "starting uninstall");
             return Task::perform(
                 crate::updater::branches::uninstall_install(
@@ -1019,7 +1039,13 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 move |result| Message::UninstallComplete { channel, result },
             );
         }
-        Message::UninstallComplete { channel, result } => match result {
+        Message::UninstallComplete { channel, result } => {
+            // Clear the in-flight flag unconditionally — success and
+            // failure both end the spawned task.
+            if state.uninstall_in_progress == Some(channel) {
+                state.uninstall_in_progress = None;
+            }
+            match result {
             Ok(()) => {
                 if let Some(creds) = state.identity.channels.get_mut(&channel) {
                     creds.install_location = None;
@@ -1050,7 +1076,8 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     }
                 }
             }
-        },
+            }
+        }
         Message::VerifyChannel(channel) => {
             // Defence-in-depth dev gate.
             if channel == Channel::Dev && !state.dev_flag {
