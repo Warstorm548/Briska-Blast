@@ -5,6 +5,88 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.0] — 2026-05-24
+
+Per-channel version detection on boot, plus the full bottom-left button
+state machine. The launcher now queries GitHub Releases for the latest
+`game-v*` tag of every visible channel on launch, caches the result in
+`state.available_versions`, and derives both the bottom-left button label
+and the top-bar "Updates available" banner from real installed-vs-available
+comparisons. The Stage 3 stub label `Update` is gone; the button now cycles
+through `Install <Channel> Game` / `Update to vX.Y.Z` / `Up to date —
+vX.Y.Z` / `Installing…` / `Running` per the foundation table.
+
+Stage 4 of the launcher game-install pipeline plan. Stage 5 wires Play;
+Stage 6 polishes the progress bar.
+
+### Added
+
+- **`AppState::available_versions: BTreeMap<Channel, semver::Version>`**
+  (`launcher/src/app.rs`) — populated by per-launch fan-out of
+  `updater::branches::latest_release(channel)` for every visible
+  channel. Dev's fetch fires only when the dev `/register` response
+  returns `dev_flag = true`, so unflagged users never reach the GitHub
+  API for the dev channel (foundation §3 defence-in-depth).
+- **`recompute_branch_updates_available`** (`launcher/src/app.rs`) —
+  derives `state.branch_updates_available` from real `(installed,
+  available)` pairs, filtered to `visible_channels` so the dev channel
+  never leaks into the top-bar banner for an unflagged user. Called
+  from every handler that mutates available / installed / visible
+  state.
+- **`Message::LatestReleaseFetched { channel, result }`** — the
+  per-channel release-discovery completion. Late-arriving Dev fetches
+  after a dev_flag revoke are dropped at the handler so the cache
+  can't be poisoned.
+- **`ChannelCreds::parsed_installed_version`** (`launcher/src/identity.rs`)
+  — returns the parsed `semver::Version` only when both
+  `install_location` and `installed_version` are present, so the
+  half-state guard from the Stage 3 review is the single source of
+  truth for "is this channel actually installed?" across `bottom_bar`
+  and `recompute_branch_updates_available`.
+
+### Changed
+
+- **Bottom-left button** (`launcher/src/ui/bottom_bar.rs`) is now fully
+  state-driven from `(installed_version, available_versions[channel],
+  game_running, install_in_progress)`. Labels cycle: `Install <C> Game`
+  (enabled iff a release exists), `Update to vX.Y.Z` (enabled iff
+  newer), `Up to date — vX.Y.Z` (disabled), `Installing…` (disabled),
+  `Running` (disabled).
+- **Top-bar banner** (`launcher/src/ui/top_bar.rs`) consumes the same
+  derived list; the previous `mock::BRANCH_UPDATES_AVAILABLE` constant
+  is retired (replaced with an explanatory note in `mock.rs`).
+- **`Message::UpdatePressed` handler** (`launcher/src/app.rs`) handles
+  both the install-fresh and update-outdated routes. The install prompt
+  is opened with `available` pre-populated from the boot cache (no
+  re-fetch when the cache is warm); for the update path,
+  `install_root` is pre-filled from the existing install_location so
+  the user isn't asked to re-pick the folder.
+- **`RegisterDone(Dev)` handler** now spawns the Dev `latest_release`
+  task when `dev_flag` flips true, and drops any cached Dev version
+  when it flips false or the dev server is unreachable. Keeps
+  `available_versions` in lockstep with the visibility gate.
+
+### Boot order
+
+The fan-out shape on a launch with an existing username:
+1. `updater::check_for_update` (launcher self-update, unchanged).
+2. `register_tasks` — one /register per `Channel::all()`.
+3. `latest_release_tasks` — one GitHub query per *visible* channel
+   (Stable + Ea up front; Dev follows RegisterDone(Dev, Ok)).
+
+First-launch users follow the welcome flow; the same fan-out runs after
+`ConfirmWelcomeUsername` persists the chosen name.
+
+### Deferred to later stages
+
+- **Stage 5** — Play button spawn (with the Stage 1 `--launcher-handoff`
+  temp-file).
+- **Stage 6** — Bottom progress bar reads the existing
+  `InstallProgress::Downloading { fraction, bytes_now, bytes_total }`
+  events (already emitted, currently only traced).
+
+---
+
 ## [0.5.0] — 2026-05-23
 
 Per-channel game-files install pipeline. The bottom-left button is now

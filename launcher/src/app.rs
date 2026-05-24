@@ -7,7 +7,7 @@ use crate::identity::{self, ChannelCreds, Identity};
 use crate::server_api;
 use crate::ui::theme::{BAR_HEIGHT, ZONE_GAP};
 use crate::updater::{self, UpdateCheckOutcome};
-use crate::{mock, ui};
+use crate::ui;
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Task, Theme};
 use shared::protocol::messages::{RegisterRequest, RegisterResponse, UpdateUsernameRequest};
@@ -91,6 +91,14 @@ pub enum Message {
         channel: Channel,
         result: Result<crate::updater::branches::InstallResult, String>,
     },
+    /// Boot-time per-channel `latest_release` query landed (Stage 4). Drives
+    /// the bottom-left button's state machine and the top "Updates
+    /// available" banner. One fires per visible channel; Dev's fires only
+    /// after dev_flag returns true on the dev /register response.
+    LatestReleaseFetched {
+        channel: Channel,
+        result: Result<Option<crate::updater::branches::GameRelease>, String>,
+    },
 }
 
 pub struct AppState {
@@ -122,6 +130,14 @@ pub struct AppState {
     /// Used to disable buttons that would conflict (Play, Update, channel
     /// switch) and to drive the "Installing…" UI state on the prompt.
     pub install_in_progress: Option<Channel>,
+    /// Latest game version on GitHub per channel, populated by the per-launch
+    /// `latest_release` fan-out (Stage 4). Absent entries mean either the
+    /// fetch is still in flight, the channel has no release yet, or the
+    /// fetch failed — the bottom-left button state machine handles all
+    /// three by leaving its label disabled (`Install Game` greyed when no
+    /// available + no installed; `Up to date — vX.Y.Z` when no available
+    /// but an install is on disk).
+    pub available_versions: BTreeMap<Channel, semver::Version>,
 }
 
 impl Default for AppState {
@@ -141,7 +157,10 @@ impl Default for AppState {
             selected_channel: Channel::Stable,
             visible_channels,
             server_reachable: BTreeMap::new(),
-            branch_updates_available: mock::BRANCH_UPDATES_AVAILABLE.to_vec(),
+            // Empty by default; populated by `recompute_branch_updates_available`
+            // when LatestReleaseFetched events arrive (Stage 4 — was mocked
+            // through 0.5.x).
+            branch_updates_available: Vec::new(),
             launcher_update_available: false,
             launcher_available_version: String::new(),
             launcher_release_notes: String::new(),
@@ -154,6 +173,7 @@ impl Default for AppState {
             welcome_draft: String::new(),
             center_view: CenterView::Default,
             install_in_progress: None,
+            available_versions: BTreeMap::new(),
         }
     }
 }
@@ -185,6 +205,48 @@ fn register_tasks(state: &AppState) -> Vec<Task<Message>> {
         ));
     }
     tasks
+}
+
+/// Boot-time GitHub Releases fan-out. One `latest_release` task per
+/// **currently-visible** channel — Dev is added separately by the
+/// RegisterDone(Dev, Ok) handler once `dev_flag` flips true, so unflagged
+/// users never reach the GitHub API for the dev channel (foundation §3).
+fn latest_release_tasks(state: &AppState) -> Vec<Task<Message>> {
+    state
+        .visible_channels
+        .iter()
+        .copied()
+        .map(|channel| {
+            Task::perform(
+                crate::updater::branches::latest_release(channel),
+                move |result| Message::LatestReleaseFetched { channel, result },
+            )
+        })
+        .collect()
+}
+
+/// Derive `state.branch_updates_available` from real installed vs.
+/// available versions. Filtered to `visible_channels` so the dev channel
+/// never leaks into the top-bar banner for an unflagged user (foundation
+/// §3 banner-filtering rule). Called from every handler that mutates
+/// available_versions, installed_version, or visible_channels.
+fn recompute_branch_updates_available(state: &mut AppState) {
+    let mut updates = Vec::new();
+    for channel in &state.visible_channels {
+        let Some(creds) = state.identity.channels.get(channel) else {
+            continue;
+        };
+        let Some(installed) = creds.parsed_installed_version() else {
+            continue;
+        };
+        let Some(available) = state.available_versions.get(channel) else {
+            continue;
+        };
+        if available > &installed {
+            updates.push(*channel);
+        }
+    }
+    state.branch_updates_available = updates;
 }
 
 /// Iced boot — produces initial state and spawns:
@@ -219,9 +281,13 @@ pub fn boot() -> (AppState, Task<Message>) {
     if state.identity.username.trim().is_empty() {
         // Gate the entire identity flow behind the welcome screen so the
         // server's first record of this user carries their chosen name.
+        // The latest_release fan-out is held back too — we don't want to
+        // populate available_versions before the user has seen the welcome
+        // form, and Dev's fetch is gated on the dev_flag handshake anyway.
         state.awaiting_username = true;
     } else {
         tasks.extend(register_tasks(&state));
+        tasks.extend(latest_release_tasks(&state));
     }
 
     (state, Task::batch(tasks))
@@ -379,6 +445,25 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     if channel == Channel::Dev {
                         state.dev_flag = resp.dev_flag;
                         recompute_visible_channels(state);
+                        if resp.dev_flag {
+                            // Dev just became visible — fetch its latest
+                            // release now (boot's fan-out skipped Dev when
+                            // visible_channels was Stable+Ea only).
+                            recompute_branch_updates_available(state);
+                            return Task::perform(
+                                crate::updater::branches::latest_release(Channel::Dev),
+                                |result| Message::LatestReleaseFetched {
+                                    channel: Channel::Dev,
+                                    result,
+                                },
+                            );
+                        } else {
+                            // Dev hidden — drop any cached version so the
+                            // banner doesn't dangle from a prior flagged
+                            // run; rebuild the derived banner.
+                            state.available_versions.remove(&Channel::Dev);
+                            recompute_branch_updates_available(state);
+                        }
                     }
                 }
                 Err(e) => {
@@ -390,6 +475,8 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         // (unknowable) / No").
                         state.dev_flag = false;
                         recompute_visible_channels(state);
+                        state.available_versions.remove(&Channel::Dev);
+                        recompute_branch_updates_available(state);
                     }
                 }
             }
@@ -429,7 +516,9 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             state.identity = candidate;
             state.welcome_draft.clear();
             state.awaiting_username = false;
-            return Task::batch(register_tasks(state));
+            let mut tasks = register_tasks(state);
+            tasks.extend(latest_release_tasks(state));
+            return Task::batch(tasks);
         }
         Message::UpdatePressed => {
             let channel = state.selected_channel;
@@ -447,28 +536,58 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 );
                 return Task::none();
             }
-            let installed = state
-                .identity
-                .channels
+            // Resolve the two pieces of state the button label is also
+            // driven by, so the action taken matches what the user clicked.
+            let creds = state.identity.channels.get(&channel);
+            let installed_version = creds.and_then(|c| c.parsed_installed_version());
+            let install_root_prior =
+                creds.and_then(|c| c.install_location.as_ref().map(|p| {
+                    // The install_location stored in identity.json is the
+                    // resolved <root>/<channel>/ path; the prompt re-joins
+                    // the channel dir, so we strip it back to the root.
+                    p.parent().map(|pp| pp.to_path_buf()).unwrap_or_else(|| p.clone())
+                }));
+            let available_str = state
+                .available_versions
                 .get(&channel)
-                .and_then(|c| c.install_location.as_ref())
-                .is_some();
-            if installed {
-                // Stage 4 will handle update-when-installed. Stage 3 only
-                // routes the "not installed" path.
-                tracing::debug!(?channel, "channel already installed — Stage 4 path pending");
-                return Task::none();
-            }
+                .map(|v| v.to_string());
+            // Decide what action to take. Mirrors the bottom-left button
+            // state machine — the button is disabled in every "no action"
+            // branch, so reaching them here means the state changed under
+            // us (e.g. a late LatestReleaseFetched).
+            let (install_root, action_label): (Option<std::path::PathBuf>, &'static str) =
+                match (installed_version.as_ref(), state.available_versions.get(&channel)) {
+                    // Update flow — same install_root, new version.
+                    (Some(inst), Some(avail)) if avail > inst => {
+                        (install_root_prior, "update")
+                    }
+                    // Fresh install — user picks the install_root next.
+                    (None, Some(_)) => (None, "install"),
+                    _ => {
+                        tracing::debug!(
+                            ?channel,
+                            installed = ?installed_version,
+                            available = ?available_str,
+                            "UpdatePressed with no actionable state — ignoring"
+                        );
+                        return Task::none();
+                    }
+                };
+            tracing::debug!(?channel, action = %action_label, "opening install prompt");
             state.center_view = CenterView::InstallPrompt {
                 channel,
-                install_root: None,
-                available: None,
+                install_root,
+                available: available_str.clone(),
                 error: None,
             };
-            return Task::perform(
-                crate::updater::branches::latest_release(channel),
-                move |result| Message::InstallPromptLatestFetched { channel, result },
-            );
+            // Cache hit is the normal case; fall back to an in-prompt fetch
+            // only when the cache is empty (rare — button is disabled then).
+            if available_str.is_none() {
+                return Task::perform(
+                    crate::updater::branches::latest_release(channel),
+                    move |result| Message::InstallPromptLatestFetched { channel, result },
+                );
+            }
         }
         Message::InstallPromptLatestFetched { channel, result } => {
             if let CenterView::InstallPrompt {
@@ -621,6 +740,10 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         install_dir = %info.install_dir.display(),
                         "game install complete"
                     );
+                    // installed_version just changed — refresh the derived
+                    // top-bar banner so this channel falls out of the
+                    // "Updates available" list.
+                    recompute_branch_updates_available(state);
                     state.center_view = CenterView::Default;
                 }
                 Err(e) => {
@@ -637,6 +760,35 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     }
                 }
             }
+        }
+        Message::LatestReleaseFetched { channel, result } => {
+            // Dev gating defence-in-depth: a late-arriving Dev fetch when
+            // the user is no longer dev-flagged must not poison the cache.
+            // (latest_release_tasks only spawns for visible channels, but a
+            // request issued before the flag was revoked could still
+            // resolve after.)
+            if channel == Channel::Dev && !state.dev_flag {
+                tracing::debug!("dropping late LatestReleaseFetched(Dev) — dev_flag is false");
+                return Task::none();
+            }
+            match result {
+                Ok(Some(release)) => {
+                    state.available_versions.insert(channel, release.version);
+                }
+                Ok(None) => {
+                    state.available_versions.remove(&channel);
+                    tracing::info!(
+                        ?channel,
+                        "no game release published for this channel yet"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, ?channel, "latest_release fetch failed");
+                    // Leave any prior cached version in place — the user
+                    // still sees something while GitHub recovers.
+                }
+            }
+            recompute_branch_updates_available(state);
         }
         Message::PlayPressed
         | Message::UninstallChannel(_)

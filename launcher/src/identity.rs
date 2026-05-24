@@ -47,6 +47,17 @@ impl ChannelCreds {
             installed_version: None,
         }
     }
+
+    /// Parsed `installed_version` semver, but only when both that AND
+    /// `install_location` are present — a half-set row is treated as not
+    /// installed (matches the bottom-bar half-state guard from Stage 3).
+    /// Returns `None` when the version string fails to parse, so an
+    /// upstream corruption can't crash version comparisons.
+    pub fn parsed_installed_version(&self) -> Option<semver::Version> {
+        let _loc = self.install_location.as_ref()?;
+        let ver_str = self.installed_version.as_ref()?;
+        semver::Version::parse(ver_str).ok()
+    }
 }
 
 impl fmt::Debug for ChannelCreds {
