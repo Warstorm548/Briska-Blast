@@ -1,7 +1,54 @@
-# Client Changelog
+# Game Changelog
 
-All notable changes to the Briska Blast game client are documented here.
+All notable changes to the Briska Blast game are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+> Renamed from `ClientChangeLog.md` on 2026-05-23 to match the
+> `game-v*` release-tag namespace and avoid confusion with launcher /
+> server changelogs. Content prior to the rename is preserved below.
+
+---
+
+## [0.2.0] — 2026-05-23
+
+Launcher-handoff protocol. The game can now receive its display username
+from the launcher via a one-shot temp JSON file, so the launcher's "Play"
+button can deliver per-channel identity into the game without exposing
+it on the command line. Standalone launches (game run directly, no
+launcher) continue to work with the existing placeholder username.
+
+### Added
+
+- **`LaunchArgs.FromLauncher`** (`src/core/LaunchArgs.cs`) — parses
+  `--launcher-handoff <path>` from `OS.GetCmdlineArgs()`, reads the
+  JSON, **deletes the file on read**, and caches the result for the
+  rest of the process lifetime. Tolerant of missing arg, missing file,
+  malformed JSON — returns `null` so callers can fall back gracefully.
+- **`SessionContext.LocalUsername`** (`src/core/SessionContext.cs`) —
+  populated from the handoff in `_Ready()`. `StartHostSession` now seeds
+  `PlayerNames` from this value instead of a hardcoded literal. Falls
+  back to `"Player Username 1"` if no handoff was provided so dev runs
+  outside the launcher behave unchanged.
+
+### Handoff schema
+
+The launcher writes (and the game consumes + deletes) a JSON object:
+
+```jsonc
+{ "username": "BlastQueen99" }
+```
+
+The schema is intentionally object-shaped — future fields like
+`player_id`, `secret_token`, and `server_url` (roadmap) can be added
+without breaking the contract.
+
+### Notes
+
+- This release is the first under the `game-v*` GitHub-Release tag
+  namespace. Stage 2 of the launcher install pipeline wires the CI to
+  publish artifacts when `game-v0.2.0-dev.1` is pushed.
+- No multiplayer endpoints yet; this is groundwork only for the
+  launcher's Install / Update / Play flow.
 
 ---
 

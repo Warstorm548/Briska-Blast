@@ -47,6 +47,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Launcher UI layout, identity file, channel gating, state variants | [`docs/launcher/launcher-foundation.md`](docs/launcher/launcher-foundation.md) |
 | Dev branch and release channel rules | [`docs/dev/devtools.md`](docs/dev/devtools.md) |
 | Server change history | [`ServerChangeLog.md`](../ServerChangeLog.md) |
+| Game change history | [`GameChangeLog.md`](../GameChangeLog.md) |
 | Launcher change history | [`LauncherChangeLog.md`](../LauncherChangeLog.md) |
 | Deferred work and post-deployment follow-ups | [`docs/planning/roadmap.md`](docs/planning/roadmap.md) |
 
