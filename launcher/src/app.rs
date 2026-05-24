@@ -99,6 +99,14 @@ pub enum Message {
         channel: Channel,
         result: Result<Option<crate::updater::branches::GameRelease>, String>,
     },
+    /// Game process exited (Stage 5). `result` is the exit code (or `Ok(None)`
+    /// if the process was killed by a signal) on success, or a spawn /
+    /// wait error string. Clears `game_running` so the launcher returns
+    /// to its idle layout.
+    GameExited {
+        channel: Channel,
+        result: Result<Option<i32>, String>,
+    },
 }
 
 pub struct AppState {
@@ -790,8 +798,58 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             }
             recompute_branch_updates_available(state);
         }
-        Message::PlayPressed
-        | Message::UninstallChannel(_)
+        Message::PlayPressed => {
+            let channel = state.selected_channel;
+            if state.game_running {
+                tracing::debug!("game already running — ignoring PlayPressed");
+                return Task::none();
+            }
+            if state.install_in_progress.is_some() {
+                tracing::debug!(
+                    in_progress = ?state.install_in_progress,
+                    "install in flight — refusing to launch game"
+                );
+                return Task::none();
+            }
+            // Defence-in-depth dev gate. The channel selector hides Dev
+            // when !dev_flag, but a stale UI state could still route here.
+            if channel == Channel::Dev && !state.dev_flag {
+                tracing::warn!("PlayPressed for Dev without dev_flag — refusing");
+                return Task::none();
+            }
+            let Some(creds) = state.identity.channels.get(&channel) else {
+                tracing::warn!(?channel, "PlayPressed with no creds for channel — refusing");
+                return Task::none();
+            };
+            // Same half-state guard as the button label uses: only proceed
+            // when both install_location AND a parseable installed_version
+            // are present.
+            if creds.parsed_installed_version().is_none() {
+                tracing::warn!(?channel, "PlayPressed without a complete install — refusing");
+                return Task::none();
+            }
+            let Some(install_dir) = creds.install_location.clone() else {
+                // Unreachable given parsed_installed_version succeeded, but
+                // keep the explicit match so a future schema change can't
+                // sneak past.
+                return Task::none();
+            };
+            let username = state.identity.username.clone();
+            state.game_running = true;
+            return Task::perform(
+                crate::game_launch::spawn_and_wait(channel, install_dir, username),
+                move |result| Message::GameExited { channel, result },
+            );
+        }
+        Message::GameExited { channel, result } => {
+            state.game_running = false;
+            match result {
+                Ok(Some(code)) => tracing::info!(?channel, code, "game exited"),
+                Ok(None) => tracing::info!(?channel, "game exited (signal)"),
+                Err(e) => tracing::warn!(?channel, error = %e, "game spawn / wait failed"),
+            }
+        }
+        Message::UninstallChannel(_)
         | Message::VerifyChannel(_)
         | Message::GameSavePressed(_) => {}
     }

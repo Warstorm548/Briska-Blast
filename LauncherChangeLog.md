@@ -5,6 +5,79 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.0] — 2026-05-24
+
+Play button now actually launches the installed game. With an installed
+channel selected and no install in flight, pressing Play writes a
+one-shot handoff JSON to the OS temp dir (`{"username": "..."}`, perms
+`0600` on unix), spawns the channel's game executable with
+`--launcher-handoff <path>`, and awaits exit. The game reads + deletes
+the handoff file on startup (Stage 1's `LaunchArgs.FromLauncher`),
+returning the username to `SessionContext.LocalUsername` before any UI
+renders. While the game is running the bottom-right button reads
+`Running`, the bottom-left button is disabled with `Running`, and the
+channel selector collapses to a static label so a mid-session channel
+switch can't race the spawned process.
+
+Stage 5 of the launcher game-install pipeline plan. Only the bottom
+progress bar's mock-percent display remains for Stage 6.
+
+### Added
+
+- **`launcher/src/game_launch/`** (new module): `spawn_and_wait(channel,
+  install_dir, username)` reads the per-install `installed.json` to find
+  the executable, writes a uuid-named handoff file under `std::env::
+  temp_dir()`, spawns the binary with `tokio::process::Command` so the
+  wait is awaitable, returns the exit code (or `None` for signal exits).
+  Cleans up the handoff file on exit in case the game never read it.
+  Unit-tested for handoff JSON round-trip + path uniqueness.
+- **`Message::GameExited { channel, result }`** (`launcher/src/app.rs`)
+  fires when the spawned game process exits; clears `state.game_running`.
+- **`PlayPressed` handler** (`launcher/src/app.rs`) — was a no-op through
+  0.6.x. Now validates `(installed_version present, install_location
+  present, no install in flight, not Dev-without-flag)`, sets
+  `game_running = true`, and dispatches the spawn task. The half-state
+  guard from Stage 3 is the gate — `ChannelCreds::parsed_installed_version`
+  must return `Some(_)` for Play to proceed.
+
+### Changed
+
+- **`updater::branches::installed_manifest`** is now publicly re-exported
+  (was `#[allow(dead_code)]` in Stage 3) — game_launch reads it on every
+  Play to resolve the executable's relative path inside the install dir.
+- **Channel picker** (`launcher/src/ui/left_rail.rs`) collapses to a
+  static `text` label while `game_running` is true. Re-renders as the
+  interactive `pick_list` as soon as `GameExited` clears the flag
+  (foundation §5E).
+- **Cargo.toml**: `tokio` feature flags gain `"process"` (async
+  `Command::spawn` + `.wait()`); new `uuid = { version = "1", features
+  = ["v4"] }` for unique handoff filenames.
+
+### Dev gating
+
+- `PlayPressed` refuses `Channel::Dev` when `state.dev_flag` is false
+  (defence-in-depth — the channel selector hides Dev under that
+  condition).
+
+### Handoff protocol invariants
+
+- Filename: `${TMPDIR}/briskablast-handoff-<uuid>.json` (v4 random uuid).
+- Perms: `0600` on unix; best-effort (failure logged, not fatal).
+- Lifecycle: launcher writes pre-spawn; game reads + deletes on
+  startup; launcher removes any leftover on game exit.
+- Payload schema is stable per `client/src/core/LaunchArgs.cs:Handoff`
+  — only `username` for now, with room to add `player_id`,
+  `secret_token`, `server_url` later (roadmap items).
+
+### Deferred to Stage 6
+
+- The `progress_cell` in `bottom_bar.rs` still shows the
+  `MOCK_PROGRESS_PERCENT` placeholder. Stage 6 wires the real
+  `InstallProgress` events (already emitted by `download_and_install`)
+  through to an `iced::widget::progress_bar`.
+
+---
+
 ## [0.6.0] — 2026-05-24
 
 Per-channel version detection on boot, plus the full bottom-left button
