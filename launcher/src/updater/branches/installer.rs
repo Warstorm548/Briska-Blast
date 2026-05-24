@@ -256,10 +256,55 @@ where
             bytes_total: total,
         });
     }
+    // Flush and explicitly close the file BEFORE handing off to the
+    // (blocking) extractor. On Windows in particular, `drop(file)` on a
+    // tokio handle doesn't guarantee the underlying file is fully closed
+    // by the time spawn_blocking re-opens it for reading — sync_all()
+    // + shutdown() does. Without this, a fast extract could observe a
+    // truncated file even though all bytes were written.
     file.flush()
         .await
         .map_err(|e| format!("flush archive: {e}"))?;
+    file.sync_all()
+        .await
+        .map_err(|e| format!("sync archive: {e}"))?;
+    file.shutdown()
+        .await
+        .map_err(|e| format!("close archive: {e}"))?;
     drop(file);
+
+    // Verify download completeness. reqwest's `bytes_stream` ends silently
+    // when the connection closes — a server-side timeout or network blip
+    // mid-stream produces a short file with NO error from the stream
+    // itself, which then surfaces inside the extractor as a confusing
+    // "Could not find EOCD" / corrupted archive error. Catch it here so
+    // the user sees the real cause: a truncated download.
+    if total > 0 && downloaded != total {
+        return Err(format!(
+            "download truncated: wrote {downloaded} bytes, expected {total} \
+             (content-length) — connection likely dropped mid-stream; retry"
+        ));
+    }
+    // Defence-in-depth: confirm the file on disk matches what we wrote
+    // before letting the extractor touch it. If these diverge, the
+    // problem is buffering / a file-handle race, not the network.
+    let on_disk = tokio::fs::metadata(&temp_archive)
+        .await
+        .map(|m| m.len())
+        .map_err(|e| format!("stat temp archive: {e}"))?;
+    if total > 0 && on_disk != total {
+        return Err(format!(
+            "temp archive size mismatch: on-disk {on_disk} bytes vs {total} \
+             content-length (downloaded {downloaded}). File handle race?"
+        ));
+    }
+    tracing::debug!(
+        downloaded,
+        total,
+        on_disk,
+        archive = %temp_archive.display(),
+        "download complete, handing off to extractor"
+    );
 
     on_progress(InstallProgress::Extracting);
 

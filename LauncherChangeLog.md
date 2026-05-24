@@ -5,6 +5,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.8.1] — 2026-05-24
+
+Hotfix for a v0.8.0-reported install failure surfacing as
+`install failed: zip open: invalid archive: Could not find EOCD` on
+Windows when installing the dev game. The underlying cause is a
+silently-truncated download — `reqwest::Response::bytes_stream`
+finishes without an error when the server closes the connection
+mid-stream, leaving a short file that the zip extractor (correctly)
+refuses to parse with the unhelpful EOCD message. The fix:
+
+### Fixed
+
+- **Truncated-download detection** (`launcher/src/updater/branches/
+  installer.rs`). After the streaming download loop the launcher now
+  asserts `downloaded == Content-Length` and bails with a clear
+  message ("download truncated: wrote X bytes, expected Y — connection
+  likely dropped mid-stream; retry") instead of letting the broken
+  byte stream tumble into the extractor. A second check stats the file
+  on disk and compares to `total` so a file-handle race (download
+  bytes lost between user-space and the kernel) surfaces with its own
+  distinct message.
+- **Explicit file close before extract**. Replaced `drop(file)` with
+  `file.sync_all().await + file.shutdown().await + drop(file)`. The
+  bare drop doesn't reliably finish the underlying close on Windows
+  before `spawn_blocking` re-opens the same path for reading, which
+  can race the extractor against a partial flush.
+- **Diagnostic logging**. Added a `tracing::debug!` line emitting
+  downloaded / content-length / on-disk byte counts before extraction
+  so the next failure (if any) tells us exactly what shape it took
+  without requiring code edits.
+
+### Action for affected users
+
+If you saw the EOCD failure on v0.8.0, re-install after self-updating
+to v0.8.1. Half-finished installs in `<install_root>/.<channel>.staging-*`
+sibling dirs left by v0.8.0 can be deleted by hand or will be cleaned
+on the next install attempt via Stage 5's atomic-swap path.
+
+---
+
 ## [0.8.0] — 2026-05-24
 
 Wires the three previously-dead Settings → Game Channel Management
