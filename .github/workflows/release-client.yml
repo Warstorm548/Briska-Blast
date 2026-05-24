@@ -128,40 +128,30 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Building Briska Blast client v$v"
 
-      - name: dotnet build (sanity check)
-        run: dotnet build --configuration Release
+      # Strip the placebo steps v0.2.1 added (manual `dotnet publish`,
+      # `dotnet build -c Release`, and the `--editor --quit` warm-up).
+      # Reading Godot 4.6's `ExportPlugin.cs` + `BuildSystem.cs` shows:
+      #   - Godot's ExportPlugin INTERNALLY runs `dotnet publish` to
+      #     `.godot/mono/temp/bin/godot-publish-dotnet/<Configuration>-<RID>/`
+      #     and reads the resulting assembly from there.
+      #   - Our manual `dotnet publish` wrote to
+      #     `.godot/mono/temp/bin/ExportRelease/linux-x64/publish/` —
+      #     a directory Godot never reads.
+      #   - `dotnet build -c Release` wrote to `bin/Release/` — also never
+      #     read by Godot (editor expects `bin/Debug/`).
+      #   - `--editor --quit` opened the editor but couldn't load the
+      #     project assembly (looked at `bin/Debug/`, empty) so was a
+      #     no-op too.
+      # Trusting Godot's bootstrap matches the maintainer-confirmed
+      # working pipeline on Stalker2106/godot-ci-test
+      # (godotengine/godot#98225 thread). Only `dotnet restore` to warm
+      # the NuGet cache remains.
+      - name: dotnet restore (warm NuGet cache)
+        run: dotnet restore
         working-directory: client
 
       - name: Pre-import resources
         run: godot --headless --import
-        working-directory: client
-
-      # Headless `--export-release` does not auto-compile C# the way the editor
-      # path does (Godot issues #87434, #98225). The cumulative consequence
-      # was a published artifact containing only `.exe` + `.pck` with no
-      # managed assemblies, exit code 0, and a runnable but immediately-
-      # crashing game. We close the gap with three additions per platform:
-      #
-      #   1) Editor warm-up (once)  — populates `.godot/mono/temp/` with the
-      #      C# build state Godot's ExportPlugin reads from. Per the JetBrains
-      #      TeamCity guide on Godot .NET CI builds.
-      #   2) Explicit `dotnet publish -c ExportRelease -r <RID>` per platform
-      #      — `BuildManager.PublishProjectBlocking()` inside Godot's
-      #      ExportPlugin invokes the publish for a specific configuration
-      #      and runtime identifier; doing it ourselves removes any chance
-      #      of a silent failure inside the headless export.
-      #   3) `--verbose` on the export so any remaining issue surfaces in
-      #      the log instead of producing a green-but-broken artifact.
-      #
-      # Paired with `dotnet/embed_build_outputs=true` in export_presets.cfg,
-      # the resulting .pck embeds the managed assemblies directly — single-
-      # file `.exe + .pck` distribution with no sibling data folder.
-      - name: Editor warm-up (populates .godot/mono/temp with C# build state)
-        run: godot --headless --verbose --editor --quit
-        working-directory: client
-
-      - name: dotnet publish (Linux x64, ExportRelease)
-        run: dotnet publish -c ExportRelease -r linux-x64 --self-contained false
         working-directory: client
 
       - name: Export Linux/X11
@@ -182,13 +172,9 @@ jobs:
           pck_size=$(stat -c%s export/linux/BriskaBlast.pck)
           echo "Linux .pck size: $pck_size bytes"
           if [ "$pck_size" -lt 5242880 ]; then
-            echo "::error::Linux .pck is only $pck_size bytes — C# DLLs not embedded? Check that 'godot --headless --verbose --export-release' completed the C# publish step."
+            echo "::error::Linux .pck is only $pck_size bytes — C# DLLs not embedded? Check that 'godot --headless --verbose --export-release' completed Godot's own internal dotnet publish step."
             exit 1
           fi
-        working-directory: client
-
-      - name: dotnet publish (Windows x64, ExportRelease)
-        run: dotnet publish -c ExportRelease -r win-x64 --self-contained false
         working-directory: client
 
       - name: Export Windows Desktop
@@ -204,7 +190,7 @@ jobs:
           pck_size=$(stat -c%s export/windows/BriskaBlast.pck)
           echo "Windows .pck size: $pck_size bytes"
           if [ "$pck_size" -lt 5242880 ]; then
-            echo "::error::Windows .pck is only $pck_size bytes — C# DLLs not embedded? Check that 'godot --headless --verbose --export-release' completed the C# publish step."
+            echo "::error::Windows .pck is only $pck_size bytes — C# DLLs not embedded? Check that 'godot --headless --verbose --export-release' completed Godot's own internal dotnet publish step."
             exit 1
           fi
         working-directory: client
