@@ -19,10 +19,27 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
 }
 
 fn update_cell(state: &AppState) -> Element<'_, Message> {
-    let mut btn = button(text("Update"))
+    // Stage 3: when the selected channel has no install yet, the button
+    // becomes "Install <Channel> Game" and routes to the install prompt.
+    // The installed-but-outdated / installed-and-up-to-date label states
+    // land in Stage 4 (version detection + state machine).
+    let installed = state
+        .identity
+        .channels
+        .get(&state.selected_channel)
+        .and_then(|c| c.install_location.as_ref())
+        .is_some();
+    let label: String = if state.install_in_progress == Some(state.selected_channel) {
+        "Installing\u{2026}".into()
+    } else if installed {
+        "Update".into()
+    } else {
+        format!("Install {} Game", state.selected_channel.label())
+    };
+    let mut btn = button(text(label))
         .width(Length::Fill)
         .height(Length::Fixed(BAR_HEIGHT as f32));
-    if !state.game_running {
+    if !state.game_running && state.install_in_progress.is_none() {
         btn = btn.on_press(Message::UpdatePressed);
     }
     container(btn)
