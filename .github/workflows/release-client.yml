@@ -128,24 +128,28 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Building Briska Blast client v$v"
 
-      # Strip the placebo steps v0.2.1 added (manual `dotnet publish`,
-      # `dotnet build -c Release`, and the `--editor --quit` warm-up).
-      # Reading Godot 4.6's `ExportPlugin.cs` + `BuildSystem.cs` shows:
-      #   - Godot's ExportPlugin INTERNALLY runs `dotnet publish` to
-      #     `.godot/mono/temp/bin/godot-publish-dotnet/<Configuration>-<RID>/`
-      #     and reads the resulting assembly from there.
-      #   - Our manual `dotnet publish` wrote to
-      #     `.godot/mono/temp/bin/ExportRelease/linux-x64/publish/` —
-      #     a directory Godot never reads.
-      #   - `dotnet build -c Release` wrote to `bin/Release/` — also never
-      #     read by Godot (editor expects `bin/Debug/`).
-      #   - `--editor --quit` opened the editor but couldn't load the
-      #     project assembly (looked at `bin/Debug/`, empty) so was a
-      #     no-op too.
-      # Trusting Godot's bootstrap matches the maintainer-confirmed
-      # working pipeline on Stalker2106/godot-ci-test
-      # (godotengine/godot#98225 thread). Only `dotnet restore` to warm
-      # the NuGet cache remains.
+      # Godot's GodotTools.Export.ExportPlugin hard-requires `<assembly>.sln`
+      # next to the project root. On a desktop, the editor auto-creates it
+      # the first time the project opens; in headless CI nothing ever does.
+      # Without it, ExportPlugin._ExportFile bails on every .cs file with:
+      #   "Export .NET Project: This project contains C# files but no
+      #    solution file was found at ... /client/BriskaBlast.sln"
+      # ...the per-file bails prevent BuildManager.PublishProjectBlocking
+      # from running, so the .pck ships empty of managed DLLs while godot
+      # still exits 0 (godotengine/godot#86591, #98225). v0.2.1/0.2.2/0.2.3
+      # all missed this because the per-file ERROR is buried mid-savepack
+      # and `--export-release` doesn't propagate non-zero.
+      #
+      # `dotnet new sln` + `dotnet sln add` produces the same minimal .sln
+      # the editor would generate — just a list of which .csproj files
+      # belong to the solution. Not committed: keeps git clean and matches
+      # what the editor does locally.
+      - name: Generate solution file (Godot export plugin requires .sln)
+        run: |
+          dotnet new sln --name BriskaBlast
+          dotnet sln BriskaBlast.sln add BriskaBlast.csproj
+        working-directory: client
+
       - name: dotnet restore (warm NuGet cache)
         run: dotnet restore
         working-directory: client

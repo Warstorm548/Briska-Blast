@@ -9,6 +9,70 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.2.4] — 2026-05-24
+
+Fourth (and hopefully last) iteration on the headless .NET export.
+v0.2.3 still shipped a 64 KB `.pck`. Re-read the **verbose** Godot
+output instead of trusting the verify step's surface message, and
+the real error was screaming on the first export attempt — buried
+mid-`savepack` so it scrolled past the first three investigations:
+
+```
+ERROR: Export .NET Project: This project contains C# files but
+no solution file was found at the following path:
+  /home/runner/work/Briska-Blast/Briska-Blast/client/BriskaBlast.sln
+A solution file is required for projects with C# files.
+```
+
+Repeated once per `.cs` file. `GodotTools.Export.ExportPlugin._ExportFile`
+bails on each, so `BuildManager.PublishProjectBlocking` never fires —
+no managed DLLs in the `.pck`. Godot still exits 0 (the known silent
+failure: godotengine/godot#86591, #98225), so CI marches forward and
+only the post-export `pck_size` canary catches it.
+
+### Why v0.2.1, v0.2.2, and v0.2.3 all missed this
+
+The repo carries `client/BriskaBlast.csproj` but no
+`client/BriskaBlast.sln`. On a desktop, the Godot editor auto-creates
+the `.sln` the first time the project opens; in headless CI nothing
+ever does. The three previous fixes all tweaked the `dotnet
+publish` / `dotnet build` / `--editor --quit` ordering — none of which
+produces a `.sln`. So each fix was rearranging deck chairs while
+ExportPlugin kept bailing at the same earlier point.
+
+The `.sln` is just a plain-text list of which `.csproj` projects belong
+to the solution — `dotnet new sln` + `dotnet sln add` produces the same
+file the editor would.
+
+### Fixed
+
+- **`.github/workflows/release-client.yml`**: new `Generate solution
+  file` step, run right before `dotnet restore`. Runs
+  `dotnet new sln --name BriskaBlast` then
+  `dotnet sln BriskaBlast.sln add BriskaBlast.csproj` inside `client/`.
+  Gives the export plugin the `.sln` it requires; not committed to git
+  (matches the editor-side lifecycle on desktop checkouts).
+
+### Unchanged from v0.2.3
+
+- The v0.2.3 `dotnet build` (Debug) step is left in. It becomes moot
+  once the `.sln` exists (the export plugin's own publish handles
+  the assembly state), but we changed exactly **one** variable this
+  iteration so the next failure — if any — has a clean attribution.
+  Cleanup to a follow-up PR.
+- Still no manual `dotnet publish`, no `--editor --quit` warm-up.
+- `dotnet/embed_build_outputs=true` on both presets.
+- `--verbose` on `--export-release`.
+- Verify-pck-size canary — kept; it caught the last three failures.
+
+### Not touched
+
+- **`.github/workflows/ci-client.yml`** would hit the same issue if
+  ever triggered (it's `workflow_dispatch`-only today, so it isn't
+  blocking anything). Adding the same step there is a follow-up.
+
+---
+
 ## [0.2.3] — 2026-05-24
 
 Third iteration on the headless .NET export. v0.2.2's verify step
