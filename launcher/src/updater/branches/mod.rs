@@ -14,4 +14,4 @@ pub mod github;
 pub mod installer;
 
 pub use github::{latest_release, GameRelease};
-pub use installer::{download_and_install, installed_manifest, InstallResult};
+pub use installer::{download_and_install, installed_manifest, InstallProgress, InstallResult};

@@ -1,17 +1,17 @@
-//! Zone 5: Update button | progress placeholder | Play button.
+//! Zone 5: Update button | progress bar | Play button.
 //! Buttons drop their .on_press when game is running (Iced renders them
 //! non-pressable without a separate "disabled" state).
 
 use crate::app::{AppState, Message};
-use crate::mock::MOCK_PROGRESS_PERCENT;
 use crate::ui::theme::{self, BAR_HEIGHT, RAIL_WIDTH, ZONE_GAP};
-use iced::widget::{button, container, row, text};
-use iced::{Element, Length};
+use crate::updater::branches::InstallProgress;
+use iced::widget::{button, column, container, progress_bar, row, text};
+use iced::{Alignment, Element, Length};
 
 pub fn view(state: &AppState) -> Element<'_, Message> {
     row![
         update_cell(state),
-        progress_cell(),
+        progress_cell(state),
         play_cell(state),
     ]
     .spacing(ZONE_GAP)
@@ -90,17 +90,57 @@ fn update_cell(state: &AppState) -> Element<'_, Message> {
         .into()
 }
 
-fn progress_cell() -> Element<'static, Message> {
-    container(text(format!(
-        "Progress placeholder \u{2014} {}% done",
-        MOCK_PROGRESS_PERCENT
-    )))
+fn progress_cell(state: &AppState) -> Element<'_, Message> {
+    // Stage 6: driven from state.download_progress (last InstallProgress
+    // event from the active install pipeline). Renders an idle placeholder
+    // when no install is in flight.
+    let (fraction, label): (f32, String) = match &state.download_progress {
+        Some(InstallProgress::Downloading {
+            fraction,
+            bytes_now,
+            bytes_total,
+        }) => (
+            (*fraction).clamp(0.0, 1.0),
+            format!(
+                "Downloading \u{2014} {:.0}% ({} / {})",
+                fraction * 100.0,
+                format_bytes(*bytes_now),
+                format_bytes(*bytes_total),
+            ),
+        ),
+        Some(InstallProgress::Extracting) => (1.0, "Extracting\u{2026}".to_string()),
+        Some(InstallProgress::Done) => (1.0, "Done.".to_string()),
+        None => (0.0, "Idle".to_string()),
+    };
+    container(
+        column![
+            progress_bar(0.0..=1.0, fraction),
+            text(label).size(12),
+        ]
+        .spacing(4)
+        .align_x(Alignment::Center),
+    )
     .style(theme::bordered)
     .width(Length::Fill)
     .height(Length::Fixed(BAR_HEIGHT as f32))
     .center_y(Length::Fill)
     .padding(8)
     .into()
+}
+
+fn format_bytes(n: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    const GIB: u64 = MIB * 1024;
+    if n >= GIB {
+        format!("{:.2} GiB", n as f64 / GIB as f64)
+    } else if n >= MIB {
+        format!("{:.1} MiB", n as f64 / MIB as f64)
+    } else if n >= KIB {
+        format!("{:.1} KiB", n as f64 / KIB as f64)
+    } else {
+        format!("{n} B")
+    }
 }
 
 fn play_cell(state: &AppState) -> Element<'_, Message> {
