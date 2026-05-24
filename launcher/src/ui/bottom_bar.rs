@@ -19,40 +19,63 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
 }
 
 fn update_cell(state: &AppState) -> Element<'_, Message> {
-    // Stage 3: when the selected channel has no install yet, the button
-    // becomes "Install <Channel> Game" and routes to the install prompt.
-    // The installed-but-outdated / installed-and-up-to-date label states
-    // land in Stage 4 (version detection + state machine).
-    // Treat a channel as installed only when BOTH install_location AND
-    // installed_version are present — InstallComplete writes both
-    // atomically, so a half-set state means something corrupted the row.
-    // Falling back to "not installed" is the safer rendering: it prompts
-    // the user to re-install rather than offering a "Play" / "Update"
-    // button that points at incomplete metadata.
-    let installed = match state.identity.channels.get(&state.selected_channel) {
-        Some(c) if c.install_location.is_some() && c.installed_version.is_some() => true,
-        Some(c) if c.install_location.is_some() != c.installed_version.is_some() => {
+    // Stage 4 button state machine. Drives label + enabled from three
+    // inputs: installed_version (parsed semver, see ChannelCreds::
+    // parsed_installed_version), available_versions[channel] (cached
+    // from GitHub at boot / dev_flag flip), and game_running /
+    // install_in_progress.
+    //
+    // Full table:
+    //   game running OR install in flight → "Running"/"Installing…" disabled
+    //   not installed  + available Some(v) → "Install <C> Game"          enabled
+    //   not installed  + available None    → "Install <C> Game"          disabled
+    //   installed v_i  + available v_a > i → "Update to vX.Y.Z"          enabled
+    //   installed v_i  + available v_a ≤ i → "Up to date — vX.Y.Z"       disabled
+    //   installed v_i  + available None    → "Up to date — vX.Y.Z"       disabled
+    let channel = state.selected_channel;
+    let creds = state.identity.channels.get(&channel);
+
+    // Half-state guard from Stage 3 review — only count installed when both
+    // install_location AND installed_version are present. The parsed helper
+    // returns None on any half-state or unparseable version string.
+    if let Some(c) = creds {
+        if c.install_location.is_some() != c.installed_version.is_some() {
             tracing::warn!(
-                channel = %state.selected_channel,
+                channel = %channel,
                 has_location = c.install_location.is_some(),
                 has_version = c.installed_version.is_some(),
                 "channel install state inconsistent — treating as not installed"
             );
-            false
         }
-        _ => false,
-    };
-    let label: String = if state.install_in_progress == Some(state.selected_channel) {
-        "Installing\u{2026}".into()
-    } else if installed {
-        "Update".into()
+    }
+    let installed = creds.and_then(|c| c.parsed_installed_version());
+    let available = state.available_versions.get(&channel);
+
+    let (label, enabled): (String, bool) = if state.game_running {
+        ("Running".to_string(), false)
+    } else if state.install_in_progress == Some(channel) {
+        ("Installing\u{2026}".to_string(), false)
     } else {
-        format!("Install {} Game", state.selected_channel.label())
+        match (installed.as_ref(), available) {
+            // Update available: newer remote version than what's on disk.
+            (Some(_inst), Some(avail)) if avail > installed.as_ref().unwrap() => {
+                (format!("Update to v{avail}"), true)
+            }
+            // Installed, no newer release (either equal or remote unknown).
+            (Some(inst), _) => (format!("Up to date \u{2014} v{inst}"), false),
+            // Not installed, release is known — user can install.
+            (None, Some(_)) => (format!("Install {} Game", channel.label()), true),
+            // Not installed and remote is unknown (fetch in flight or
+            // failed) — show the install label but leave it disabled so the
+            // user has nothing to click against unresolved state.
+            (None, None) => (format!("Install {} Game", channel.label()), false),
+        }
     };
+
     let mut btn = button(text(label))
         .width(Length::Fill)
         .height(Length::Fixed(BAR_HEIGHT as f32));
-    if !state.game_running && state.install_in_progress.is_none() {
+    if enabled {
         btn = btn.on_press(Message::UpdatePressed);
     }
     container(btn)
