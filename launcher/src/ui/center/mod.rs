@@ -9,6 +9,7 @@ pub mod default;
 pub mod install_prompt;
 pub mod launcher_update;
 pub mod settings;
+pub mod uninstall_confirm;
 
 pub fn view(state: &AppState) -> Element<'_, Message> {
     match &state.center_view {
@@ -17,5 +18,8 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
         CenterView::ChangeUsername { draft } => change_username::view(state, draft),
         CenterView::LauncherUpdate => launcher_update::view(state),
         CenterView::InstallPrompt { .. } => install_prompt::dispatch(state, &state.center_view),
+        CenterView::UninstallConfirm { .. } => {
+            uninstall_confirm::dispatch(state, &state.center_view)
+        }
     }
 }

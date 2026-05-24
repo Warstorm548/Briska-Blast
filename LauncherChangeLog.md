@@ -5,6 +5,82 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.8.0] — 2026-05-24
+
+Wires the three previously-dead Settings → Game Channel Management
+buttons (Uninstall, Verify File Integrity, Game Save) to real per-channel
+actions. The launcher's per-channel lifecycle is now complete: install
+→ update → play → verify → uninstall.
+
+Stage 7 of the launcher game-install pipeline plan. Final stage before
+the feat-branch → dev merge.
+
+### Added
+
+- **Uninstall flow** with a confirmation prompt
+  (`launcher/src/ui/center/uninstall_confirm.rs`, new
+  `CenterView::UninstallConfirm` route). Prompt shows the channel,
+  installed version, resolved install dir, and a "Keep player data for
+  future reinstall?" Yes/No radio (foundation §2). On confirm:
+  - if Keep, `<install_dir>/saves/` is moved to a **timestamped**
+    sibling at `<install_root>/.briska-saves-backup/<channel>/<rfc3339>/`
+    so a re-install / re-uninstall cycle never overwrites prior saves;
+  - then `<install_dir>` is removed wholesale;
+  - then `install_location` and `installed_version` are cleared from the
+    channel row of `identity.json`, and `state.verify_results` for that
+    channel is dropped.
+  Uninstall is intentionally allowed regardless of `state.dev_flag` so a
+  previously-flagged user who got revoked can still clean up orphan dev
+  files. Errors keep the prompt open with an inline status line.
+- **Verify File Integrity flow** — cheap variant per the Stage 7
+  decision: re-reads `<install>/installed.json`, confirms the manifest's
+  named executable still exists on disk. Outcome cached in
+  `state.verify_results: BTreeMap<Channel, VerifyOutcome>` and surfaced
+  inline in the channel row as `— / ✓ Verified vX.Y.Z / ✗ Manifest
+  missing / ✗ Manifest unreadable / ✗ Executable missing`. Per-file
+  hashing + saves-dir-intact mode were captured in
+  `docs/planning/roadmap.md` as deferred options.
+- **Game Save button** opens the channel's `<install>/saves/` directory
+  in the OS file manager (new `open = "5"` dep, cross-platform xdg-open
+  / explorer / Finder). Saves dir is created on demand if it doesn't
+  exist yet.
+- **`updater::branches` primitives**: `uninstall_install(install_dir,
+  channel_dir_name, keep_saves)`, `verify_install(install_dir)`,
+  `VerifyOutcome` enum, `SAVES_BACKUP_DIRNAME` constant.
+
+### Changed
+
+- **`UninstallChannel(Channel)`, `VerifyChannel(Channel)`,
+  `GameSavePressed(Channel)`** lose their `#[allow(dead_code)]` — all
+  three are now wired end-to-end.
+- **Settings → Game Channel Management** rows disable their
+  Uninstall / Verify buttons when the channel has no install on record
+  (and during `install_in_progress` / `game_running`). The Game Save
+  button in the "Game Important Files" section follows the same rule.
+- **Settings rows widen** to include the new verify status cell next to
+  Verify File Integrity.
+
+### Dev gating
+
+- `VerifyChannel` and `GameSavePressed` defence-in-depth refuse
+  `Channel::Dev` when `state.dev_flag` is false. `UninstallChannel`
+  intentionally does **not** — orphan-cleanup is allowed for revoked
+  users.
+
+### Deps
+
+- New: `open = "5"` for cross-platform file-manager launch.
+
+### Roadmap additions
+
+`docs/planning/roadmap.md` gained:
+- **Per-file hash manifest + deep Verify File Integrity** (re-hash every
+  file at install time, compare on Verify).
+- **Saves-dir intact verify mode** (alt cheap variant; pairs with the
+  future saves-relocation work).
+
+---
+
 ## [0.7.1] — 2026-05-24
 
 Bottom progress bar wired through to real install events. The
