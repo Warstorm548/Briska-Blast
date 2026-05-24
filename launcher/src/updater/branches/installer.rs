@@ -246,7 +246,6 @@ fn find_executable(dir: &Path, name: &str) -> Option<String> {
 /// Read `<install_dir>/installed.json`. `Ok(None)` if the file is missing
 /// (channel is not installed). Parse errors bubble up so callers can flag a
 /// corrupted install rather than silently treating it as a fresh slot.
-#[allow(dead_code)] // Stage 4 will call this on boot; Stage 3 only writes.
 pub async fn installed_manifest(install_dir: &Path) -> Result<Option<InstalledManifest>, String> {
     let path = install_dir.join(MANIFEST_FILENAME);
     match tokio::fs::read_to_string(&path).await {
