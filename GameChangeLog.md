@@ -9,6 +9,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.2.1] — 2026-05-24
+
+Fix-only release for the **headless `.NET` export pipeline**. v0.2.0
+shipped a published Windows zip containing only `BriskaBlast.exe` and
+`BriskaBlast.pck` — no managed assemblies, no sibling
+`data_BriskaBlast_*` folder. The Godot runtime started, found nothing
+to load, and the window closed immediately on the user's machine.
+
+### Diagnosis
+
+The published zip was confirmed corrupted-by-design via:
+
+```
+$ python3 -c "import zipfile; print(zipfile.ZipFile('windows.zip').namelist())"
+['BriskaBlast.pck', 'BriskaBlast.exe']
+```
+
+Online research traced this to two known Godot 4.x issues:
+
+- `godot --headless --export-release` does NOT auto-compile C# the
+  way the editor path does ([Godot Forum: "no data folder created on
+  export"](https://forum.godotengine.org/t/no-data-folder-created-on-export/110235),
+  [Godot issue #87434](https://github.com/godotengine/godot/issues/87434)).
+- Silent failures of `BuildManager.PublishProjectBlocking()` inside the
+  export plugin still report exit code 0 ([Godot issue #98225 —
+  "headless mono export missing dotnet assemblies"](https://github.com/godotengine/godot/issues/98225)).
+
+So our CI happily published a runnable-but-empty artifact each game tag.
+
+### Fixed
+
+- **`client/export_presets.cfg`**: `dotnet/embed_build_outputs=false` →
+  `true` on **both** Linux and Windows presets. Bundles the managed
+  assemblies INTO the `.pck` — single-file distribution, no sibling
+  `data_*` folder to lose.
+- **`.github/workflows/release-client.yml`** gains three new steps per
+  platform that close the silent-failure hole at every layer:
+  1. **Editor warm-up** — `godot --headless --verbose --editor --quit`
+     populates `.godot/mono/temp/bin/ExportRelease/<RID>/` with the C#
+     build state Godot's `ExportPlugin` reads from. Per the JetBrains
+     TeamCity guide on Godot .NET CI builds.
+  2. **Explicit `dotnet publish -c ExportRelease -r <RID>
+     --self-contained false`** before each export — does the publish
+     ourselves so a silent failure of Godot's internal invocation
+     cannot ship a broken artifact.
+  3. **`--verbose` on the `--export-release`** so any remaining
+     publish issue surfaces in the log.
+- **Verify steps** after each export assert `pck_size >= 5 MiB` (the
+  scaffold + menus + autoloads + embedded .NET DLLs comfortably exceed
+  this; an empty-of-C# `.pck` does not). Failure halts CI with a
+  `::error::` annotation so we'll never again silently publish an
+  artifact lacking managed assemblies.
+
+### Verification
+
+- `python3 -c "import yaml; yaml.safe_load(open('release-client.yml'))"`
+  parses clean.
+- `cd client && dotnet build --configuration Release` clean
+  (csproj untouched).
+- Live verification deferred to the first CI run after merge — the new
+  verify steps will be the canary.
+
+### No behavioural changes to the game itself
+
+- `LaunchArgs.cs`, `SessionContext.cs`, menus, theme, autoloads —
+  all unchanged. Same UI, same handoff protocol, same in-memory session
+  state.
+- This is exclusively a release-pipeline fix.
+
+---
+
 ## [0.2.0] — 2026-05-23
 
 Launcher-handoff protocol. The game can now receive its display username
