@@ -72,7 +72,7 @@ The fan-out shape on a launch with an existing username:
 1. `updater::check_for_update` (launcher self-update, unchanged).
 2. `register_tasks` — one /register per `Channel::all()`.
 3. `latest_release_tasks` — one GitHub query per *visible* channel
-   (Stable + Ea up front; Dev follows after RegisterDone(Dev, Ok)).
+   (Stable + Ea up front; Dev follows RegisterDone(Dev, Ok)).
 
 First-launch users follow the welcome flow; the same fan-out runs after
 `ConfirmWelcomeUsername` persists the chosen name.

@@ -53,7 +53,12 @@ fn update_cell(state: &AppState) -> Element<'_, Message> {
 
     let (label, enabled): (String, bool) = if state.game_running {
         ("Running".to_string(), false)
-    } else if state.install_in_progress == Some(channel) {
+    } else if state.install_in_progress.is_some() {
+        // Any in-flight install disables the button — not just one
+        // targeting the selected channel. Otherwise switching the
+        // dropdown mid-install would re-enable a button whose press the
+        // UpdatePressed handler already refuses (install_in_progress
+        // guard).
         ("Installing\u{2026}".to_string(), false)
     } else {
         match (installed.as_ref(), available) {
