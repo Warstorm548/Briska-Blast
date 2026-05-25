@@ -99,7 +99,7 @@ where
 {
     let asset = select_platform_asset(&release).ok_or_else(|| {
         format!(
-            "no platform-matching asset (linux.tar.gz / windows.zip) in release {}",
+            "no platform-matching asset (linux.tar.gz / windows.zip / macos.tar.gz) in release {}",
             release.tag
         )
     })?;

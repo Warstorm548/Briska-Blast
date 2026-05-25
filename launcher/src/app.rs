@@ -1292,6 +1292,15 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             install_dir,
             username,
         } => {
+            // Guard against a stale check: PlayPressed only blocks re-entry on
+            // `game_running`, so a double-click during the async firewall check
+            // can spawn two checks → two of these events. If the first already
+            // launched the game, ignore the late one rather than double-launch
+            // or reopen the prompt over a running game.
+            if state.game_running {
+                tracing::debug!(?channel, "PlayFirewallResolved ignored — game already running");
+                return Task::none();
+            }
             // Only prompt when we're confident the rule is missing AND we know
             // the exe to target. RulePresent / Unknown / NotApplicable, or an
             // unresolved exe, all launch directly — never block Play on an

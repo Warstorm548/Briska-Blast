@@ -27,6 +27,12 @@ EXEC_NAME="briskablast-launcher"
 APP="${OUT_DIR}/${APP_NAME}.app"
 CONTENTS="${APP}/Contents"
 
+# Temp dirs (assigned below) are removed on exit — success or failure. Guarded
+# with :- so the trap is safe under `set -u` before they're assigned.
+ICONSET_TMP=""
+STAGING_TMP=""
+trap 'rm -rf "${ICONSET_TMP:-}" "${STAGING_TMP:-}"' EXIT
+
 rm -rf "$APP"
 mkdir -p "${CONTENTS}/MacOS" "${CONTENTS}/Resources"
 
@@ -35,7 +41,8 @@ cp "$BINARY" "${CONTENTS}/MacOS/${EXEC_NAME}"
 chmod +x "${CONTENTS}/MacOS/${EXEC_NAME}"
 
 # --- icon: PNG -> .icns via a generated .iconset ---
-ICONSET="$(mktemp -d)/AppIcon.iconset"
+ICONSET_TMP="$(mktemp -d)"
+ICONSET="${ICONSET_TMP}/AppIcon.iconset"
 mkdir -p "$ICONSET"
 for size in 16 32 128 256 512; do
   sips -z "$size" "$size" "$ICON_PNG" \
@@ -71,7 +78,8 @@ codesign --verify --strict --verbose=2 "$APP"
 
 # --- .dmg (drag-to-Applications layout) ---
 DMG="${OUT_DIR}/briskablast-launcher-${VERSION}-aarch64-apple-darwin.dmg"
-STAGING="$(mktemp -d)/dmg"
+STAGING_TMP="$(mktemp -d)"
+STAGING="${STAGING_TMP}/dmg"
 mkdir -p "$STAGING"
 cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
