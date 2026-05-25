@@ -57,6 +57,19 @@ jobs:
           sudo ln -sf "/opt/godot-mono/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64" /usr/local/bin/godot
           godot --version
 
+      # Godot's .NET export plugin (and headless work over .cs files)
+      # hard-requires `BriskaBlast.sln` next to the project root. The editor
+      # auto-creates it on desktop; nothing does in headless CI. Mirrors the
+      # generation step in release-client.yml. Not committed — keeps git
+      # clean and matches what the editor produces locally.
+      # This workflow is workflow_dispatch-only today; the step is here so
+      # re-enabling it on client/** PRs won't hit "no solution file found".
+      - name: Generate solution file (Godot export plugin requires .sln)
+        run: |
+          dotnet new sln --name BriskaBlast
+          dotnet sln BriskaBlast.sln add BriskaBlast.csproj
+        working-directory: client
+
       - name: dotnet build
         run: dotnet build --configuration Release
         working-directory: client
