@@ -26,6 +26,12 @@ The game can now be exported as an ad-hoc-signed `.app` for
   Linux/Windows), ad-hoc signs (`codesign --sign -`), and publishes
   `briskablast-client-<channel>-<version>-macos.tar.gz` alongside the other
   platform assets. Channel/version reused from the Linux job via `needs`.
+- **`client/global.json`** pins the game project to the .NET 8 SDK
+  (`rollForward: latestFeature`). The macOS runner ships multiple SDKs (8.0 +
+  a newer one); without the pin, `dotnet new sln` used the newest SDK and
+  produced the new `.slnx` format, so `dotnet sln BriskaBlast.sln add` failed
+  and Godot's export plugin (which requires `<name>.sln`) couldn't build. The
+  pin makes every runner resolve .NET 8 like the Linux job already did.
 
 ### Launcher-side (install/launch path)
 
