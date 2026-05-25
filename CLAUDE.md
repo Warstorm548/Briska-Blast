@@ -30,7 +30,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Server foundation | ✓ Complete — see `ServerChangeLog.md` |
 | Shared crate | ✓ Complete (protocol types, player/session types) |
 | Game client | Not started |
-| Launcher | Not started |
+| Launcher | In progress — see `LauncherChangeLog.md` |
 
 **Build order:** Server → Game → Launcher (each depends on the previous).
 

@@ -3,6 +3,7 @@
 
 use crate::app::{AppState, Message, SettingsTab};
 use crate::channel::Channel;
+use crate::firewall::FirewallStatus;
 use crate::ui::theme::{self, TITLE_SIZE, ZONE_GAP};
 use crate::updater::branches::VerifyOutcome;
 use iced::widget::{button, column, container, row, text, Space};
@@ -60,11 +61,13 @@ fn tab_button(
 
 fn body<'a>(state: &'a AppState, active: SettingsTab) -> Element<'a, Message> {
     match active {
-        SettingsTab::ChannelManagement => {
-            column![channels_section(state), important_files_section(state)]
-                .spacing(ZONE_GAP * 4)
-                .into()
-        }
+        SettingsTab::ChannelManagement => column![
+            channels_section(state),
+            important_files_section(state),
+            firewall_section(state),
+        ]
+        .spacing(ZONE_GAP * 4)
+        .into(),
         SettingsTab::Graphics => container(text("Coming soon.").size(16))
             .center_x(Length::Fill)
             .center_y(Length::Fill)
@@ -144,6 +147,62 @@ fn verify_status_cell(state: &AppState, channel: Channel) -> Element<'_, Message
         Some(VerifyOutcome::ManifestMissing) => "\u{2717} Manifest missing".to_string(),
         Some(VerifyOutcome::ManifestUnreadable(_)) => "\u{2717} Manifest unreadable".to_string(),
         Some(VerifyOutcome::ExecutableMissing { .. }) => "\u{2717} Executable missing".to_string(),
+    };
+    container(text(label).size(13))
+        .style(theme::bordered)
+        .padding(8)
+        .center_y(Length::Fill)
+        .width(Length::Fill)
+        .height(Length::Fixed(36.0))
+        .into()
+}
+
+/// Windows-Firewall inbound-rule status per channel (P3). The check is
+/// non-elevated (read-only `netsh show`) and button-triggered, mirroring the
+/// Verify File Integrity row. On Linux the resolved status is `NotApplicable`,
+/// which the status cell renders as an explanatory note rather than hiding the
+/// row — outbound hole-punching traverses the default firewall there, so there
+/// is genuinely nothing to add.
+fn firewall_section(state: &AppState) -> Element<'_, Message> {
+    let mut col = column![
+        text("Firewall (game hosting)").size(20),
+        text(
+            "Hosting a match needs an inbound firewall rule for the game. \
+             Checking is read-only and needs no admin rights."
+        )
+        .size(13),
+    ]
+    .spacing(ZONE_GAP);
+    let busy = state.install_in_progress.is_some()
+        || state.uninstall_in_progress.is_some()
+        || state.game_running;
+    for c in &state.visible_channels {
+        let c = *c;
+        let installed = state
+            .identity
+            .channels
+            .get(&c)
+            .map(|creds| creds.install_location.is_some() && creds.installed_version.is_some())
+            .unwrap_or(false);
+        col = col.push(
+            row![
+                bordered_cell(c.label(), 120.0),
+                cell_button_maybe("Check Firewall", Message::CheckFirewall(c), installed && !busy),
+                firewall_status_cell(state, c),
+            ]
+            .spacing(ZONE_GAP),
+        );
+    }
+    col.into()
+}
+
+fn firewall_status_cell(state: &AppState, channel: Channel) -> Element<'_, Message> {
+    let label = match state.firewall_status.get(&channel) {
+        None => "\u{2014}".to_string(), // em dash — not checked this launch
+        Some(FirewallStatus::RulePresent) => "\u{2713} Rule present".to_string(),
+        Some(FirewallStatus::NotDetected) => "\u{2717} No inbound rule".to_string(),
+        Some(FirewallStatus::Unknown(_)) => "? Check failed".to_string(),
+        Some(FirewallStatus::NotApplicable) => "N/A — not applicable on this OS".to_string(),
     };
     container(text(label).size(13))
         .style(theme::bordered)
