@@ -40,6 +40,10 @@ pub enum FirewallStatus {
     /// string is a diagnostic for logs; the UI shows a short label.
     Unknown(#[allow(dead_code)] String),
     /// Not a Windows host — inbound rules are not the launcher's concern here.
+    // Mirror of the enum-level attribute: `NotApplicable` is constructed only on
+    // the non-Windows stub, so on Windows it would read as dead even though the
+    // UI matches on it.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     NotApplicable,
 }
 
@@ -130,7 +134,8 @@ pub fn add_inbound_rule_elevated(channel: Channel, game_exe: &std::path::Path) -
     let status = runas::Command::new("netsh")
         // Don't flash a console window for the elevated child.
         .show(false)
-        .args([
+        // runas::Command::args takes a slice (&[S]), not an owned array.
+        .args(&[
             "advfirewall",
             "firewall",
             "add",
