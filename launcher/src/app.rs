@@ -12,7 +12,7 @@ use futures_util::StreamExt;
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Task, Theme};
 use shared::protocol::messages::{RegisterRequest, RegisterResponse, UpdateUsernameRequest};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 /// Internal pipe between the spawned download task and the Iced stream
 /// adapter — see the `InstallConfirmed` handler. Not surfaced as a
@@ -59,6 +59,20 @@ pub enum CenterView {
         install_dir: std::path::PathBuf,
         installed_version: String,
         keep_saves: bool,
+        error: Option<String>,
+    },
+    /// First-Play firewall prompt (Windows). Shown when a Play is requested for
+    /// a channel that has no inbound rule yet (option A). Carries the resolved
+    /// `exe` (rule target + display) plus the `install_dir`/`username` needed to
+    /// launch the game once the user picks Allow or Skip. `in_progress` is true
+    /// while the elevated `netsh` task runs; `error` surfaces an add-rule
+    /// failure without closing the prompt.
+    FirewallPrompt {
+        channel: Channel,
+        exe: std::path::PathBuf,
+        install_dir: std::path::PathBuf,
+        username: String,
+        in_progress: bool,
         error: Option<String>,
     },
 }
@@ -162,6 +176,32 @@ pub enum Message {
         channel: Channel,
         status: crate::firewall::FirewallStatus,
     },
+    /// Pre-launch (first-Play) firewall check resolved. If `status` is
+    /// `NotDetected` and `exe` is known we open the FirewallPrompt; otherwise we
+    /// launch directly. `install_dir`/`username` are threaded through so the
+    /// launch can proceed without re-deriving them. Only constructed on the
+    /// Windows Play path, so it reads as dead on other targets.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    PlayFirewallResolved {
+        channel: Channel,
+        status: crate::firewall::FirewallStatus,
+        exe: Option<std::path::PathBuf>,
+        install_dir: std::path::PathBuf,
+        username: String,
+    },
+    /// User chose "Allow & Play" on the firewall prompt — run the elevated
+    /// `netsh add rule` (single UAC), reading the target from the open prompt.
+    FirewallPromptAllow,
+    /// User chose "Skip & Play" — launch without a rule and suppress the prompt
+    /// for this channel for the rest of the session.
+    FirewallPromptSkip,
+    /// Elevated add-rule task finished. On success we close the prompt and
+    /// launch; on failure we keep it open with an error so the user can retry
+    /// or skip.
+    FirewallRuleAddDone {
+        channel: Channel,
+        result: Result<(), String>,
+    },
 }
 
 pub struct AppState {
@@ -218,6 +258,11 @@ pub struct AppState {
     /// non-elevated and button-triggered; absent entries mean "not checked
     /// this launch". On Linux the check resolves to `NotApplicable`.
     pub firewall_status: BTreeMap<Channel, crate::firewall::FirewallStatus>,
+    /// Channels for which the user dismissed the first-Play firewall prompt this
+    /// session (chose "Skip & Play"). In-memory only — re-prompts on the next
+    /// launcher restart while the rule is still missing. A successful add makes
+    /// the rule detectable, so accepted channels never re-prompt regardless.
+    pub firewall_prompt_dismissed: HashSet<Channel>,
 }
 
 impl Default for AppState {
@@ -258,6 +303,7 @@ impl Default for AppState {
             verify_results: BTreeMap::new(),
             uninstall_in_progress: None,
             firewall_status: BTreeMap::new(),
+            firewall_prompt_dismissed: HashSet::new(),
         }
     }
 }
@@ -980,11 +1026,48 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 return Task::none();
             };
             let username = state.identity.username.clone();
-            state.game_running = true;
-            return Task::perform(
-                crate::game_launch::spawn_and_wait(channel, install_dir, username),
-                move |result| Message::GameExited { channel, result },
-            );
+
+            // On Windows, gate the launch behind a one-time firewall check: if
+            // no inbound rule exists for this channel's exe we prompt once
+            // (option A) before launching. Skipped if the user already dismissed
+            // the prompt for this channel this session. On other targets there
+            // is nothing to add (outbound hole-punching), so launch directly.
+            #[cfg(target_os = "windows")]
+            if !state.firewall_prompt_dismissed.contains(&channel) {
+                let dir = install_dir.clone();
+                let user = username.clone();
+                return Task::perform(
+                    async move {
+                        let (status, exe) =
+                            match crate::updater::branches::installed_manifest(&dir).await {
+                                Ok(Some(m)) => {
+                                    let exe = dir.join(&m.executable);
+                                    (
+                                        crate::firewall::inbound_rule_status(exe.clone()).await,
+                                        Some(exe),
+                                    )
+                                }
+                                Ok(None) => (
+                                    crate::firewall::FirewallStatus::Unknown(
+                                        "no installed.json — channel not installed".to_string(),
+                                    ),
+                                    None,
+                                ),
+                                Err(e) => (crate::firewall::FirewallStatus::Unknown(e), None),
+                            };
+                        (status, exe, dir, user)
+                    },
+                    move |(status, exe, install_dir, username)| Message::PlayFirewallResolved {
+                        channel,
+                        status,
+                        exe,
+                        install_dir,
+                        username,
+                    },
+                );
+            }
+
+            return launch_game(state, channel, install_dir, username);
         }
         Message::GameExited { channel, result } => {
             state.game_running = false;
@@ -1202,8 +1285,130 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             tracing::info!(?channel, ?status, "firewall check complete");
             state.firewall_status.insert(channel, status);
         }
+        Message::PlayFirewallResolved {
+            channel,
+            status,
+            exe,
+            install_dir,
+            username,
+        } => {
+            // Only prompt when we're confident the rule is missing AND we know
+            // the exe to target. RulePresent / Unknown / NotApplicable, or an
+            // unresolved exe, all launch directly — never block Play on an
+            // inconclusive check.
+            if matches!(status, crate::firewall::FirewallStatus::NotDetected) {
+                if let Some(exe) = exe {
+                    tracing::info!(?channel, "no inbound rule — opening firewall prompt");
+                    state.center_view = CenterView::FirewallPrompt {
+                        channel,
+                        exe,
+                        install_dir,
+                        username,
+                        in_progress: false,
+                        error: None,
+                    };
+                    return Task::none();
+                }
+            }
+            tracing::debug!(?channel, ?status, "firewall check inconclusive/present — launching");
+            return launch_game(state, channel, install_dir, username);
+        }
+        Message::FirewallPromptAllow => {
+            let CenterView::FirewallPrompt {
+                channel,
+                exe,
+                in_progress,
+                ..
+            } = &mut state.center_view
+            else {
+                return Task::none();
+            };
+            if *in_progress {
+                return Task::none(); // already elevating — ignore double-click
+            }
+            *in_progress = true;
+            let channel = *channel;
+            let exe = exe.clone();
+            // The elevated call is blocking (ShellExecuteExW + WaitForSingleObject),
+            // so run it off the async executor via spawn_blocking.
+            return Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        crate::firewall::add_inbound_rule_elevated(channel, &exe)
+                    })
+                    .await
+                    .map_err(|e| format!("elevation task join error: {e}"))?
+                },
+                move |result| Message::FirewallRuleAddDone { channel, result },
+            );
+        }
+        Message::FirewallPromptSkip => {
+            let CenterView::FirewallPrompt {
+                channel,
+                install_dir,
+                username,
+                ..
+            } = &state.center_view
+            else {
+                return Task::none();
+            };
+            let channel = *channel;
+            let install_dir = install_dir.clone();
+            let username = username.clone();
+            // Suppress the prompt for this channel for the rest of the session.
+            state.firewall_prompt_dismissed.insert(channel);
+            state.center_view = CenterView::Default;
+            tracing::info!(?channel, "firewall prompt skipped — launching without a rule");
+            return launch_game(state, channel, install_dir, username);
+        }
+        Message::FirewallRuleAddDone { channel, result } => match result {
+            Ok(()) => {
+                tracing::info!(?channel, "inbound firewall rule created");
+                // Rule now exists, so future Plays skip the prompt via detection.
+                // Pull the launch params out of the prompt, then launch.
+                if let CenterView::FirewallPrompt {
+                    install_dir,
+                    username,
+                    ..
+                } = &state.center_view
+                {
+                    let install_dir = install_dir.clone();
+                    let username = username.clone();
+                    state.center_view = CenterView::Default;
+                    return launch_game(state, channel, install_dir, username);
+                }
+                state.center_view = CenterView::Default;
+            }
+            Err(e) => {
+                tracing::warn!(?channel, error = %e, "firewall rule creation failed");
+                // Keep the prompt open so the user can retry or skip.
+                if let CenterView::FirewallPrompt {
+                    in_progress, error, ..
+                } = &mut state.center_view
+                {
+                    *in_progress = false;
+                    *error = Some(e);
+                }
+            }
+        },
     }
     Task::none()
+}
+
+/// Mark the game running and spawn it, wiring exit back to `GameExited`. Shared
+/// by the direct Play path and every firewall-prompt outcome so the launch
+/// logic lives in exactly one place.
+fn launch_game(
+    state: &mut AppState,
+    channel: Channel,
+    install_dir: std::path::PathBuf,
+    username: String,
+) -> Task<Message> {
+    state.game_running = true;
+    Task::perform(
+        crate::game_launch::spawn_and_wait(channel, install_dir, username),
+        move |result| Message::GameExited { channel, result },
+    )
 }
 
 pub fn view(state: &AppState) -> Element<'_, Message> {

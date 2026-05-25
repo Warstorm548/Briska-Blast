@@ -9,17 +9,21 @@
 //! install time. A firewall rule therefore has to be the launcher's
 //! responsibility, and creating one requires elevation.
 //!
-//! Per the P3 decision this module ships only the **non-elevated detection**
-//! half: it reports whether an inbound rule for a given exe already exists,
-//! with no admin rights required to look. The elevated `netsh … add rule`
-//! write is intentionally stubbed (`add_inbound_rule_elevated`) pending
-//! Jean-Luc's sign-off on option (A) — user-initiated, single UAC elevation.
+//! This module has two halves. `inbound_rule_status` is the **non-elevated
+//! detection** — it reports whether an inbound rule for a given exe already
+//! exists, with no admin rights required to look. `add_inbound_rule_elevated`
+//! is the **elevated write** (option A): a single UAC elevation that runs
+//! `netsh … add rule` to create the inbound allow rule. The write is invoked
+//! from the first-Play prompt (see `app.rs`), keeping it user-initiated to
+//! mirror the project's user-initiated-update philosophy.
 //!
 //! On Linux, outbound-initiated hole-punching traverses the default host
 //! firewall (ufw doesn't block outbound; inbound for hole-punched flows is
 //! solicited), so there is nothing to detect or manipulate. The detection
 //! function returns `NotApplicable` there and no Linux firewall code exists
 //! in this module by design.
+
+use crate::channel::Channel;
 
 /// Result of a non-elevated inbound-rule lookup for one game exe.
 // `RulePresent`/`NotDetected` are constructed only on the Windows code path;
@@ -94,17 +98,83 @@ pub async fn inbound_rule_status(_game_exe: std::path::PathBuf) -> FirewallStatu
     FirewallStatus::NotApplicable
 }
 
-/// TODO(P3/layer1): create the inbound allow rule for the game exe. This needs
-/// a single UAC elevation and is blocked on Jean-Luc's sign-off for option (A)
-/// (user-initiated, launcher-driven, one-time prompt — mirrors the project's
-/// user-initiated-update philosophy). It deliberately returns `Err` so any
-/// caller wired up before that sign-off cannot silently believe a rule was
-/// created. The eventual implementation runs, elevated, the equivalent of:
+/// Locale-stable inbound-rule name for a channel's game. Built only from the
+/// fixed `Channel` enum (never user text), so interpolating it into the
+/// elevated `netsh` command carries no injection surface. Kept un-gated so the
+/// UI and tests can show/assert the name on every platform.
+pub fn rule_name(channel: Channel) -> String {
+    format!("BriskaBlast {} Game", channel.dir_name())
+}
+
+/// Create the inbound allow rule for `game_exe`, elevated. This triggers a
+/// single UAC prompt (option A) and runs, as admin, the equivalent of:
 ///
 ///   netsh advfirewall firewall add rule name="BriskaBlast <channel> Game" \
 ///       dir=in action=allow program="<game_exe>" enable=yes
+///
+/// `runas` performs the `ShellExecuteExW`/"runas" elevation, waits on the
+/// process, and returns its exit code. Each `name=` / `program=` token is
+/// passed as a discrete arg — `runas` quotes/escapes args containing spaces or
+/// quotes, and netsh's CRT parser splits them back, so a path with spaces is
+/// handled and there is no command-injection surface (paths cannot contain the
+/// `"`/`<`/`>`/`|` that would be needed to break out, and the rule name is
+/// enum-derived).
+///
+/// **Blocking** — `ShellExecuteExW` + `WaitForSingleObject` run synchronously,
+/// so callers must invoke this inside `tokio::task::spawn_blocking`.
 #[cfg(target_os = "windows")]
-#[allow(dead_code)]
-pub fn add_inbound_rule_elevated(_game_exe: &std::path::Path) -> Result<(), String> {
-    Err("firewall rule creation not yet enabled (pending P3 option-A sign-off)".into())
+pub fn add_inbound_rule_elevated(channel: Channel, game_exe: &std::path::Path) -> Result<(), String> {
+    let name_arg = format!("name={}", rule_name(channel));
+    let program_arg = format!("program={}", game_exe.to_string_lossy());
+
+    let status = runas::Command::new("netsh")
+        // Don't flash a console window for the elevated child.
+        .show(false)
+        .args([
+            "advfirewall",
+            "firewall",
+            "add",
+            "rule",
+            name_arg.as_str(),
+            "dir=in",
+            "action=allow",
+            program_arg.as_str(),
+            "enable=yes",
+        ])
+        .status()
+        .map_err(|e| format!("failed to launch elevated netsh: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        // A non-zero exit covers a declined/cancelled UAC prompt as well as a
+        // netsh failure — both mean no rule was created. Surface it so the
+        // caller can keep the prompt open rather than pretend success.
+        match status.code() {
+            Some(code) => Err(format!(
+                "couldn't create the firewall rule (netsh exit {code}) — the \
+                 permission prompt may have been declined"
+            )),
+            None => Err("elevated netsh terminated without an exit code".to_string()),
+        }
+    }
+}
+
+/// Non-Windows stub — firewall rules are not the launcher's concern off Windows
+/// (see module docs). Present so the call site in `app.rs` compiles everywhere.
+#[cfg(not(target_os = "windows"))]
+pub fn add_inbound_rule_elevated(_channel: Channel, _game_exe: &std::path::Path) -> Result<(), String> {
+    Err("firewall rule creation is only supported on Windows".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rule_name_is_per_channel_and_locale_stable() {
+        assert_eq!(rule_name(Channel::Stable), "BriskaBlast stable Game");
+        assert_eq!(rule_name(Channel::Ea), "BriskaBlast ea Game");
+        assert_eq!(rule_name(Channel::Dev), "BriskaBlast dev Game");
+    }
 }
