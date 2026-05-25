@@ -9,6 +9,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.2.5] — 2026-05-24
+
+Pure pipeline cleanup on top of v0.2.4 — **no behaviour change** to the
+exported game.
+
+### Changed
+
+- **`release-client.yml`:** dropped the v0.2.3 `dotnet build (Debug)` step
+  (and its explanatory comment block). It pre-populated `bin/Debug/` so the
+  editor-mode runtime could load the project assembly during import. Once
+  v0.2.4 added `BriskaBlast.sln` generation, Godot's own
+  `BuildManager.PublishProjectBlocking` builds and embeds the managed DLLs,
+  making the step redundant. The post-export `pck_size` ≥ 5 MiB canary still
+  guards against a regression.
+
+### Added
+
+- **`ci-client.yml`:** mirrored the `.sln`-generation step from
+  `release-client.yml`. That workflow is `workflow_dispatch`-only today, but
+  if it is re-enabled on `client/**` PRs it would otherwise hit the same
+  "no solution file was found" failure when headless Godot processes `.cs`
+  files.
+
 ## [0.2.4] — 2026-05-24
 
 Fourth (and hopefully last) iteration on the headless .NET export.
