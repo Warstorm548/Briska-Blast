@@ -199,6 +199,54 @@ jobs:
           fi
         working-directory: client
 
+      # macOS is cross-exported HERE on the Linux runner, NOT on macos-latest:
+      # `godot --headless` reliably hangs on the macOS runner — it prints the
+      # banner then never exits (orphaned Godot process). Every invocation
+      # variant (--embedded, --quit-after 2, export-implicit-import) hung in
+      # testing on Godot 4.6.3 / macOS 15.7.7, despite all upstream macOS
+      # headless fixes being present. Godot's export templates are
+      # platform-independent, so Linux produces the same arm64 .app in seconds.
+      - name: Export macOS (arm64)
+        run: |
+          mkdir -p export/macos
+          godot --headless --verbose --export-release "macOS" "$PWD/export/macos/BriskaBlast.app"
+        working-directory: client
+
+      - name: Verify macOS export embedded C#
+        # The .pck is bundled inside the .app at Contents/Resources/. Same
+        # >5 MiB embedded-DLL guard as Linux/Windows (stat -c%s on Linux).
+        run: |
+          PCK="export/macos/BriskaBlast.app/Contents/Resources/BriskaBlast.pck"
+          test -d export/macos/BriskaBlast.app
+          test -f "$PCK"
+          pck_size=$(stat -c%s "$PCK")
+          echo "macOS .pck size: $pck_size bytes"
+          if [ "$pck_size" -lt 5242880 ]; then
+            echo "::error::macOS .pck is only $pck_size bytes — C# DLLs not embedded? Check that 'godot --headless --verbose --export-release' completed Godot's own internal dotnet publish step."
+            exit 1
+          fi
+        working-directory: client
+
+      - name: Install rcodesign (off-macOS ad-hoc signing)
+        run: |
+          RCODESIGN_VERSION="0.29.0"
+          curl -fsSL -o rcodesign.tar.gz \
+            "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/${RCODESIGN_VERSION}/apple-codesign-${RCODESIGN_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          tar xzf rcodesign.tar.gz
+          BIN="$(find . -type f -name rcodesign | head -1)"
+          sudo install -m 0755 "$BIN" /usr/local/bin/rcodesign
+          rcodesign --version
+
+      - name: Ad-hoc sign the .app (rcodesign)
+        # Tester-grade ad-hoc signature (no certificate) — MANDATORY because
+        # Apple Silicon refuses to launch unsigned arm64 binaries. NOT
+        # Developer-ID / notarized. `rcodesign sign` with no key produces an
+        # ad-hoc signature and recursively signs nested Mach-O by default.
+        run: |
+          rcodesign sign export/macos/BriskaBlast.app
+          rcodesign verify export/macos/BriskaBlast.app
+        working-directory: client
+
       - name: Package Linux tar.gz
         run: |
           cd client/export/linux
@@ -209,136 +257,25 @@ jobs:
           cd client/export/windows
           zip -qr "../../../briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}-windows.zip" .
 
+      - name: Package macOS tar.gz
+        run: |
+          # tar (not zip) preserves the .app bundle's symlinks + exec bits.
+          cd client/export/macos
+          tar czf \
+            "../../../briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}-macos.tar.gz" \
+            BriskaBlast.app
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}
           path: |
             briskablast-client-*-linux.tar.gz
             briskablast-client-*-windows.zip
-
-  build-macos:
-    name: Export macOS (Apple Silicon, ad-hoc signed)
-    # Reuses the Linux job's channel/version detection via `needs`, so the
-    # channel logic lives in one place. Runs on macos-latest (Apple Silicon)
-    # for a native arm64 .app export + native `codesign`.
-    needs: build
-    runs-on: macos-latest
-    env:
-      # BuildConfig.cs bakes this into the binary (mirrors the Linux job's
-      # RELEASE_CHANNEL export) so the macOS build targets the right server.
-      RELEASE_CHANNEL: ${{ needs.build.outputs.channel }}
-
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          persist-credentials: false
-
-      - name: Install .NET 8 SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-
-      - name: Cache Godot editor
-        id: cache-godot
-        uses: actions/cache@v5
-        with:
-          path: /opt/godot-mono
-          key: godot-mono-${{ env.GODOT_VERSION }}-macos
-
-      - name: Install Godot ${{ env.GODOT_VERSION }} (.NET)
-        if: steps.cache-godot.outputs.cache-hit != 'true'
-        run: |
-          curl -fsSL -o godot.zip \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_macos.universal.zip"
-          unzip -q godot.zip
-          sudo mkdir -p /opt/godot-mono
-          # The mono macOS archive unzips to Godot_mono.app; CLI binary lives at
-          # Contents/MacOS/Godot.
-          sudo mv Godot_mono.app /opt/godot-mono/Godot_mono.app
-
-      - name: Link godot to PATH
-        run: |
-          sudo ln -sf "/opt/godot-mono/Godot_mono.app/Contents/MacOS/Godot" /usr/local/bin/godot
-          godot --version
-
-      - name: Cache export templates
-        id: cache-templates
-        uses: actions/cache@v5
-        with:
-          path: ~/Library/Application Support/Godot/export_templates
-          key: godot-templates-${{ env.GODOT_VERSION }}-mono
-
-      - name: Install export templates
-        if: steps.cache-templates.outputs.cache-hit != 'true'
-        run: |
-          curl -fsSL -o templates.tpz \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_export_templates.tpz"
-          DEST="$HOME/Library/Application Support/Godot/export_templates"
-          mkdir -p "$DEST"
-          unzip -q templates.tpz -d /tmp/godot-templates
-          mv "/tmp/godot-templates/templates" "$DEST/${GODOT_VERSION}.stable.mono"
-
-      # Same .sln requirement as the Linux job — see its long comment.
-      - name: Generate solution file (Godot export plugin requires .sln)
-        run: |
-          dotnet new sln --name BriskaBlast
-          dotnet sln BriskaBlast.sln add BriskaBlast.csproj
-        working-directory: client
-
-      - name: dotnet restore (warm NuGet cache)
-        run: dotnet restore
-        working-directory: client
-
-      - name: Pre-import resources
-        run: godot --headless --import
-        working-directory: client
-
-      - name: Export macOS
-        run: |
-          mkdir -p export/macos
-          godot --headless --verbose --export-release "macOS" "$PWD/export/macos/BriskaBlast.app"
-        working-directory: client
-
-      - name: Verify macOS export embedded C#
-        # The .pck is bundled inside the .app at Contents/Resources/. Same
-        # >5 MiB embedded-DLL guard as the Linux/Windows jobs (stat -f%z on macOS).
-        run: |
-          PCK="export/macos/BriskaBlast.app/Contents/Resources/BriskaBlast.pck"
-          test -d export/macos/BriskaBlast.app
-          test -f "$PCK"
-          pck_size=$(stat -f%z "$PCK")
-          echo "macOS .pck size: $pck_size bytes"
-          if [ "$pck_size" -lt 5242880 ]; then
-            echo "::error::macOS .pck is only $pck_size bytes — C# DLLs not embedded? Check that 'godot --headless --verbose --export-release' completed Godot's own internal dotnet publish step."
-            exit 1
-          fi
-        working-directory: client
-
-      - name: Ad-hoc sign the .app
-        # Tester-grade signature (codesign --sign -): runs locally past Gatekeeper
-        # for a known tester, NOT Developer-ID / notarized for public download.
-        run: |
-          codesign --force --deep --sign - export/macos/BriskaBlast.app
-          codesign --verify --strict --verbose=2 export/macos/BriskaBlast.app
-        working-directory: client
-
-      - name: Package macOS tar.gz
-        run: |
-          # tar (not zip) preserves the bundle's symlinks + exec bits.
-          # COPYFILE_DISABLE stops macOS tar from injecting ._ AppleDouble files.
-          cd client/export/macos
-          COPYFILE_DISABLE=1 tar czf \
-            "../../../briskablast-client-${{ needs.build.outputs.channel }}-${{ needs.build.outputs.version }}-macos.tar.gz" \
-            BriskaBlast.app
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: briskablast-client-${{ needs.build.outputs.channel }}-${{ needs.build.outputs.version }}-macos
-          path: briskablast-client-*-macos.tar.gz
+            briskablast-client-*-macos.tar.gz
 
   release:
     name: Publish GitHub Release
-    needs: [build, build-macos]
+    needs: [build]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/game-v')
     # Default GITHUB_TOKEN has read-only contents scope; creating a release
@@ -347,8 +284,8 @@ jobs:
       contents: write
 
     steps:
-      # No `name:` — download every artifact (the Linux/Windows bundle from
-      # `build` and the macOS tar.gz from `build-macos`) into subdirs.
+      # No `name:` — download the artifact bundle from `build` (now carries
+      # Linux + Windows + macOS, all cross-exported on the Linux runner).
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
