@@ -154,6 +154,14 @@ pub enum Message {
         channel: Channel,
         result: Result<(), String>,
     },
+    /// User asked to (re)check the Windows-Firewall inbound rule for a
+    /// channel's installed game exe (P3). Non-elevated, read-only.
+    CheckFirewall(Channel),
+    /// Firewall check finished — status cached in state.firewall_status.
+    FirewallCheckComplete {
+        channel: Channel,
+        status: crate::firewall::FirewallStatus,
+    },
 }
 
 pub struct AppState {
@@ -205,6 +213,11 @@ pub struct AppState {
     /// double-press of Confirm from spawning two destructive tasks
     /// against the same install dir.
     pub uninstall_in_progress: Option<Channel>,
+    /// Last Windows-Firewall inbound-rule check per channel (P3). Drives the
+    /// inline status cell in Settings → Game Channel Management. Detection is
+    /// non-elevated and button-triggered; absent entries mean "not checked
+    /// this launch". On Linux the check resolves to `NotApplicable`.
+    pub firewall_status: BTreeMap<Channel, crate::firewall::FirewallStatus>,
 }
 
 impl Default for AppState {
@@ -244,6 +257,7 @@ impl Default for AppState {
             download_progress: None,
             verify_results: BTreeMap::new(),
             uninstall_in_progress: None,
+            firewall_status: BTreeMap::new(),
         }
     }
 }
@@ -326,6 +340,19 @@ fn recompute_branch_updates_available(state: &mut AppState) {
 ///      is already on file. First-launch users see the welcome screen and
 ///      `ConfirmWelcomeUsername` kicks the /register fan-out instead.
 pub fn boot() -> (AppState, Task<Message>) {
+    // Layer-1 migration: anyone upgrading from a pre-installer build kept their
+    // identity + saves next to the binary. Pull them into the per-user data
+    // root before the first read so the account survives the move. Idempotent
+    // and non-clobbering — see paths::migrate_legacy_data_if_needed.
+    match crate::paths::migrate_legacy_data_if_needed() {
+        Ok(true) => tracing::info!("migrated legacy launcher data into per-user data dir"),
+        Ok(false) => {}
+        Err(e) => tracing::warn!(
+            error = %e,
+            "legacy data migration failed; continuing with per-user data dir"
+        ),
+    }
+
     let loaded = match identity::load() {
         Ok(Some(id)) => Some(id),
         Ok(None) => None,
@@ -1131,6 +1158,43 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             Ok(()) => tracing::info!(?channel, "saves dir opened"),
             Err(e) => tracing::warn!(?channel, error = %e, "failed to open saves dir"),
         },
+        Message::CheckFirewall(channel) => {
+            // Defence-in-depth dev gate, matching VerifyChannel.
+            if channel == Channel::Dev && !state.dev_flag {
+                tracing::warn!("CheckFirewall for Dev without dev_flag — refusing");
+                return Task::none();
+            }
+            let Some(creds) = state.identity.channels.get(&channel) else {
+                return Task::none();
+            };
+            let Some(install_dir) = creds.install_location.clone() else {
+                tracing::debug!(?channel, "CheckFirewall with no install — no-op");
+                return Task::none();
+            };
+            // Resolve the exact game exe (install_dir + manifest.executable),
+            // then run the non-elevated firewall lookup against it. If the
+            // manifest can't be read the rule target is unknown, so we surface
+            // that as `Unknown` rather than guessing a path.
+            return Task::perform(
+                async move {
+                    match crate::updater::branches::installed_manifest(&install_dir).await {
+                        Ok(Some(m)) => {
+                            let exe = install_dir.join(&m.executable);
+                            crate::firewall::inbound_rule_status(exe).await
+                        }
+                        Ok(None) => crate::firewall::FirewallStatus::Unknown(
+                            "no installed.json — channel not installed".to_string(),
+                        ),
+                        Err(e) => crate::firewall::FirewallStatus::Unknown(e),
+                    }
+                },
+                move |status| Message::FirewallCheckComplete { channel, status },
+            );
+        }
+        Message::FirewallCheckComplete { channel, status } => {
+            tracing::info!(?channel, ?status, "firewall check complete");
+            state.firewall_status.insert(channel, status);
+        }
     }
     Task::none()
 }

@@ -17,6 +17,17 @@
 # Tag schema: launcher-v<semver>  e.g. launcher-v0.3.0-dev.1
 # Schema is launcher-only — server's `v*.*.*-dev.N` tag stream is unaffected
 # (see plan doc / launcher-foundation §7).
+#
+# Windows Authenticode signing (optional — SmartScreen / AV publisher trust):
+#   The Windows job signs BOTH the launcher exe (before packaging) and the
+#   final Setup.exe IF these repo/org secrets are present:
+#     WINDOWS_CERT_PFX_BASE64 — base64 of an OV/EV code-signing .pfx
+#     WINDOWS_CERT_PASSWORD   — the .pfx password
+#   If either secret is ABSENT the signing steps skip with a warning and the
+#   workflow still succeeds, publishing UNSIGNED artifacts (i.e. exactly the
+#   pre-signing behaviour). No cert == unsigned but green; never a hard fail.
+#   Linux (.deb / AppImage) signing is intentionally NOT done here yet — see the
+#   TODO on the build-linux job.
 
 name: Release — Launcher
 
@@ -29,6 +40,12 @@ jobs:
   build-linux:
     name: Build Linux (tar.gz + AppImage + .deb)
     runs-on: ubuntu-latest
+    # TODO(P4/layer1): Linux artifacts (.deb / AppImage) are published UNSIGNED.
+    # Add GPG detached-signature signing (`gpg --armor --detach-sign` for the
+    # AppImage + tar.gz, and a signed Release/`debsign` for the .deb) behind a
+    # `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` secret pair using the same
+    # skip-cleanly-if-absent contract as the Windows job. Deferred out of this
+    # branch — Windows SmartScreen trust is the priority gap.
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -128,6 +145,17 @@ jobs:
         run: cargo build --release
         working-directory: launcher
 
+      # Sign the launcher exe BEFORE it is packaged, so BOTH the self_update zip
+      # and the NSIS installer (which embeds this exe) carry a signed binary.
+      # Skips cleanly (warning, exit 0) when the cert secrets are absent.
+      - name: Sign launcher exe (if cert present)
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          ./.github/scripts/sign-windows.ps1 -Target "target/release/briskablast-launcher.exe"
+
       - name: Package zip (self_update asset)
         shell: pwsh
         run: |
@@ -154,6 +182,16 @@ jobs:
           # `C:/Program Files/Git/DVERSION=…`. NSIS accepts both forms.
           makensis "-DVERSION=${VERSION}" tools/installer/launcher.nsi
           mv BriskaBlast-Launcher-Setup.exe "BriskaBlast-Launcher-Setup-${VERSION}.exe"
+
+      # Sign the final Setup.exe too (same skip-if-no-secret contract).
+      - name: Sign installer (if cert present)
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $version = "${{ steps.ver.outputs.version }}"
+          ./.github/scripts/sign-windows.ps1 -Target "BriskaBlast-Launcher-Setup-$version.exe"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

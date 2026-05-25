@@ -66,16 +66,15 @@ Section "Install"
 SectionEnd
 
 Section "Uninstall"
-  ; Note: %APPDATA%\BriskaBlast\ is intentionally NOT removed. The identity
-  ; file (player_id + secret_token per channel) lives there; losing it means
-  ; losing the account permanently — see
-  ; docs/launcher/launcher-update-and-version-validation.md §Uninstall
-  ; Considerations. A future branch will add an opt-in cleanup prompt.
-
-  Delete "$INSTDIR\${APP_EXE}"
-  Delete "$INSTDIR\icon.ico"
-  Delete "$INSTDIR\Uninstall.exe"
-  RMDir "$INSTDIR"
+  ; --- Launcher binaries (everything this installer wrote) ---
+  ; The launcher's writable data (identity.json + saves) now lives under the
+  ; per-user data root $APPDATA\BriskaBlast\ (set by the `directories` crate —
+  ; see launcher/src/paths.rs), NOT under $INSTDIR. So $INSTDIR holds only the
+  ; exe, icon, and uninstaller and `RMDir /r` can clear it cleanly. /r is used
+  ; (rather than a bare RMDir) to also sweep an empty legacy `data\` dir left
+  ; behind by a pre-migration build. It is scoped strictly to $INSTDIR — it
+  ; NEVER touches $APPDATA, which is handled separately and conditionally below.
+  RMDir /r "$INSTDIR"
   RMDir "$PROGRAMFILES64\BriskaBlast"
 
   Delete "$SMPROGRAMS\BriskaBlast\${APP_NAME}.lnk"
@@ -83,4 +82,18 @@ Section "Uninstall"
 
   DeleteRegKey HKLM "Software\BriskaBlast\Launcher"
   DeleteRegKey HKLM "${ARP_KEY}"
+
+  ; --- Player data prompt ---
+  ; The identity file (player_id + secret_token per channel) lives under
+  ; $APPDATA\BriskaBlast\. Losing it means losing the account permanently —
+  ; there are no cloud saves (see
+  ; docs/launcher/launcher-update-and-version-validation.md §Uninstall
+  ; Considerations). Default to KEEP: `/SD IDYES` makes silent/unattended
+  ; uninstalls preserve data, and the loud branch only deletes on an explicit No.
+  MessageBox MB_YESNO|MB_ICONQUESTION \
+    "Keep your BriskaBlast player data (account identity and saved games) for a future reinstall?$\n$\nChoose No to permanently delete it. This cannot be undone." \
+    /SD IDYES IDYES keep_player_data
+    ; User chose No — remove ONLY the per-user data root, nothing outside it.
+    RMDir /r "$APPDATA\BriskaBlast"
+  keep_player_data:
 SectionEnd

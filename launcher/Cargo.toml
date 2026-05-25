@@ -45,11 +45,26 @@ chrono             = { version = "0.4", default-features = false, features = ["c
 # Random handoff-file names for the Play → spawn-game flow (Stage 5).
 # v4 = random; no machine-id leak the way v1 has.
 uuid               = { version = "1", features = ["v4"] }
+# Per-user, OS-correct data directory resolution. Adopted when the OS-level
+# installer (Layer 1) started placing the launcher in a non-user-writable
+# location (Program Files) — writable data can no longer live next to the
+# binary. Windows → %APPDATA%\BriskaBlast\, Linux → ~/.local/share/briskablast/.
+directories        = "5"
 
 [dev-dependencies]
 tempfile           = "3"
 
 [package.metadata.deb]
+# NOTE (Layer-1 uninstall parity): we deliberately ship NO `postrm` maintainer
+# script that deletes user data on `apt remove`. The per-user data root
+# (~/.local/share/briskablast/) holds the identity file (player_id +
+# secret_token) — wiping it on package removal would silently destroy the
+# player's account, with no cloud backup to recover from. The Windows installer
+# asks "keep player data?"; apt/dpkg has no clean interactive equivalent, so the
+# safe default here is to never auto-delete. TODO(layer1): if a guided
+# uninstall is ever wanted on Linux, add a `maintainer-scripts` dir with a
+# `postrm purge` branch (only the `purge` action, not plain `remove`) that
+# prompts via debconf — never an unconditional rm.
 maintainer = "Warstorm548"
 copyright = "2026, Warstorm548"
 license-file = ["../LICENSE", "0"]

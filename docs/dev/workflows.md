@@ -41,10 +41,13 @@ All tools are open source and AGPL-3.0 compatible.
 | `linuxdeploy` + `appimagetool` | MIT | Linux AppImage builder |
 | `softprops/action-gh-release` | MIT | Publishes GitHub releases with assets |
 
-## NSIS Installer Scripts
+## NSIS Installer Script
 
-NSIS installer templates for the client and launcher live in `tools/installer/`:
-- `tools/installer/client.nsi`
-- `tools/installer/launcher.nsi`
+The launcher's Windows installer lives at `tools/installer/launcher.nsi`. It is
+the only NSIS script in the project — the game itself is not installed by NSIS.
+The game is exported by `release-client.yml` (Godot → `BriskaBlast.exe` + `.pck`,
+packaged as per-channel `tar.gz`/`zip`) and installed by the launcher's Layer-2
+downloader, so the launcher is the sole game-install path.
 
-Each script has TODO comments marking what needs to be filled in before the first release (icon path, version number). The version can be passed at build time via `/DGAME_VERSION=x.y.z` on the `makensis` command line.
+CI builds the installer with the version passed at build time via
+`/DVERSION=x.y.z` on the `makensis` command line (see `release-launcher.yml`).

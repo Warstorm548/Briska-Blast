@@ -8,6 +8,7 @@
 
 mod app;
 mod channel;
+mod firewall;
 mod game_launch;
 mod identity;
 mod paths;

@@ -1,5 +1,6 @@
 //! Identity file schema. See docs/launcher/launcher-foundation.md §2.
-//! v1 schema; persisted at `paths::identity_path()` next to the binary.
+//! v1 schema; persisted at `paths::identity_path()` under the per-user data
+//! root (see `paths.rs` — Windows %APPDATA%, Linux XDG), not next to the binary.
 
 use crate::channel::Channel;
 use crate::paths;
@@ -71,7 +72,7 @@ impl fmt::Debug for ChannelCreds {
     }
 }
 
-/// Read `data/identity.json` from the install dir. `Ok(None)` = first-run
+/// Read `identity.json` from the per-user data root. `Ok(None)` = first-run
 /// (file missing). `Err(_)` = real I/O / parse failure; the boot flow treats
 /// this the same as first-run (fresh registration) rather than crashing, so
 /// a corrupted file is self-healing on next launch.
