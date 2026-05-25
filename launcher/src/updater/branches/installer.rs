@@ -73,7 +73,9 @@ pub fn select_platform_asset(release: &GameRelease) -> Option<&ReleaseAsset> {
     const NEEDLE: &str = "linux.tar.gz";
     #[cfg(target_os = "windows")]
     const NEEDLE: &str = "windows.zip";
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(target_os = "macos")]
+    const NEEDLE: &str = "macos.tar.gz";
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     const NEEDLE: &str = "unsupported";
     // ends_with rather than contains so we don't accidentally pick a
     // companion file like `…linux.tar.gz.sha256` or `…windows.zip.sig` if
@@ -394,8 +396,21 @@ fn extract_archive_blocking(archive: &Path, dest: &Path, name: &str) -> Result<S
         let mut tar = tar::Archive::new(gz);
         tar.unpack(dest)
             .map_err(|e| format!("tar unpack: {e}"))?;
-        find_executable(dest, "BriskaBlast.x86_64")
-            .ok_or_else(|| "extracted archive does not contain BriskaBlast.x86_64".to_string())
+        // Linux ships a bare ELF (BriskaBlast.x86_64) at the archive top level;
+        // macOS ships a BriskaBlast.app bundle whose Mach-O lives a few levels
+        // deep (Contents/MacOS/). Both arrive as .tar.gz, so the executable
+        // resolution — not the extraction — is what differs by platform.
+        #[cfg(target_os = "macos")]
+        {
+            find_app_executable(dest).ok_or_else(|| {
+                "extracted archive does not contain a *.app/Contents/MacOS/ executable".to_string()
+            })
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            find_executable(dest, "BriskaBlast.x86_64")
+                .ok_or_else(|| "extracted archive does not contain BriskaBlast.x86_64".to_string())
+        }
     } else if name.ends_with(".zip") {
         let f = File::open(archive).map_err(|e| format!("open archive: {e}"))?;
         let mut z = zip::ZipArchive::new(f).map_err(|e| format!("zip open: {e}"))?;
@@ -423,6 +438,33 @@ fn find_executable(dir: &Path, name: &str) -> Option<String> {
                     .strip_prefix(dir)
                     .ok()
                     .map(|p| p.to_string_lossy().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Locate the macOS game executable inside an extracted `.app` bundle. Finds the
+/// single top-level `*.app`, then the Mach-O in its `Contents/MacOS/` (Godot
+/// names it after the bundle, but we glob for the one file rather than hardcode
+/// the name). Returns the path relative to `dir`, e.g.
+/// `BriskaBlast.app/Contents/MacOS/BriskaBlast`, to store as the manifest
+/// executable. Only called on macOS; the logic is OS-agnostic so the test below
+/// exercises it on every platform.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn find_app_executable(dir: &Path) -> Option<String> {
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let app = entry.path();
+        if app.is_dir() && app.extension().and_then(|e| e.to_str()) == Some("app") {
+            let macos_dir = app.join("Contents").join("MacOS");
+            for bin in std::fs::read_dir(&macos_dir).ok()?.flatten() {
+                let p = bin.path();
+                if p.is_file() {
+                    return p
+                        .strip_prefix(dir)
+                        .ok()
+                        .map(|r| r.to_string_lossy().to_string());
+                }
             }
         }
     }
@@ -581,4 +623,73 @@ pub async fn uninstall_install(
         .await
         .map_err(|e| format!("remove install dir {}: {e}", install_dir.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::updater::branches::github::{GameRelease, ReleaseAsset};
+
+    fn asset(name: &str) -> ReleaseAsset {
+        ReleaseAsset {
+            name: name.to_string(),
+            download_url: format!("https://example.test/{name}"),
+        }
+    }
+
+    /// The in-bundle resolver returns the Mach-O path relative to the install
+    /// dir, e.g. `BriskaBlast.app/Contents/MacOS/BriskaBlast`. OS-agnostic logic,
+    /// so this runs on every platform's CI leg.
+    #[test]
+    fn find_app_executable_locates_in_bundle_macho() {
+        let tmp = tempfile::tempdir().unwrap();
+        let macos = tmp
+            .path()
+            .join("BriskaBlast.app")
+            .join("Contents")
+            .join("MacOS");
+        std::fs::create_dir_all(&macos).unwrap();
+        std::fs::write(macos.join("BriskaBlast"), b"\x7fELF-or-macho").unwrap();
+
+        let rel = find_app_executable(tmp.path()).expect("should find the in-bundle executable");
+        assert_eq!(rel, "BriskaBlast.app/Contents/MacOS/BriskaBlast");
+    }
+
+    #[test]
+    fn find_app_executable_none_without_bundle() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("BriskaBlast.x86_64"), b"elf").unwrap();
+        assert!(find_app_executable(tmp.path()).is_none());
+    }
+
+    /// Whatever this platform's needle is, the real archive must be chosen over a
+    /// checksum/signature companion whose name also contains the needle (the
+    /// `ends_with` guard). Runs on the supported targets only.
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+    #[test]
+    fn select_platform_asset_prefers_archive_over_companion() {
+        let release = GameRelease {
+            version: semver::Version::parse("0.2.5").unwrap(),
+            tag: "game-v0.2.5-dev.1".to_string(),
+            body: String::new(),
+            assets: vec![
+                asset("briskablast-client-dev-0.2.5-linux.tar.gz"),
+                asset("briskablast-client-dev-0.2.5-linux.tar.gz.sha256"),
+                asset("briskablast-client-dev-0.2.5-windows.zip"),
+                asset("briskablast-client-dev-0.2.5-windows.zip.sig"),
+                asset("briskablast-client-dev-0.2.5-macos.tar.gz"),
+                asset("briskablast-client-dev-0.2.5-macos.tar.gz.sha256"),
+            ],
+        };
+        let picked = select_platform_asset(&release).expect("a supported target should match");
+        // Never a companion file.
+        assert!(!picked.name.ends_with(".sha256") && !picked.name.ends_with(".sig"));
+        // And it matches this platform's real archive suffix.
+        #[cfg(target_os = "linux")]
+        assert!(picked.name.ends_with("linux.tar.gz"));
+        #[cfg(target_os = "windows")]
+        assert!(picked.name.ends_with("windows.zip"));
+        #[cfg(target_os = "macos")]
+        assert!(picked.name.ends_with("macos.tar.gz"));
+    }
 }
