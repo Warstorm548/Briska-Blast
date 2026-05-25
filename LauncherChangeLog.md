@@ -22,6 +22,11 @@ effort. The launcher now builds, ad-hoc signs, and packages for
   ad-hoc-signed `.app` inside a `.dmg`, via `.github/scripts/make-macos-app.sh`
   (Info.plist + `.icns` from `icon.png` + `codesign --sign -` + `hdiutil`).
 - **macOS CI.** `ci-launcher.yml` now runs fmt/clippy/build/test on `macos-latest`.
+- **macOS game-install path.** `installer.rs` now selects the `macos.tar.gz`
+  game asset on macOS and resolves the in-bundle Mach-O
+  (`BriskaBlast.app/Contents/MacOS/BriskaBlast`) as the manifest executable, so
+  the launcher can install and launch the macOS game build. (The matching Godot
+  macOS export ships in the game's v0.3.0 — see `GameChangeLog.md`.)
 
 ### Notes
 
