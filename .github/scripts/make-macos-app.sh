@@ -84,7 +84,22 @@ mkdir -p "$STAGING"
 cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 rm -f "$DMG"
-hdiutil create -volname "$APP_NAME" -srcfolder "$STAGING" -ov -format UDZO "$DMG"
+# `hdiutil create` intermittently fails with "Resource busy" on CI when the
+# staging volume is still held by another process (e.g. Spotlight indexing).
+# Flush pending writes and retry a few times before giving up.
+sync
+attempt=0
+max_attempts=3
+until hdiutil create -volname "$APP_NAME" -srcfolder "$STAGING" -ov -format UDZO "$DMG"; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge "$max_attempts" ]; then
+    echo "hdiutil create failed after ${max_attempts} attempts" >&2
+    exit 1
+  fi
+  echo "hdiutil create failed (attempt ${attempt}/${max_attempts}); retrying in 5s..." >&2
+  rm -f "$DMG"
+  sleep 5
+done
 
 echo "Built: $APP"
 echo "Built: $DMG"
