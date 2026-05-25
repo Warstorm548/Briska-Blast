@@ -13,6 +13,9 @@
 #   Windows :
 #     briskablast-launcher-<ver>-x86_64-pc-windows-msvc.zip        (self_update)
 #     BriskaBlast-Launcher-Setup-<ver>.exe                         (NSIS installer)
+#   macOS   : (Apple Silicon / aarch64; ad-hoc signed — tester-grade, not notarized)
+#     briskablast-launcher-<ver>-aarch64-apple-darwin.tar.gz       (self_update)
+#     briskablast-launcher-<ver>-aarch64-apple-darwin.dmg          (.app installer)
 #
 # Tag schema: launcher-v<semver>  e.g. launcher-v0.3.0-dev.1
 # Schema is launcher-only — server's `v*.*.*-dev.N` tag stream is unaffected
@@ -204,9 +207,67 @@ jobs:
             briskablast-launcher-*-x86_64-pc-windows-msvc.zip
             BriskaBlast-Launcher-Setup-*.exe
 
+  build-macos:
+    name: Build macOS (tar.gz + .dmg, ad-hoc signed)
+    # macos-latest is Apple Silicon (arm64), so `cargo build --release` produces
+    # a native aarch64-apple-darwin binary — the launcher's macOS target — and
+    # `codesign`/`hdiutil`/`sips`/`iconutil` are all available natively.
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: launcher -> target
+
+      - name: Compute version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/launcher-v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/launcher-v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dispatch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release binary
+        run: cargo build --release
+        working-directory: launcher
+
+      - name: Package tar.gz (self_update asset)
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          ARCHIVE="briskablast-launcher-${VERSION}-aarch64-apple-darwin.tar.gz"
+          mkdir -p dist
+          # Workspace build — binary is at <repo>/target/release/. self_update
+          # matches the compile-time target triple (aarch64-apple-darwin) against
+          # this asset name and extracts the bare binary for the swap.
+          cp target/release/briskablast-launcher dist/
+          tar czf "launcher/${ARCHIVE}" -C dist briskablast-launcher
+
+      - name: Build .app + .dmg (ad-hoc signed)
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          mkdir -p dist-macos
+          chmod +x .github/scripts/make-macos-app.sh
+          .github/scripts/make-macos-app.sh \
+            target/release/briskablast-launcher \
+            "$VERSION" \
+            launcher/assets/icon.png \
+            dist-macos
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: launcher-macos
+          path: |
+            launcher/briskablast-launcher-*-aarch64-apple-darwin.tar.gz
+            dist-macos/*.dmg
+
   release:
     name: Publish GitHub Release
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/launcher-v')
     # Default GITHUB_TOKEN has read-only contents scope; creating a release

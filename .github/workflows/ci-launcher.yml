@@ -20,7 +20,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # macos-latest is Apple Silicon (arm64) — the launcher's macOS target
+        # (aarch64-apple-darwin), so this leg builds/tests natively.
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@v6
