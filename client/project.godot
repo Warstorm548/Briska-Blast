@@ -33,3 +33,10 @@ window/stretch/aspect="expand"
 [dotnet]
 
 project/assembly_name="BriskaBlast"
+
+[rendering]
+
+; Required for the macOS arm64 / Apple Silicon export — Godot refuses to build a
+; universal/arm64 target unless ETC2/ASTC texture variants can be generated.
+; Harmless to the x86_64 Linux/Windows presets (they use S3TC/BPTC).
+textures/vram_compression/import_etc2_astc=true
