@@ -100,6 +100,27 @@ Work intentionally deferred until after the initial production deployment of the
 - **Trigger to start**: First real user report of a partially-extracted install OR the move to A/B install slots (foundation §7), where per-slot hashes would also serve the rollback decision.
 - **Related**: `launcher/src/updater/branches/installer.rs::VerifyOutcome` — current minimal variants (`Ok`, `ManifestMissing`, `ManifestUnreadable`, `ExecutableMissing`) would gain `FilesMissing { paths }` / `FilesChanged { paths }` variants.
 
+### Settings "Add Firewall Rule" button (second entry point)
+
+- **What**: An always-available, non-Play-coupled way to create the inbound rule, next to the existing "Check Firewall" row in Settings → Firewall. Enabled when the cached status is `NotDetected`.
+- **Why deferred**: The first-Play prompt (shipped on `feat/firewall-elevation`) is the primary, lowest-surprise entry point. A Settings button is pure additive convenience — it duplicates the trigger without new mechanism.
+- **Trigger to start**: User feedback that the first-Play prompt is being missed or reflexively dismissed, OR stable-channel polish.
+- **Implementation notes**: Reuse `firewall::add_inbound_rule_elevated` (already built). Add an `AddFirewallRule(Channel)` message that runs it via `spawn_blocking` (same as the prompt's Allow path), and on `Ok` flip the cached `state.firewall_status` entry to `RulePresent` so the status cell updates without a re-check. The elevated call and arg-quoting are already done — this is just a second caller + a button in `settings.rs::firewall_section`.
+
+### Hand-rolled firewall elevation FFI (drop the `runas` dependency)
+
+- **What**: Replace the `runas` crate with a direct `windows-sys` implementation of the elevation: `ShellExecuteExW` (verb `runas`) + `WaitForSingleObject` + `GetExitCodeProcess`, plus our own argument-quoting helper.
+- **Why deferred**: `runas` (v1.2.0, `windows-sys`-based) already does exactly this, quotes/escapes args correctly, and keeps our code free of `unsafe`. Hand-rolling is ~40 lines of `unsafe` FFI to review and maintain for no behavioral gain today.
+- **Trigger to start**: `runas` goes unmaintained or breaks against a future `windows-sys`, we need behavior it doesn't expose, OR a dependency-minimization pass. `windows-sys` is already a transitive dep, so no new dependency is needed for the swap.
+- **Related**: `launcher/src/firewall.rs::add_inbound_rule_elevated` (the single call site to replace).
+
+### Persist firewall-prompt dismissal across launcher restarts
+
+- **What**: Make the "Skip & Play" dismissal of the first-Play firewall prompt persistent per-channel, so a user who declined once isn't re-prompted on the next launcher launch while the rule is still missing.
+- **Why deferred**: The shipped behavior uses an in-memory `firewall_prompt_dismissed` set that resets on restart — re-prompting next launch is defensible (the rule genuinely is still absent), and persisting it means an identity.json schema add. Polish, not correctness.
+- **Trigger to start**: User annoyance reports about being re-prompted, OR the identity schema is being revised for another reason.
+- **Related**: `launcher/src/app.rs` (`AppState::firewall_prompt_dismissed`), `launcher/src/identity.rs` (where a persisted per-channel flag would live).
+
 ### Saves-dir intact verify mode
 
 - **What**: An alternative cheap variant of Verify File Integrity that confirms the executable exists AND `<install>/saves/` exists (creating it on demand if not). Catches the failure mode where a user clears the install dir but forgets `saves/`, or moves the install and leaves saves behind.

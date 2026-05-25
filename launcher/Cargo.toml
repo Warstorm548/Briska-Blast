@@ -1,6 +1,6 @@
 [package]
 name = "launcher"
-version = "0.8.2"
+version = "0.10.0"
 edition = "2021"
 description = "BriskaBlast Launcher — manages install, update, and launch of the BriskaBlast game across stable, ea, and dev channels."
 license = "AGPL-3.0-or-later"
@@ -50,6 +50,15 @@ uuid               = { version = "1", features = ["v4"] }
 # location (Program Files) — writable data can no longer live next to the
 # binary. Windows → %APPDATA%\BriskaBlast\, Linux → ~/.local/share/briskablast/.
 directories        = "5"
+
+# Elevated (UAC) netsh invocation to create the game's inbound firewall rule —
+# Windows-only, so this target-gated section keeps it out of the Linux/macOS
+# dependency graph. Uses ShellExecuteExW with the "runas" verb (single UAC
+# prompt), waits on the process, and returns the exit code. It quotes/escapes
+# each argument internally, so passing the exe path as a discrete `program=…`
+# arg is injection-safe. See firewall.rs::add_inbound_rule_elevated.
+[target.'cfg(windows)'.dependencies]
+runas = "1"
 
 [dev-dependencies]
 tempfile           = "3"

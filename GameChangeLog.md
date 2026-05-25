@@ -9,6 +9,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.3.0] — 2026-05-25
+
+Adds a **macOS (Apple Silicon) export** target — Stage B of the macOS effort.
+The game can now be exported as an ad-hoc-signed `.app` for
+`aarch64-apple-darwin`, and the launcher knows how to install and launch it.
+
+### Added
+
+- **macOS export preset** (`client/export_presets.cfg`, `[preset.2]`): arm64,
+  `bundle_identifier=com.phoenixwired.briskablast.client`, embedded C# DLLs
+  (`dotnet/embed_build_outputs=true`). Godot's own signing is disabled
+  (`codesign/codesign=0`); CI ad-hoc signs the bundle instead.
+- **`release-client.yml` macOS job** (on `macos-latest`, native arm64): exports
+  `BriskaBlast.app`, verifies the embedded-C# `.pck` (>5 MiB guard, same as
+  Linux/Windows), ad-hoc signs (`codesign --sign -`), and publishes
+  `briskablast-client-<channel>-<version>-macos.tar.gz` alongside the other
+  platform assets. Channel/version reused from the Linux job via `needs`.
+
+### Launcher-side (install/launch path)
+
+- `installer.rs`: `select_platform_asset` now matches `macos.tar.gz` on macOS,
+  and extraction resolves the in-bundle Mach-O
+  (`BriskaBlast.app/Contents/MacOS/BriskaBlast`) as the manifest executable.
+  `game_launch` needed no change — it spawns the manifest executable directly.
+
+### Notes
+
+- Ad-hoc signing is tester-grade (right-click → Open the first time, or strip
+  the quarantine xattr), **not** Developer-ID / notarized for public download.
+
+---
+
 ## [0.2.5] — 2026-05-24
 
 Pure pipeline cleanup on top of v0.2.4 — **no behaviour change** to the

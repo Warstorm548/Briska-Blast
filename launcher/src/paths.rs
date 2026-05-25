@@ -2,8 +2,9 @@
 //! lives under an OS-correct **per-user** data root resolved by the
 //! `directories` crate, NOT next to the binary:
 //!
-//!   Windows : %APPDATA%\BriskaBlast\data\        (Roaming)
-//!   Linux   : ~/.local/share/briskablast/        (XDG_DATA_HOME)
+//!   Windows : %APPDATA%\BriskaBlast\data\                       (Roaming)
+//!   Linux   : ~/.local/share/briskablast/                       (XDG_DATA_HOME)
+//!   macOS   : ~/Library/Application Support/BriskaBlast/data/   (ProjectDirs)
 //!
 //! This moved out of `<install_dir>/data/` when Layer 1 (the OS installer)
 //! began placing the launcher under `C:\Program Files\…`, which a normal

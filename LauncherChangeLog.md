@@ -5,6 +5,76 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.0] — 2026-05-25
+
+macOS (Apple Silicon) support for the launcher itself — Stage A of the macOS
+effort. The launcher now builds, ad-hoc signs, and packages for
+`aarch64-apple-darwin`, so it runs on an Apple Silicon Mac.
+
+> Note: this jumps 0.8.2 → 0.10.0 because the firewall-elevation work (0.9.0,
+> below) merged just before it.
+
+### Added
+
+- **macOS build + packaging (Apple Silicon / `aarch64-apple-darwin`).** Release
+  workflow now has a `build-macos` job (on `macos-latest`, native arm64) that
+  publishes the `self_update` `…-aarch64-apple-darwin.tar.gz` plus an
+  ad-hoc-signed `.app` inside a `.dmg`, via `.github/scripts/make-macos-app.sh`
+  (Info.plist + `.icns` from `icon.png` + `codesign --sign -` + `hdiutil`).
+- **macOS CI.** `ci-launcher.yml` now runs fmt/clippy/build/test on `macos-latest`.
+- **macOS game-install path.** `installer.rs` now selects the `macos.tar.gz`
+  game asset on macOS and resolves the in-bundle Mach-O
+  (`BriskaBlast.app/Contents/MacOS/BriskaBlast`) as the manifest executable, so
+  the launcher can install and launch the macOS game build. (The matching Godot
+  macOS export ships in the game's v0.3.0 — see `GameChangeLog.md`.)
+
+### Notes
+
+- Ad-hoc signing is tester-grade: the app runs locally past Gatekeeper for a
+  known tester (right-click → Open the first time, or strip the quarantine
+  xattr), but is **not** Developer-ID signed or notarized for public download.
+- No launcher code change was needed for self-update on macOS — `self_update`
+  auto-detects the compile-time target triple and matches the macOS tar.gz asset.
+  Per-user data already resolves to `~/Library/Application Support/BriskaBlast/`
+  via the `directories` crate.
+
+---
+
+## [0.9.0] — 2026-05-25
+
+Completes the Windows-firewall story started in the Layer-1 hardening work
+(PR #44, which shipped read-only detection). This release adds the **elevated
+write** — option A: user-initiated, single UAC elevation.
+
+### Added
+
+- **First-Play firewall prompt (Windows).** When the user hits Play for a
+  channel whose game has no inbound firewall rule, the launcher runs a
+  non-elevated check and, if the rule is missing, shows a one-time prompt:
+  **Allow & Play** creates the rule via a single UAC elevation, **Skip & Play**
+  launches without one (suppressed for that channel for the session). Hosting a
+  match needs the rule because the game uses WebRTC/NAT hole-punching and the
+  game exe is downloaded per-channel at runtime (so its path isn't known at
+  install time — only the launcher can create the rule).
+- `firewall::add_inbound_rule_elevated` now runs, elevated, the equivalent of
+  `netsh advfirewall firewall add rule name="BriskaBlast <channel> Game"
+  dir=in action=allow program="<exe>" enable=yes`. Elevation uses the `runas`
+  crate (Windows-only dependency, `windows-sys`-based: ShellExecuteExW with the
+  `runas` verb → single UAC → waits → exit code). Args are passed discretely and
+  quoted/escaped by `runas`; the rule name derives from the fixed `Channel`
+  enum, so there is no command-injection surface.
+
+### Notes
+
+- On Linux/macOS this is a no-op: outbound-initiated hole-punching traverses the
+  default host firewall, so there is nothing to add. `add_inbound_rule_elevated`
+  is a Windows-only path; the non-Windows stub returns `Err`.
+- The skip dismissal is in-memory (re-prompts on next launcher launch while the
+  rule is still missing). A persisted opt-out, plus a Settings-panel button as a
+  second entry point, are tracked in the roadmap.
+
+---
+
 ## [0.8.2] — 2026-05-24
 
 Root-cause hotfix for the v0.8.0 / v0.8.1 install failure

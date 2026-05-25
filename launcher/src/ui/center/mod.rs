@@ -6,6 +6,7 @@ use iced::Element;
 
 pub mod change_username;
 pub mod default;
+pub mod firewall_prompt;
 pub mod install_prompt;
 pub mod launcher_update;
 pub mod settings;
@@ -20,6 +21,9 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
         CenterView::InstallPrompt { .. } => install_prompt::dispatch(state, &state.center_view),
         CenterView::UninstallConfirm { .. } => {
             uninstall_confirm::dispatch(state, &state.center_view)
+        }
+        CenterView::FirewallPrompt { .. } => {
+            firewall_prompt::dispatch(state, &state.center_view)
         }
     }
 }
