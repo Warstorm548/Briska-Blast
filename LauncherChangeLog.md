@@ -5,6 +5,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.0] — 2026-05-25
+
+macOS (Apple Silicon) support for the launcher itself — Stage A of the macOS
+effort. The launcher now builds, ad-hoc signs, and packages for
+`aarch64-apple-darwin`, so it runs on an Apple Silicon Mac.
+
+> Note: 0.9.0 is the concurrent firewall-elevation release on
+> `feat/firewall-elevation`; it is expected to merge first, which is why this
+> branch jumps 0.8.2 → 0.10.0.
+
+### Added
+
+- **macOS build + packaging (Apple Silicon / `aarch64-apple-darwin`).** Release
+  workflow now has a `build-macos` job (on `macos-latest`, native arm64) that
+  publishes the `self_update` `…-aarch64-apple-darwin.tar.gz` plus an
+  ad-hoc-signed `.app` inside a `.dmg`, via `.github/scripts/make-macos-app.sh`
+  (Info.plist + `.icns` from `icon.png` + `codesign --sign -` + `hdiutil`).
+- **macOS CI.** `ci-launcher.yml` now runs fmt/clippy/build/test on `macos-latest`.
+
+### Notes
+
+- Ad-hoc signing is tester-grade: the app runs locally past Gatekeeper for a
+  known tester (right-click → Open the first time, or strip the quarantine
+  xattr), but is **not** Developer-ID signed or notarized for public download.
+- No launcher code change was needed for self-update on macOS — `self_update`
+  auto-detects the compile-time target triple and matches the macOS tar.gz asset.
+  Per-user data already resolves to `~/Library/Application Support/BriskaBlast/`
+  via the `directories` crate.
+
+---
+
 ## [0.8.2] — 2026-05-24
 
 Root-cause hotfix for the v0.8.0 / v0.8.1 install failure
