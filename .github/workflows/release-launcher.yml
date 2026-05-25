@@ -184,14 +184,18 @@ jobs:
           mv BriskaBlast-Launcher-Setup.exe "BriskaBlast-Launcher-Setup-${VERSION}.exe"
 
       # Sign the final Setup.exe too (same skip-if-no-secret contract).
+      # TARGET_VERSION is passed through `env:` rather than expanding the
+      # `${{ }}` template directly into the script body, so the (tag-derived)
+      # value can never be interpreted as PowerShell — standard GitHub Actions
+      # script-injection hardening.
       - name: Sign installer (if cert present)
         shell: pwsh
         env:
           WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          TARGET_VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          $version = "${{ steps.ver.outputs.version }}"
-          ./.github/scripts/sign-windows.ps1 -Target "BriskaBlast-Launcher-Setup-$version.exe"
+          ./.github/scripts/sign-windows.ps1 -Target "BriskaBlast-Launcher-Setup-$($env:TARGET_VERSION).exe"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

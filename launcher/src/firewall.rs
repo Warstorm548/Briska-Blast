@@ -63,16 +63,25 @@ pub async fn inbound_rule_status(game_exe: std::path::PathBuf) -> FirewallStatus
         .await;
 
     match output {
-        // netsh prints "No rules match the specified criteria." and exits
-        // non-zero when the inbound table is empty; that's a legitimate
-        // "no rule" answer, not a tool failure — so we key off stdout content
-        // rather than the exit status.
         Ok(out) => {
             let stdout = String::from_utf8_lossy(&out.stdout).to_lowercase();
+            // A positive match is conclusive regardless of exit status.
             if stdout.contains(&needle) {
                 FirewallStatus::RulePresent
-            } else {
+            } else if out.status.success() {
+                // netsh ran fine and the exe isn't referenced by any rule.
                 FirewallStatus::NotDetected
+            } else {
+                // Non-zero exit with no match means we genuinely couldn't tell
+                // (access denied, bad args, an empty rule table reported as an
+                // error, …). Surface it as Unknown with netsh's own output
+                // rather than misreporting a confident "no rule".
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                FirewallStatus::Unknown(format!(
+                    "netsh exited {}: {}",
+                    out.status,
+                    stderr.trim()
+                ))
             }
         }
         Err(e) => FirewallStatus::Unknown(format!("netsh invocation failed: {e}")),

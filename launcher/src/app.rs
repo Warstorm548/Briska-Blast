@@ -893,6 +893,10 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     // top-bar banner so this channel falls out of the
                     // "Updates available" list.
                     recompute_branch_updates_available(state);
+                    // A (re)install can change the resolved game exe path, so
+                    // any firewall result cached against the old install is no
+                    // longer trustworthy — clear it and let the user re-check.
+                    state.firewall_status.remove(&channel);
                     state.center_view = CenterView::Default;
                 }
                 Err(e) => {
@@ -1086,6 +1090,9 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     );
                 }
                 state.verify_results.remove(&channel);
+                // Drop any cached firewall result — the exe it referred to is
+                // gone, so a stale "rule present" must not linger.
+                state.firewall_status.remove(&channel);
                 recompute_branch_updates_available(state);
                 state.center_view = CenterView::Default;
                 tracing::info!(?channel, "uninstall complete");

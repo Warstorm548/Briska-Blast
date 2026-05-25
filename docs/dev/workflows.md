@@ -50,4 +50,7 @@ packaged as per-channel `tar.gz`/`zip`) and installed by the launcher's Layer-2
 downloader, so the launcher is the sole game-install path.
 
 CI builds the installer with the version passed at build time via
-`/DVERSION=x.y.z` on the `makensis` command line (see `release-launcher.yml`).
+`-DVERSION=x.y.z` on the `makensis` command line — `release-launcher.yml`
+invokes `makensis "-DVERSION=${VERSION}"`. The `-D` form is used (not
+`/DVERSION=…`) because Git Bash on Windows rewrites `/…` args as POSIX paths;
+NSIS itself accepts both `-D` and `/D`.

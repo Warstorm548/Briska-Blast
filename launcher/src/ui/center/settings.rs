@@ -202,7 +202,7 @@ fn firewall_status_cell(state: &AppState, channel: Channel) -> Element<'_, Messa
         Some(FirewallStatus::RulePresent) => "\u{2713} Rule present".to_string(),
         Some(FirewallStatus::NotDetected) => "\u{2717} No inbound rule".to_string(),
         Some(FirewallStatus::Unknown(_)) => "? Check failed".to_string(),
-        Some(FirewallStatus::NotApplicable) => "N/A — Linux outbound".to_string(),
+        Some(FirewallStatus::NotApplicable) => "N/A — not applicable on this OS".to_string(),
     };
     container(text(label).size(13))
         .style(theme::bordered)
