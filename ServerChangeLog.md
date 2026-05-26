@@ -5,6 +5,275 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.0] — 2026-05-23
+
+First cut of the per-user **dev_flag** pipeline that gates the launcher's
+Dev-channel UI. Adds an admin "Users" tab to grant/revoke dev access,
+widens the player_id space, and reshapes `/register` into the per-launch
+identity-refresh endpoint the foundation doc has been planning.
+
+### Added
+
+- **`POST /register` is now idempotent** (`server/src/api/register.rs`).
+  The launcher sends a `RegisterRequest { username, prior_player_id,
+  prior_secret_token }` on every boot. When the prior creds match Redis,
+  the server reuses the existing `player_id` and refreshes the stored
+  username; when they don't match (corrupted launcher identity file) the
+  server falls through to fresh issuance instead of 401-ing. The response
+  now carries `username` (echo-back) and `dev_flag` (read from
+  `player:<id>:dev_flag`, default `false`). Username trimmed and capped at
+  32 chars; rate-limit unchanged (5/min per IP).
+
+- **`POST /me/username`** (`server/src/api/me.rs`). Updates
+  `player:<id>:username` after token validation via the existing
+  `validate_player` helper. Returns `204 No Content`. New
+  `rl_me_username` per-IP rate limiter mirrors `rl_register` (5/min). Used
+  by the launcher's username change UI.
+
+- **Admin `/admin/users` tab** (`server/src/admin/users.rs`,
+  `server/src/admin/templates.rs`). New page lists every player by id +
+  username with a Dev-access checkbox per row. Search bar filters by
+  username or by id. A single Confirm-changes button submits a hidden
+  `known_ids` field plus the visible checkboxes;
+  `POST /admin/users/dev-flag` writes `player:<id>:dev_flag = "true"|"false"`
+  per known id (refuses to write for ids with no token-hash record, so a
+  tampered form can't manufacture players). Existing `Dashboard` ↔ `Users`
+  nav is shared between both pages via a new `nav_html(active)` helper in
+  `templates.rs`; CSS-only styling, no JS.
+
+### Changed
+
+- **`PlayerId::from_counter` width 7 → 9** in `shared/src/types/player.rs`.
+  Newly issued ids are now zero-padded to 9 digits
+  (`PlayerId::from_counter(42).to_string() == "000000042"`). Existing
+  7-digit ids in Redis remain valid — they're stored as plain strings and
+  match by hash, not by width. The admin Users tab numerically sorts ids
+  so the two widths interleave by counter value rather than
+  lexicographically.
+
+- **Version** 0.5.1 → 0.6.0. Minor bump — the `/register` request body
+  shape is incompatible with launcher versions prior to v0.4.0, which
+  will fail at boot until they're updated. Aligns with the launcher
+  v0.4.0 release.
+
+### Notes
+
+- Auth on `/admin/users*` reuses the existing `require_session()` cookie
+  gate. CSRF protection / per-admin rate limiting are explicitly deferred
+  — user direction: "will harden the routes for this later on this just a
+  start."
+- Game client / signaling paths are untouched. The dev_flag is consumed
+  by the launcher UI only; server-side rejection of dev-channel routes
+  based on the flag is a follow-up.
+
+---
+
+## [0.5.1] — 2026-05-20
+
+Patch release — two targeted fixes to the auto-update flow surfaced
+by the v0.5.0-dev.1 dev-server apply. No wire-format or behavioral
+changes to game endpoints.
+
+### Fixed
+
+- **`update:previous_version` not advancing across applies
+  (`server/src/update/task.rs`)** — observed on the
+  v0.4.7 → v0.5.0-dev.1 apply: `current_version` advanced to `0.5.0`
+  correctly, but `previous_version` remained at the stale `0.4.4`
+  value left by older racy applies, leaving the Rollback button
+  pointing at the wrong target.
+
+  Root cause: the three apply call sites (`UpdateCommand::ApplyNow`,
+  `maybe_apply`, `wait_and_apply`) did `pull` → `trigger_update` →
+  `store_previous_version`. Watchtower's HTTP-API request kills the
+  old container within roughly a second of accepting the trigger,
+  and Watchtower's log timing confirms the SIGTERM lands before the
+  post-trigger work has time to run — so step 3 never reaches Redis.
+
+  **Fix**: write `update:previous_version` **before** triggering
+  Watchtower. The pre-write is benign if `trigger_update` then fails
+  (`previous_version` equals `current_version`, making Rollback a
+  no-op — no worse than the old stale state). The `wait_and_apply`
+  path still gates `clear_schedule` on `trigger_update` success so a
+  failed apply leaves the schedule in place for retry.
+
+- **Noisy `redis get scheduled_at failed` warnings
+  (`server/src/update/task.rs`)** — when no schedule is queued
+  (the common case), `update:scheduled_at` is absent from Redis.
+  Three read sites annotated the result as `String`, so the absent
+  key returned a nil that tripped redis-rs's "Response type not
+  string compatible" type error and emitted a warning every
+  startup and every auto-apply tick. Behavior was unaffected (the
+  `unwrap_or_default()` catch turned it into "no schedule"), but
+  the log was misleading.
+
+  **Fix**: read as `Option<String>` in all three sites so a missing
+  key returns `Ok(None)` cleanly. Same observable behavior, no
+  more spurious warnings.
+
+### Verification
+
+The fix for the `previous_version` race is observable on the next
+dev-channel apply: after `v0.5.0-dev.1 → v0.5.1-dev.1` lands,
+`update:previous_version` should advance to `"0.5.0"` automatically
+with no manual `redis-cli SET` intervention.
+
+---
+
+## [0.5.0] — 2026-05-20
+
+Minor release (breaking, pre-1.0). Replaces the 2-player UDP
+hole-punch design with N-player WebRTC signaling. The server stops
+storing peer endpoints entirely — clients discover their own via
+STUN, and the server's job narrows to validating session parameters
+and relaying SDP / ICE between peers over a new WebSocket.
+
+Adds a hardcoded server-authoritative per-gamemode `[min, max]`
+player-count table that rejects out-of-spec session-creation requests
+before any state is allocated. The 2-player join model is gone; a
+`Session` now stores a list of joiners up to `player_count`, with the
+race that previously allowed two concurrent joiners to both squeeze
+past a full-cap check closed by doing the entire read-check-append
+inside a single Redis Lua script. Lobby lifecycle gains an explicit
+`Starting` phase — `/join` no longer side-effects status, only a new
+`POST /session/:code/start` does. A WebSocket endpoint and per-process
+`SignalHub` relay WebRTC signaling messages between peers; the server
+attests every relayed `from` so impersonation isn't possible. A
+same-origin HTML/JS test harness ships behind `ENABLE_TEST_HARNESS=true`
+to verify the full flow without a Godot client.
+
+Symmetric-NAT players (~5–10% of consumer routers) cannot participate
+in this release because no TURN relay exists yet. TURN, the
+host-configurable min/max-pair schema, and WS-ticket auth are tracked
+in `docs/planning/roadmap.md`. All known edge cases live in the new
+`docs/architecture/session-multiplayer-edge-cases.md`.
+
+### Added
+
+- **Typed `GameMode` enum (`shared/src/types/gamemode.rs`)** — initial
+  variant: `Extended`. Serde rejects unknown gamemode strings at
+  deserialize time, so any client sending an unrecognized gamemode is
+  bounced at 400 before handler code runs. The matching server-side
+  bounds module (`server/src/gamemode.rs`) uses an exhaustive `match`
+  so adding a future variant without a bounds row is a compile error.
+- **`SessionStatus::Starting` variant** — the lobby lifecycle splits
+  from `Waiting → Active` into `Waiting → Starting → Active`.
+- **`validate_player_count(mode, requested) → Result<(), AppError>`**
+  in `server/src/gamemode.rs`. Returns the new
+  `AppError::InvalidPlayerCount { min, max, requested }` (HTTP 400)
+  carrying both the gamemode bounds and the offending value, so a
+  client can render a useful message without a second round-trip.
+- **`AppError::SessionFull { capacity }`** (HTTP 409) — returned by
+  `/join` when the lobby is at its cap. Echoes the cap so the client
+  doesn't have to poll to learn how full was full.
+- **`AppError::SessionNotStartable { reason }`** (HTTP 409) — returned
+  by `/session/:code/start` when preconditions fail. Stable reason
+  discriminator (`not_host`, `not_in_waiting`, `below_min_players`,
+  `not_all_peers_ready`).
+- **N-player `Session` storage (`server/src/api/mod.rs`)** —
+  `joiners: Vec<JoinerEntry>` replaces the single-joiner fields.
+  `JoinerEntry { player_id, joined_at_ms }` persists the join
+  timestamp for future kick-the-late-arrival logic. Helpers
+  `current_player_count()`, `is_full()`, `contains_player()`.
+- **`POST /session/:code/start`** (`server/src/api/start.rs`) —
+  version-gated route. Preconditions: caller is host, status is
+  `Waiting`, current count ≥ gamemode min, every session member has
+  a live WS in `SignalHub`. Transitions status to `Starting` and
+  persists to Redis BEFORE broadcasting `start_signaling`, so
+  visible state and signaling intent stay aligned even if the
+  broadcast fan-out is interrupted.
+- **`server/src/signaling/` module** — `SignalHub` is an in-process
+  registry of rooms keyed by session code, with `mpsc::UnboundedSender`
+  per identified player. Not Redis-backed (signaling state is
+  ephemeral, a server restart drops every WS anyway). `ServerMsg` and
+  `ClientMsg` JSON-tagged enums cover the wire schema. Empty rooms
+  are dropped eagerly in `leave_room` to prevent map leakage.
+- **WebSocket endpoint `GET /ws/session/:code`** — handler upgrades
+  the connection, requires `{"type":"identify",…}` as the first frame
+  within 5s, validates the token via the existing `validate_player`
+  helper, confirms the player is a member of the session, registers
+  in `SignalHub`. `tokio::select!` pump loop over `socket.recv()` and
+  `rx.recv()`. Server-attested `from` on every relayed offer / answer
+  / ICE candidate. App-defined 4xxx close codes (4400 bad initial,
+  4401 unauthorized, 4403 not in session, 4404 not found, 4500
+  internal) mirror HTTP semantics. Host disconnect while session is
+  still `Waiting` deletes the Redis session and broadcasts
+  `session_ended { reason: "host_disconnect" }`.
+- **Same-origin HTML/JS test harness at `GET /test/webrtc`** — gated
+  by `ENABLE_TEST_HARNESS=true` env var (default off). Vanilla JS
+  exercises register → host/join → identify → start → WebRTC mesh
+  → data-channel broadcast. STUN at `stun.l.google.com:19302`. Glare
+  avoidance via lexicographic `player_id`. WS auto-reconnect with
+  exponential backoff for non-4xxx closes.
+
+### Changed
+
+- **`/host`** now validates `(gamemode, player_count)` against
+  `gamemode::bounds_for` BEFORE generating a session code — invalid
+  requests no longer waste a Redis collision-check round-trip.
+- **`/join`** now does the entire read-check-append-write inside a
+  Redis Lua script. Without this, two simultaneous joiners could
+  both observe "1 slot left" and both succeed. The script returns
+  a discriminated JSON envelope that the Rust side decodes via a
+  typed enum.
+- **`/join` no longer flips status to `Active`** — joining a session
+  only fills a slot. The Waiting → Starting transition is now
+  exclusively driven by `POST /session/:code/start`.
+- **`/host`, `/join`, `/session/:code/start`** route to the
+  version-gated subrouter (X-Launcher-Version + X-Game-Version
+  enforced). `/ws/session/:code` does NOT — browsers cannot easily
+  attach custom headers to a WS upgrade, and clients are already
+  version-gated by the REST step they used to learn the code.
+
+### Breaking
+
+- **`HostRequest` drops `external_ip` and `external_port`** — peer
+  endpoints are no longer the server's concern. WebRTC discovers
+  them via STUN client-side.
+- **`HostRequest.gamemode` is now `GameMode`** (typed) instead of a
+  free-form `String`. Unknown values bounce at the deserialize
+  boundary with HTTP 400.
+- **`HostRequest` gains `player_count: u8`** — the host's chosen
+  lobby cap, validated against the gamemode bounds. Includes the
+  host (`player_count = 4` means 1 host + 3 joiners total).
+- **`JoinRequest` drops `external_ip` and `external_port`.**
+- **`JoinResponse` drops `host_ip` / `host_port`** and now carries
+  `gamemode: GameMode`, `player_count: u8`, `current_player_count: u8`,
+  and `joiners: Vec<JoinedPeer>`. A new joiner learns the full lobby
+  roster from the join response — no separate poll needed.
+- **`SessionPollResponse` switches to typed `status: SessionStatus`
+  and `gamemode: GameMode`**, drops `joiner_ip` / `joiner_port`, and
+  gains capacity + roster fields.
+- **New `StartSessionRequest { player_id, secret_token }`** —
+  session code comes from the URL path; only auth in the body.
+- **New `JoinedPeer { player_id }`** — the minimal wire-side peer
+  descriptor. Network addresses are not in HTTP responses anymore.
+
+### Deferred (not in this release)
+
+- TURN relay for symmetric-NAT players. Affected ~5–10% currently
+  cannot participate; they see `kicked { reason: "peer_connection_unrecoverable" }`.
+  See `docs/planning/roadmap.md`.
+- Host-configurable `[min, max]` pair per gamemode (the host sends
+  one value today; per-gamemode pair selection is a future shape).
+- WS-ticket auth — `secret_token` is sent cleartext in the
+  `Identify` frame, mitigated only by TLS in production. Future
+  hardening replaces this with a short-lived signed ticket.
+- Joiner-list mutation on WS disconnect during `Starting` / `Active`.
+  Server broadcasts `peer_left` but does not modify the persisted
+  joiners array (races with `/start` writes).
+- Duplicate `Identify` policy. Current behavior: second identify on
+  an already-connected player is ignored. Intended: kick the old.
+
+### Tests
+
+42 unit + module tests pass as of this release. The WebSocket handler
+itself is verified manually via the new HTML harness — Rust
+WebSocket testing is intentionally deferred to avoid adding
+`tokio-tungstenite` as a dev-dependency for a single test file.
+
+---
+
 ## [0.4.7] — 2026-05-19
 
 Patch release — closes a race in the auto-apply flow that left
@@ -353,7 +622,7 @@ purpose. Defense-in-depth against runtime env tampering.
 None. All `update:*` Redis key names and meanings are preserved. v0.4.1 can
 discover and apply v0.4.2 through the existing GitHub Releases / Watchtower
 contract — neither was touched. The pre-merge checklist in
-`docs/changing-the-update-system.md` was walked end-to-end.
+`docs/server/changing-the-update-system.md` was walked end-to-end.
 
 ---
 
@@ -592,7 +861,7 @@ For tracking — items 11, 12, 13, 14, 15 from the audit prompt and their status
 - Dashboard sections:
   - **Server Stats** — live count of active sessions and total registered players
   - **Version Control / Version Minimums to Join Game Sessions** — update `min_launcher_version` and `min_game_version` with immediate effect; no restart required
-  - **Server Bind Address** — save a new bind address to Redis; applied on next container restart via Portainer
+  - **Server Bind Address** — save a new bind address to Redis; applied on next container restart
   - **Change Password** — verifies current password before accepting new one; enforces 6-character minimum
 - Warning banner displayed on dashboard whenever the default `@admin` password is still in use
 - Session tokens stored in Redis with 24-hour TTL; logout deletes the token immediately

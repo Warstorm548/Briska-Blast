@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod dashboard;
 pub(crate) mod templates;
+pub mod users;
 
 use axum::http::HeaderMap;
 use deadpool_redis::{redis::AsyncCommands, Pool};

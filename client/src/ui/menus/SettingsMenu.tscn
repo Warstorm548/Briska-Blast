@@ -1,0 +1,504 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://src/ui/menus/SettingsMenu.cs" id="1_script"]
+[ext_resource type="Texture2D" path="res://src/assets/sprites/backgrounds/BackgroundDefault.png" id="2_bg"]
+[ext_resource type="Theme" path="res://src/ui/theme/MenuTheme.tres" id="3_theme"]
+
+[node name="SettingsMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme = ExtResource("3_theme")
+script = ExtResource("1_script")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+texture = ExtResource("2_bg")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="Title" type="Label" parent="."]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_top = 60.0
+offset_bottom = 180.0
+text = "Settings"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 84
+
+[node name="TabContainer" type="TabContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -800.0
+offset_top = -440.0
+offset_right = 800.0
+offset_bottom = 440.0
+
+; ============ DISPLAY TAB ============
+
+[node name="Display" type="MarginContainer" parent="TabContainer"]
+layout_mode = 2
+theme_override_constants/margin_left = 48
+theme_override_constants/margin_top = 48
+theme_override_constants/margin_right = 48
+theme_override_constants/margin_bottom = 48
+
+[node name="Rows" type="VBoxContainer" parent="TabContainer/Display"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="WindowModeRow" type="HBoxContainer" parent="TabContainer/Display/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Display/Rows/WindowModeRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Window Mode"
+theme_override_font_sizes/font_size = 28
+
+[node name="WindowMode" type="OptionButton" parent="TabContainer/Display/Rows/WindowModeRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 48)
+
+[node name="ResolutionRow" type="HBoxContainer" parent="TabContainer/Display/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Display/Rows/ResolutionRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Resolution"
+theme_override_font_sizes/font_size = 28
+
+[node name="Resolution" type="OptionButton" parent="TabContainer/Display/Rows/ResolutionRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 48)
+
+[node name="UIScaleRow" type="HBoxContainer" parent="TabContainer/Display/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Display/Rows/UIScaleRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "UI Scale"
+theme_override_font_sizes/font_size = 28
+
+[node name="UIScale" type="HSlider" parent="TabContainer/Display/Rows/UIScaleRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 5
+custom_minimum_size = Vector2(0, 48)
+min_value = 0.5
+max_value = 2.0
+step = 0.05
+value = 1.0
+
+[node name="UIScaleValue" type="Label" parent="TabContainer/Display/Rows/UIScaleRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+text = "1.00x"
+horizontal_alignment = 2
+theme_override_font_sizes/font_size = 24
+
+[node name="VSyncRow" type="HBoxContainer" parent="TabContainer/Display/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Display/Rows/VSyncRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "VSync"
+theme_override_font_sizes/font_size = 28
+
+[node name="VSync" type="OptionButton" parent="TabContainer/Display/Rows/VSyncRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 48)
+
+[node name="FpsCapRow" type="HBoxContainer" parent="TabContainer/Display/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Display/Rows/FpsCapRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "FPS Cap"
+theme_override_font_sizes/font_size = 28
+
+[node name="FpsCap" type="OptionButton" parent="TabContainer/Display/Rows/FpsCapRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 48)
+
+[node name="RendererRow" type="HBoxContainer" parent="TabContainer/Display/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Display/Rows/RendererRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Renderer (restart required)"
+theme_override_font_sizes/font_size = 28
+
+[node name="Renderer" type="OptionButton" parent="TabContainer/Display/Rows/RendererRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 48)
+
+; ============ GRAPHICS TAB ============
+
+[node name="Graphics" type="MarginContainer" parent="TabContainer"]
+visible = false
+layout_mode = 2
+theme_override_constants/margin_left = 48
+theme_override_constants/margin_top = 48
+theme_override_constants/margin_right = 48
+theme_override_constants/margin_bottom = 48
+
+[node name="Rows" type="VBoxContainer" parent="TabContainer/Graphics"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="MsaaRow" type="HBoxContainer" parent="TabContainer/Graphics/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Graphics/Rows/MsaaRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Anti-Aliasing (MSAA)"
+theme_override_font_sizes/font_size = 28
+
+[node name="Msaa" type="OptionButton" parent="TabContainer/Graphics/Rows/MsaaRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 48)
+
+[node name="TextureFilterRow" type="HBoxContainer" parent="TabContainer/Graphics/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Graphics/Rows/TextureFilterRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Texture Filtering"
+theme_override_font_sizes/font_size = 28
+
+[node name="TextureFilter" type="OptionButton" parent="TabContainer/Graphics/Rows/TextureFilterRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 48)
+
+[node name="ShadowsRow" type="HBoxContainer" parent="TabContainer/Graphics/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Graphics/Rows/ShadowsRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Shadow Quality"
+theme_override_font_sizes/font_size = 28
+
+[node name="Shadows" type="OptionButton" parent="TabContainer/Graphics/Rows/ShadowsRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 48)
+
+[node name="PostFXRow" type="HBoxContainer" parent="TabContainer/Graphics/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Graphics/Rows/PostFXRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Post-Processing FX"
+theme_override_font_sizes/font_size = 28
+
+[node name="PostFX" type="CheckBox" parent="TabContainer/Graphics/Rows/PostFXRow"]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+
+; ============ AUDIO TAB ============
+
+[node name="Audio" type="MarginContainer" parent="TabContainer"]
+visible = false
+layout_mode = 2
+theme_override_constants/margin_left = 48
+theme_override_constants/margin_top = 48
+theme_override_constants/margin_right = 48
+theme_override_constants/margin_bottom = 48
+
+[node name="Rows" type="VBoxContainer" parent="TabContainer/Audio"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="MasterRow" type="HBoxContainer" parent="TabContainer/Audio/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Audio/Rows/MasterRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Master Volume"
+theme_override_font_sizes/font_size = 28
+
+[node name="Master" type="HSlider" parent="TabContainer/Audio/Rows/MasterRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 5
+custom_minimum_size = Vector2(0, 48)
+min_value = 0.0
+max_value = 100.0
+step = 1.0
+value = 80.0
+
+[node name="MasterValue" type="Label" parent="TabContainer/Audio/Rows/MasterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+text = "80"
+horizontal_alignment = 2
+theme_override_font_sizes/font_size = 24
+
+[node name="MusicRow" type="HBoxContainer" parent="TabContainer/Audio/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Audio/Rows/MusicRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Music Volume"
+theme_override_font_sizes/font_size = 28
+
+[node name="Music" type="HSlider" parent="TabContainer/Audio/Rows/MusicRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 5
+custom_minimum_size = Vector2(0, 48)
+min_value = 0.0
+max_value = 100.0
+step = 1.0
+value = 70.0
+
+[node name="MusicValue" type="Label" parent="TabContainer/Audio/Rows/MusicRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+text = "70"
+horizontal_alignment = 2
+theme_override_font_sizes/font_size = 24
+
+[node name="SfxRow" type="HBoxContainer" parent="TabContainer/Audio/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Audio/Rows/SfxRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "SFX Volume"
+theme_override_font_sizes/font_size = 28
+
+[node name="Sfx" type="HSlider" parent="TabContainer/Audio/Rows/SfxRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 5
+custom_minimum_size = Vector2(0, 48)
+min_value = 0.0
+max_value = 100.0
+step = 1.0
+value = 80.0
+
+[node name="SfxValue" type="Label" parent="TabContainer/Audio/Rows/SfxRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+text = "80"
+horizontal_alignment = 2
+theme_override_font_sizes/font_size = 24
+
+[node name="UIRow" type="HBoxContainer" parent="TabContainer/Audio/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Audio/Rows/UIRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "UI Volume"
+theme_override_font_sizes/font_size = 28
+
+[node name="UIVol" type="HSlider" parent="TabContainer/Audio/Rows/UIRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 5
+custom_minimum_size = Vector2(0, 48)
+min_value = 0.0
+max_value = 100.0
+step = 1.0
+value = 70.0
+
+[node name="UIVolValue" type="Label" parent="TabContainer/Audio/Rows/UIRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+text = "70"
+horizontal_alignment = 2
+theme_override_font_sizes/font_size = 24
+
+[node name="OutputRow" type="HBoxContainer" parent="TabContainer/Audio/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Audio/Rows/OutputRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Output Device"
+theme_override_font_sizes/font_size = 28
+
+[node name="OutputDevice" type="OptionButton" parent="TabContainer/Audio/Rows/OutputRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 48)
+
+; ============ GAME TAB (Gameplay + HUD + Accessibility) ============
+
+[node name="Game" type="MarginContainer" parent="TabContainer"]
+visible = false
+layout_mode = 2
+theme_override_constants/margin_left = 48
+theme_override_constants/margin_top = 48
+theme_override_constants/margin_right = 48
+theme_override_constants/margin_bottom = 48
+
+[node name="Rows" type="VBoxContainer" parent="TabContainer/Game"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="ShowFpsRow" type="HBoxContainer" parent="TabContainer/Game/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Game/Rows/ShowFpsRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Show FPS Counter"
+theme_override_font_sizes/font_size = 28
+
+[node name="ShowFps" type="CheckBox" parent="TabContainer/Game/Rows/ShowFpsRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="ShowPingRow" type="HBoxContainer" parent="TabContainer/Game/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Game/Rows/ShowPingRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Show Ping"
+theme_override_font_sizes/font_size = 28
+
+[node name="ShowPing" type="CheckBox" parent="TabContainer/Game/Rows/ShowPingRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="HudScaleRow" type="HBoxContainer" parent="TabContainer/Game/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Game/Rows/HudScaleRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "HUD Scale"
+theme_override_font_sizes/font_size = 28
+
+[node name="HudScale" type="HSlider" parent="TabContainer/Game/Rows/HudScaleRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 5
+custom_minimum_size = Vector2(0, 48)
+min_value = 0.5
+max_value = 2.0
+step = 0.05
+value = 1.0
+
+[node name="HudScaleValue" type="Label" parent="TabContainer/Game/Rows/HudScaleRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+text = "1.00x"
+horizontal_alignment = 2
+theme_override_font_sizes/font_size = 24
+
+[node name="TextSizeRow" type="HBoxContainer" parent="TabContainer/Game/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Game/Rows/TextSizeRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Text Size"
+theme_override_font_sizes/font_size = 28
+
+[node name="TextSize" type="OptionButton" parent="TabContainer/Game/Rows/TextSizeRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 48)
+
+[node name="ControlsRow" type="HBoxContainer" parent="TabContainer/Game/Rows"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="TabContainer/Game/Rows/ControlsRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Paddle Controls"
+theme_override_font_sizes/font_size = 28
+
+[node name="ControlsPlaceholder" type="Label" parent="TabContainer/Game/Rows/ControlsRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Rebind UI coming later"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 22
+
+; ============ BOTTOM BUTTONS ============
+
+[node name="ReturnButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 3
+anchor_top = 1.0
+anchor_left = 0.0
+anchor_right = 0.0
+anchor_bottom = 1.0
+offset_left = 40.0
+offset_top = -120.0
+offset_right = 320.0
+offset_bottom = -40.0
+text = "Return to Main Menu"
+
+[node name="ApplyButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 2
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -320.0
+offset_top = -120.0
+offset_right = -40.0
+offset_bottom = -40.0
+text = "Apply"

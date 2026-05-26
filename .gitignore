@@ -6,6 +6,9 @@
 .env*
 !.env.example
 
+# Local-only operator notebook — never commit
+LOCAL-DEPLOY-NOTES.md
+
 # IDE / editor
 .idea/
 .vscode/

@@ -1,0 +1,119 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://src/ui/menus/HostSetupMenu.cs" id="1_script"]
+[ext_resource type="Texture2D" path="res://src/assets/sprites/backgrounds/BackgroundDefault.png" id="2_bg"]
+[ext_resource type="Theme" path="res://src/ui/theme/MenuTheme.tres" id="3_theme"]
+
+[node name="HostSetupMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme = ExtResource("3_theme")
+script = ExtResource("1_script")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+texture = ExtResource("2_bg")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="Title" type="Label" parent="."]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_top = 80.0
+offset_bottom = 200.0
+text = "Host Game"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 84
+
+[node name="TabContainer" type="TabContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -560.0
+offset_top = -380.0
+offset_right = 560.0
+offset_bottom = 380.0
+
+[node name="BasicSetup" type="MarginContainer" parent="TabContainer"]
+layout_mode = 2
+theme_override_constants/margin_left = 48
+theme_override_constants/margin_top = 48
+theme_override_constants/margin_right = 48
+theme_override_constants/margin_bottom = 48
+
+[node name="Content" type="VBoxContainer" parent="TabContainer/BasicSetup"]
+layout_mode = 2
+theme_override_constants/separation = 32
+
+[node name="GameModeLabel" type="Label" parent="TabContainer/BasicSetup/Content"]
+layout_mode = 2
+text = "Game Mode"
+theme_override_font_sizes/font_size = 32
+
+[node name="GameMode" type="OptionButton" parent="TabContainer/BasicSetup/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 56)
+layout_mode = 2
+
+[node name="MaxPlayersLabel" type="Label" parent="TabContainer/BasicSetup/Content"]
+layout_mode = 2
+text = "Max Players (including host)"
+theme_override_font_sizes/font_size = 32
+
+[node name="MaxPlayers" type="SpinBox" parent="TabContainer/BasicSetup/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 56)
+layout_mode = 2
+min_value = 2.0
+max_value = 4.0
+value = 4.0
+
+[node name="Spacer" type="Control" parent="TabContainer/BasicSetup/Content"]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="CreateButton" type="Button" parent="TabContainer/BasicSetup/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 80)
+layout_mode = 2
+text = "Create Session"
+
+[node name="Advanced" type="MarginContainer" parent="TabContainer"]
+visible = false
+layout_mode = 2
+theme_override_constants/margin_left = 48
+theme_override_constants/margin_top = 48
+theme_override_constants/margin_right = 48
+theme_override_constants/margin_bottom = 48
+
+[node name="Placeholder" type="Label" parent="TabContainer/Advanced"]
+layout_mode = 2
+text = "Advanced options coming later."
+horizontal_alignment = 1
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 28
+
+[node name="ReturnButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 3
+anchor_top = 1.0
+anchor_left = 0.0
+anchor_right = 0.0
+anchor_bottom = 1.0
+offset_left = 40.0
+offset_top = -120.0
+offset_right = 320.0
+offset_bottom = -40.0
+text = "Return to Main Menu"

@@ -1,4 +1,4 @@
-# CI — Client (Rust + Bevy)
+# CI — Client (Godot 4.6.3 + C# / .NET 8)
 # Temporarily disabled: trigger is manual only.
 # To re-enable, replace the `on` block with:
 #   on:
@@ -13,38 +13,67 @@ name: CI — Client
 on:
   workflow_dispatch:
 
+env:
+  GODOT_VERSION: "4.6.3"
+
 jobs:
   build:
-    name: Build & Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+    name: Build & Validate
+    runs-on: ubuntu-latest
+    env:
+      # CI builds every PR/branch; no tag context. Pin to dev so the
+      # GenerateBuildConfig target (client/BriskaBlast.csproj) bakes the
+      # channel whose server host actually resolves. Mirrors ci-server.yml.
+      RELEASE_CHANNEL: dev
 
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install .NET 8 SDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dotnet-sdk-8.0
+          dotnet --list-sdks
+
+      - name: Cache Godot editor
+        id: cache-godot
+        uses: actions/cache@v5
         with:
-          components: clippy, rustfmt
+          path: /opt/godot-mono
+          key: godot-mono-${{ env.GODOT_VERSION }}-linux-x86_64
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: client -> target
+      - name: Install Godot ${{ env.GODOT_VERSION }} (.NET)
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get install -y unzip
+          curl -fsSL -o godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip"
+          unzip -q godot.zip
+          sudo mv "Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64" /opt/godot-mono
+          sudo chmod +x "/opt/godot-mono/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64"
 
-      - name: Check formatting
-        run: cargo fmt --check
+      - name: Link godot to PATH
+        run: |
+          sudo ln -sf "/opt/godot-mono/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64" /usr/local/bin/godot
+          godot --version
+
+      # Godot's .NET export plugin (and headless work over .cs files)
+      # hard-requires `BriskaBlast.sln` next to the project root. The editor
+      # auto-creates it on desktop; nothing does in headless CI. Mirrors the
+      # generation step in release-client.yml. Not committed — keeps git
+      # clean and matches what the editor produces locally.
+      # This workflow is workflow_dispatch-only today; the step is here so
+      # re-enabling it on client/** PRs won't hit "no solution file found".
+      - name: Generate solution file (Godot export plugin requires .sln)
+        run: |
+          dotnet new sln --name BriskaBlast
+          dotnet sln BriskaBlast.sln add BriskaBlast.csproj
         working-directory: client
 
-      - name: Clippy
-        run: cargo clippy -- -D warnings
+      - name: dotnet build
+        run: dotnet build --configuration Release
         working-directory: client
 
-      - name: Build
-        run: cargo build --release
-        working-directory: client
-
-      - name: Test
-        run: cargo test
+      - name: Validate scenes (headless import)
+        run: godot --headless --import
         working-directory: client

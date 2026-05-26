@@ -40,10 +40,19 @@ pub async fn get_session(
     let session: Session = serde_json::from_str(&raw)
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    let current_player_count = session.current_player_count();
+    let joiner_player_ids = session
+        .joiners
+        .iter()
+        .map(|j| j.player_id.clone())
+        .collect();
+
     Ok(Json(SessionPollResponse {
         status: session.status,
-        joiner_ip: session.joiner_ip,
-        joiner_port: session.joiner_port,
+        gamemode: session.gamemode,
+        player_count: session.player_count,
+        current_player_count,
+        joiner_player_ids,
     }))
 }
 

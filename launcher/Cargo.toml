@@ -1,0 +1,92 @@
+[package]
+name = "launcher"
+version = "0.10.0"
+edition = "2021"
+description = "BriskaBlast Launcher — manages install, update, and launch of the BriskaBlast game across stable, ea, and dev channels."
+license = "AGPL-3.0-or-later"
+
+[[bin]]
+name = "briskablast-launcher"
+path = "src/main.rs"
+
+[dependencies]
+iced               = { version = "0.14", features = ["tokio"] }
+serde              = { version = "1",    features = ["derive"] }
+serde_json         = "1"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3",  features = ["env-filter"] }
+dotenvy            = "0.15"
+shared             = { path = "../shared" }
+# Self-update: rename-trick binary swap via GitHub Releases. rustls keeps us
+# off the OpenSSL build path on Linux. self_update transitively pulls reqwest.
+self_update        = { version = "0.41", default-features = false, features = ["rustls", "compression-zip-deflate", "archive-zip"] }
+# Direct HTTP client for /register and /me/username, and for streaming
+# downloads of per-channel game-files archives from GitHub Releases.
+# `stream` feature lets the downloader emit chunked progress updates so
+# the bottom progress bar can fill smoothly (Stage 6).
+reqwest            = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+semver             = "1"
+tokio              = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs", "process"] }
+# Per-channel game-files install pipeline: download from GitHub Releases,
+# extract to <install_root>/<channel>/, write installed.json manifest.
+futures-util       = "0.3"
+# Adapts a tokio mpsc Receiver into a Stream so the per-chunk download
+# progress (Stage 6) can drive an Iced Task::stream for live UI updates.
+tokio-stream       = "0.1"
+# Cross-platform "open this path in the user's file manager" — Settings →
+# Game Important Files → Game Save (Stage 7). Linux xdg-open / Windows
+# explorer / macOS open. Sync API; called from spawn_blocking.
+open               = "5"
+tar                = "0.4"
+flate2             = "1"
+zip                = { version = "2", default-features = false, features = ["deflate"] }
+rfd                = "0.15"
+chrono             = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+# Random handoff-file names for the Play → spawn-game flow (Stage 5).
+# v4 = random; no machine-id leak the way v1 has.
+uuid               = { version = "1", features = ["v4"] }
+# Per-user, OS-correct data directory resolution. Adopted when the OS-level
+# installer (Layer 1) started placing the launcher in a non-user-writable
+# location (Program Files) — writable data can no longer live next to the
+# binary. Windows → %APPDATA%\BriskaBlast\, Linux → ~/.local/share/briskablast/.
+directories        = "5"
+
+# Elevated (UAC) netsh invocation to create the game's inbound firewall rule —
+# Windows-only, so this target-gated section keeps it out of the Linux/macOS
+# dependency graph. Uses ShellExecuteExW with the "runas" verb (single UAC
+# prompt), waits on the process, and returns the exit code. It quotes/escapes
+# each argument internally, so passing the exe path as a discrete `program=…`
+# arg is injection-safe. See firewall.rs::add_inbound_rule_elevated.
+[target.'cfg(windows)'.dependencies]
+runas = "1"
+
+[dev-dependencies]
+tempfile           = "3"
+
+[package.metadata.deb]
+# NOTE (Layer-1 uninstall parity): we deliberately ship NO `postrm` maintainer
+# script that deletes user data on `apt remove`. The per-user data root
+# (~/.local/share/briskablast/) holds the identity file (player_id +
+# secret_token) — wiping it on package removal would silently destroy the
+# player's account, with no cloud backup to recover from. The Windows installer
+# asks "keep player data?"; apt/dpkg has no clean interactive equivalent, so the
+# safe default here is to never auto-delete. TODO(layer1): if a guided
+# uninstall is ever wanted on Linux, add a `maintainer-scripts` dir with a
+# `postrm purge` branch (only the `purge` action, not plain `remove`) that
+# prompts via debconf — never an unconditional rm.
+maintainer = "Warstorm548"
+copyright = "2026, Warstorm548"
+license-file = ["../LICENSE", "0"]
+section = "games"
+priority = "optional"
+extended-description = """\
+BriskaBlast Launcher — manages install, update, and launch of the BriskaBlast \
+game across stable, ea, and dev channels."""
+depends = "$auto"
+assets = [
+    # Path is relative to this Cargo.toml (launcher/). In a workspace build
+    # the binary lives at <repo>/target/release/, so we step up one level.
+    ["../target/release/briskablast-launcher", "usr/bin/", "755"],
+    ["assets/briskablast-launcher.desktop", "usr/share/applications/", "644"],
+    ["assets/icon.png", "usr/share/icons/hicolor/512x512/apps/briskablast-launcher.png", "644"],
+]

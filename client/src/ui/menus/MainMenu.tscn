@@ -1,0 +1,84 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://src/ui/menus/MainMenu.cs" id="1_script"]
+[ext_resource type="Texture2D" path="res://src/assets/sprites/backgrounds/BackgroundDefault.png" id="2_bg"]
+[ext_resource type="Theme" path="res://src/ui/theme/MenuTheme.tres" id="3_theme"]
+
+[node name="MainMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme = ExtResource("3_theme")
+script = ExtResource("1_script")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+texture = ExtResource("2_bg")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Content" type="VBoxContainer" parent="CenterContainer"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Title" type="Label" parent="CenterContainer/Content"]
+layout_mode = 2
+text = "Briska Blast"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 96
+
+[node name="TitleSpacer" type="Control" parent="CenterContainer/Content"]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+
+[node name="SoloPlay" type="Button" parent="CenterContainer/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 64)
+layout_mode = 2
+disabled = true
+text = "Solo Play"
+
+[node name="HostGame" type="Button" parent="CenterContainer/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 64)
+layout_mode = 2
+text = "Host Game"
+
+[node name="JoinGame" type="Button" parent="CenterContainer/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 64)
+layout_mode = 2
+text = "Join Game"
+
+[node name="Customization" type="Button" parent="CenterContainer/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 64)
+layout_mode = 2
+disabled = true
+text = "Customization"
+
+[node name="Settings" type="Button" parent="CenterContainer/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 64)
+layout_mode = 2
+text = "Settings"
+
+[node name="ExitSpacer" type="Control" parent="CenterContainer/Content"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+
+[node name="ExitGame" type="Button" parent="CenterContainer/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 64)
+layout_mode = 2
+text = "Exit Game"

@@ -1,39 +1,90 @@
 # Release — Launcher (Rust + Iced)
-# Temporarily disabled: trigger is manual only.
-# To re-enable, replace the `on` block with:
-#   on:
-#     push:
-#       tags: ['v*.*.*']
+#
+# Triggers:
+#   - workflow_dispatch    : build artifacts only (no GitHub Release publish)
+#   - push tag launcher-v* : build + publish to the matching GitHub Release
+#
+# Artifacts published per release (consumed by both end-users and the
+# launcher's in-app `self_update` binary-swap flow):
+#   Linux   :
+#     briskablast-launcher-<ver>-x86_64-unknown-linux-gnu.tar.gz   (self_update)
+#     briskablast-launcher_<ver>_amd64.deb                         (apt-style install)
+#     briskablast-launcher-<ver>-linux.AppImage                    (portable)
+#   Windows :
+#     briskablast-launcher-<ver>-x86_64-pc-windows-msvc.zip        (self_update)
+#     BriskaBlast-Launcher-Setup-<ver>.exe                         (NSIS installer)
+#   macOS   : (Apple Silicon / aarch64; ad-hoc signed — tester-grade, not notarized)
+#     briskablast-launcher-<ver>-aarch64-apple-darwin.tar.gz       (self_update)
+#     briskablast-launcher-<ver>-aarch64-apple-darwin.dmg          (.app installer)
+#
+# Tag schema: launcher-v<semver>  e.g. launcher-v0.3.0-dev.1
+# Schema is launcher-only — server's `v*.*.*-dev.N` tag stream is unaffected
+# (see plan doc / launcher-foundation §7).
+#
+# Windows Authenticode signing (optional — SmartScreen / AV publisher trust):
+#   The Windows job signs BOTH the launcher exe (before packaging) and the
+#   final Setup.exe IF these repo/org secrets are present:
+#     WINDOWS_CERT_PFX_BASE64 — base64 of an OV/EV code-signing .pfx
+#     WINDOWS_CERT_PASSWORD   — the .pfx password
+#   If either secret is ABSENT the signing steps skip with a warning and the
+#   workflow still succeeds, publishing UNSIGNED artifacts (i.e. exactly the
+#   pre-signing behaviour). No cert == unsigned but green; never a hard fail.
+#   Linux (.deb / AppImage) signing is intentionally NOT done here yet — see the
+#   TODO on the build-linux job.
 
 name: Release — Launcher
 
 on:
   workflow_dispatch:
+  push:
+    tags: ['launcher-v*']
 
 jobs:
   build-linux:
-    name: Build Linux (AppImage + tar.gz)
+    name: Build Linux (tar.gz + AppImage + .deb)
     runs-on: ubuntu-latest
+    # TODO(P4/layer1): Linux artifacts (.deb / AppImage) are published UNSIGNED.
+    # Add GPG detached-signature signing (`gpg --armor --detach-sign` for the
+    # AppImage + tar.gz, and a signed Release/`debsign` for the .deb) behind a
+    # `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` secret pair using the same
+    # skip-cleanly-if-absent contract as the Windows job. Deferred out of this
+    # branch — Windows SmartScreen trust is the priority gap.
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          # No git ops after checkout — don't leave the token in .git/config.
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: launcher -> target
+
+      - name: Compute version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/launcher-v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/launcher-v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dispatch" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build release binary
         run: cargo build --release
         working-directory: launcher
 
-      - name: Package tar.gz
+      - name: Package tar.gz (self_update asset)
         run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          ARCHIVE="briskablast-launcher-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
           mkdir -p dist
+          # Workspace build — binary is at <repo>/target/release/, not
+          # launcher/target/release/. Step runs at repo root (no working-directory).
           cp target/release/briskablast-launcher dist/
-          tar czf briskablast-launcher-linux.tar.gz -C dist briskablast-launcher
-        working-directory: launcher
+          tar czf "launcher/${ARCHIVE}" -C dist briskablast-launcher
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
       - name: Download linuxdeploy
         run: |
@@ -41,64 +92,204 @@ jobs:
           chmod +x linuxdeploy-x86_64.AppImage
 
       - name: Build AppImage
-        # Requires: launcher/assets/briskablast-launcher.desktop and launcher/assets/icon.png
-        # Fill in these asset paths when the files exist.
         run: |
+          # --icon-filename matches the desktop file's `Icon=briskablast-launcher`
+          # entry; without it linuxdeploy uses the source basename ("icon") and
+          # then fails with "Could not find suitable icon for Icon entry".
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
-            --executable launcher/target/release/briskablast-launcher \
+            --executable target/release/briskablast-launcher \
             --desktop-file launcher/assets/briskablast-launcher.desktop \
             --icon-file launcher/assets/icon.png \
+            --icon-filename briskablast-launcher \
             --output appimage
-        env:
-          OUTPUT: briskablast-launcher-linux.AppImage
+          # Rename to versioned filename.
+          VERSION="${{ steps.ver.outputs.version }}"
+          mv BriskaBlast_Launcher*.AppImage \
+            "briskablast-launcher-${VERSION}-linux.AppImage" 2>/dev/null || \
+            mv *.AppImage "briskablast-launcher-${VERSION}-linux.AppImage"
 
-      - uses: actions/upload-artifact@v7
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Build .deb
+        run: cargo deb -p launcher --no-build
+        working-directory: .
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: launcher-linux
           path: |
-            launcher/briskablast-launcher-linux.tar.gz
-            briskablast-launcher-linux.AppImage
+            launcher/briskablast-launcher-*-x86_64-unknown-linux-gnu.tar.gz
+            briskablast-launcher-*-linux.AppImage
+            target/debian/*.deb
 
   build-windows:
-    name: Build Windows (.exe installer)
+    name: Build Windows (zip + NSIS installer)
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          # No git ops after checkout — don't leave the token in .git/config.
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: launcher -> target
+
+      - name: Compute version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/launcher-v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/launcher-v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dispatch" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build release binary
         run: cargo build --release
         working-directory: launcher
 
+      # Sign the launcher exe BEFORE it is packaged, so BOTH the self_update zip
+      # and the NSIS installer (which embeds this exe) carry a signed binary.
+      # Skips cleanly (warning, exit 0) when the cert secrets are absent.
+      - name: Sign launcher exe (if cert present)
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          ./.github/scripts/sign-windows.ps1 -Target "target/release/briskablast-launcher.exe"
+
+      - name: Package zip (self_update asset)
+        shell: pwsh
+        run: |
+          $version = "${{ steps.ver.outputs.version }}"
+          $archive = "briskablast-launcher-$version-x86_64-pc-windows-msvc.zip"
+          # Workspace build — binary is at <repo>/target/release/, not launcher/target/.
+          Compress-Archive -Path "target/release/briskablast-launcher.exe" -DestinationPath $archive
+
       - name: Install NSIS
-        run: choco install nsis --yes
+        shell: pwsh
+        run: |
+          choco install nsis --yes
+          # `choco install` updates the user/system PATH in the registry, but the
+          # already-running GitHub Actions job inherits the PATH from job start.
+          # Propagate the NSIS dir to subsequent steps explicitly.
+          Add-Content -Path $env:GITHUB_PATH -Value "${env:ProgramFiles(x86)}\NSIS"
 
       - name: Build installer
-        run: makensis tools/installer/launcher.nsi
+        shell: bash
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          # `-D` instead of `/D`: Git Bash on Windows applies MSYS POSIX-path
+          # conversion to args starting with `/`, turning `/DVERSION=…` into
+          # `C:/Program Files/Git/DVERSION=…`. NSIS accepts both forms.
+          makensis "-DVERSION=${VERSION}" tools/installer/launcher.nsi
+          mv BriskaBlast-Launcher-Setup.exe "BriskaBlast-Launcher-Setup-${VERSION}.exe"
 
-      - uses: actions/upload-artifact@v7
+      # Sign the final Setup.exe too (same skip-if-no-secret contract).
+      # TARGET_VERSION is passed through `env:` rather than expanding the
+      # `${{ }}` template directly into the script body, so the (tag-derived)
+      # value can never be interpreted as PowerShell — standard GitHub Actions
+      # script-injection hardening.
+      - name: Sign installer (if cert present)
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          TARGET_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          ./.github/scripts/sign-windows.ps1 -Target "BriskaBlast-Launcher-Setup-$($env:TARGET_VERSION).exe"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: launcher-windows
-          path: BriskaBlast-Launcher-Setup.exe
+          path: |
+            briskablast-launcher-*-x86_64-pc-windows-msvc.zip
+            BriskaBlast-Launcher-Setup-*.exe
+
+  build-macos:
+    name: Build macOS (tar.gz + .dmg, ad-hoc signed)
+    # macos-latest is Apple Silicon (arm64), so `cargo build --release` produces
+    # a native aarch64-apple-darwin binary — the launcher's macOS target — and
+    # `codesign`/`hdiutil`/`sips`/`iconutil` are all available natively.
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          # No git ops after checkout — don't leave the token in .git/config.
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: launcher -> target
+
+      - name: Compute version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/launcher-v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/launcher-v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dispatch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release binary
+        run: cargo build --release
+        working-directory: launcher
+
+      - name: Package tar.gz (self_update asset)
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          ARCHIVE="briskablast-launcher-${VERSION}-aarch64-apple-darwin.tar.gz"
+          mkdir -p dist
+          # Workspace build — binary is at <repo>/target/release/. self_update
+          # matches the compile-time target triple (aarch64-apple-darwin) against
+          # this asset name and extracts the bare binary for the swap.
+          cp target/release/briskablast-launcher dist/
+          tar czf "launcher/${ARCHIVE}" -C dist briskablast-launcher
+
+      - name: Build .app + .dmg (ad-hoc signed)
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          mkdir -p dist-macos
+          chmod +x .github/scripts/make-macos-app.sh
+          .github/scripts/make-macos-app.sh \
+            target/release/briskablast-launcher \
+            "$VERSION" \
+            launcher/assets/icon.png \
+            dist-macos
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: launcher-macos
+          path: |
+            launcher/briskablast-launcher-*-aarch64-apple-darwin.tar.gz
+            dist-macos/*.dmg
 
   release:
     name: Publish GitHub Release
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/launcher-v')
+    # Default GITHUB_TOKEN has read-only contents scope; creating a release
+    # needs write. Mirrors release-server.yml job-level permissions.
+    permissions:
+      contents: write
 
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
 
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
           files: artifacts/**/*
         env:

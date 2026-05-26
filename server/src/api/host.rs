@@ -6,10 +6,12 @@ use axum::{
 use deadpool_redis::redis::AsyncCommands;
 use rand::Rng;
 use shared::protocol::messages::{HostRequest, HostResponse};
+use shared::types::session::SessionStatus;
 use std::net::SocketAddr;
 
 use crate::{
     error::{AppError, Result},
+    gamemode,
     state::AppState,
 };
 use super::{client_ip, validate_player, Session};
@@ -34,6 +36,8 @@ pub async fn host(
         return Err(AppError::TooManyRequests);
     }
 
+    gamemode::validate_player_count(body.gamemode, body.player_count)?;
+
     let mut conn = state
         .redis
         .get()
@@ -56,13 +60,10 @@ pub async fn host(
     let session = Session {
         code: session_code.clone(),
         host_player_id: body.player_id.clone(),
-        host_ip: body.external_ip,
-        host_port: body.external_port,
-        gamemode: body.gamemode.clone(),
-        joiner_player_id: None,
-        joiner_ip: None,
-        joiner_port: None,
-        status: "waiting".to_string(),
+        gamemode: body.gamemode,
+        player_count: body.player_count,
+        joiners: Vec::new(),
+        status: SessionStatus::Waiting,
     };
 
     let json = serde_json::to_string(&session)
@@ -77,8 +78,8 @@ pub async fn host(
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
     tracing::info!(
-        "player {} created session {}",
-        body.player_id, session_code
+        "player {} created {} session {} (capacity {})",
+        body.player_id, body.gamemode, session_code, body.player_count
     );
 
     Ok(Json(HostResponse { session_code }))

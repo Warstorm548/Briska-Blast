@@ -1,105 +1,310 @@
-# Release — Client (Rust + Bevy)
-# Temporarily disabled: trigger is manual only.
-# To re-enable, replace the `on` block with:
-#   on:
-#     push:
-#       tags: ['v*.*.*']
+# Release — Game (Godot 4.6.3 + C# / .NET 8)
+#
+# Triggers:
+#   - workflow_dispatch     : build artifacts only (no GitHub Release publish)
+#   - push tag game-v*      : build + publish to the matching GitHub Release
+#
+# Tag schema: game-v<semver>(-{ea,dev}.N)?
+#   stable : game-v1.2.3
+#   ea     : game-v1.2.3-ea.4
+#   dev    : game-v1.2.3-dev.5
+#
+# The `game-v` prefix keeps this namespace distinct from the server's bare
+# `v*.*.*` and the launcher's `launcher-v*` (see docs/dev/release-tagging.md).
 
-name: Release — Client
+name: Release — Game
 
 on:
   workflow_dispatch:
+    inputs:
+      channel:
+        description: "Release channel to bake into this build"
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - ea
+          - stable
+  push:
+    tags: ['game-v*']
+
+env:
+  GODOT_VERSION: "4.6.3"
 
 jobs:
-  build-linux:
-    name: Build Linux (AppImage + tar.gz)
+  build:
+    name: Export Linux + Windows
     runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+      prerelease: ${{ steps.channel.outputs.prerelease }}
+      version: ${{ steps.version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          workspaces: client -> target
+          # The release workflow only reads the tagged tree; no need to
+          # leave a credential helper in the workspace that subsequent
+          # `run:` steps could accidentally exfiltrate.
+          persist-credentials: false
 
-      - name: Build release binary
-        run: cargo build --release
+      - name: Detect release channel
+        id: channel
+        run: |
+          # workflow_dispatch: take the user-supplied input (no publish, prerelease moot).
+          # push tag game-v*: parse channel + prerelease flag from the tag, mirroring
+          # release-server.yml's anchored-regex approach so suffix-only tags like
+          # `game-v1.2.3-readme` don't get misclassified.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CHANNEL="${{ inputs.channel }}"
+            PRERELEASE=false
+          else
+            TAG="${GITHUB_REF_NAME}"
+            SEMVER='game-v[0-9]+\.[0-9]+\.[0-9]+'
+            if   [[ "$TAG" =~ ^${SEMVER}-ea\.[0-9]+$ ]];  then CHANNEL=ea;     PRERELEASE=true
+            elif [[ "$TAG" =~ ^${SEMVER}-dev\.[0-9]+$ ]]; then CHANNEL=dev;    PRERELEASE=true
+            elif [[ "$TAG" =~ ^${SEMVER}$ ]];             then CHANNEL=stable; PRERELEASE=false
+            else
+              echo "::error::Tag '$TAG' does not match any release channel pattern (stable: game-v1.2.3, ea: game-v1.2.3-ea.N, dev: game-v1.2.3-dev.N)"
+              exit 1
+            fi
+          fi
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          # Export to env so child processes (e.g. dotnet publish spawned by
+          # godot --headless --export-release) inherit RELEASE_CHANNEL.
+          echo "RELEASE_CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
+          echo "Building Briska Blast game on channel: $CHANNEL (prerelease=$PRERELEASE)"
+
+      - name: Install .NET 8 SDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dotnet-sdk-8.0 unzip
+          dotnet --list-sdks
+
+      - name: Cache Godot editor
+        id: cache-godot
+        uses: actions/cache@v5
+        with:
+          path: /opt/godot-mono
+          key: godot-mono-${{ env.GODOT_VERSION }}-linux-x86_64
+
+      - name: Install Godot ${{ env.GODOT_VERSION }} (.NET)
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip"
+          unzip -q godot.zip
+          sudo mv "Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64" /opt/godot-mono
+          sudo chmod +x "/opt/godot-mono/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64"
+
+      - name: Link godot to PATH
+        run: |
+          sudo ln -sf "/opt/godot-mono/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64" /usr/local/bin/godot
+          godot --version
+
+      - name: Cache export templates
+        id: cache-templates
+        uses: actions/cache@v5
+        with:
+          path: ~/.local/share/godot/export_templates
+          key: godot-templates-${{ env.GODOT_VERSION }}-mono
+
+      - name: Install export templates
+        if: steps.cache-templates.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o templates.tpz \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_export_templates.tpz"
+          mkdir -p "$HOME/.local/share/godot/export_templates"
+          unzip -q templates.tpz -d /tmp/godot-templates
+          mv "/tmp/godot-templates/templates" "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono"
+
+      - name: Read version from project.godot
+        id: version
+        run: |
+          v=$(grep '^config/version' client/project.godot | cut -d'"' -f2)
+          if [ -z "$v" ]; then echo "config/version missing"; exit 1; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building Briska Blast client v$v"
+
+      # Godot's GodotTools.Export.ExportPlugin hard-requires `<assembly>.sln`
+      # next to the project root. On a desktop, the editor auto-creates it
+      # the first time the project opens; in headless CI nothing ever does.
+      # Without it, ExportPlugin._ExportFile bails on every .cs file with:
+      #   "Export .NET Project: This project contains C# files but no
+      #    solution file was found at ... /client/BriskaBlast.sln"
+      # ...the per-file bails prevent BuildManager.PublishProjectBlocking
+      # from running, so the .pck ships empty of managed DLLs while godot
+      # still exits 0 (godotengine/godot#86591, #98225). v0.2.1/0.2.2/0.2.3
+      # all missed this because the per-file ERROR is buried mid-savepack
+      # and `--export-release` doesn't propagate non-zero.
+      #
+      # `dotnet new sln` + `dotnet sln add` produces the same minimal .sln
+      # the editor would generate — just a list of which .csproj files
+      # belong to the solution. Not committed: keeps git clean and matches
+      # what the editor does locally.
+      - name: Generate solution file (Godot export plugin requires .sln)
+        run: |
+          dotnet new sln --name BriskaBlast
+          dotnet sln BriskaBlast.sln add BriskaBlast.csproj
         working-directory: client
 
-      - name: Package tar.gz
-        run: |
-          mkdir -p dist
-          cp target/release/briskablast-client dist/
-          tar czf briskablast-client-linux.tar.gz -C dist briskablast-client
+      - name: dotnet restore (warm NuGet cache)
+        run: dotnet restore
         working-directory: client
 
-      - name: Download linuxdeploy
-        run: |
-          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          chmod +x linuxdeploy-x86_64.AppImage
+      - name: Pre-import resources
+        run: godot --headless --import
+        working-directory: client
 
-      - name: Build AppImage
-        # Requires: client/assets/briskablast-client.desktop and client/assets/icon.png
-        # Fill in these asset paths when the files exist.
+      - name: Export Linux/X11
         run: |
-          ./linuxdeploy-x86_64.AppImage \
-            --appdir AppDir \
-            --executable client/target/release/briskablast-client \
-            --desktop-file client/assets/briskablast-client.desktop \
-            --icon-file client/assets/icon.png \
-            --output appimage
-        env:
-          OUTPUT: briskablast-client-linux.AppImage
+          mkdir -p export/linux
+          godot --headless --verbose --export-release "Linux/X11" "$PWD/export/linux/BriskaBlast.x86_64"
+        working-directory: client
 
-      - uses: actions/upload-artifact@v7
+      - name: Verify Linux export embedded C#
+        # `embed_build_outputs=true` should land the managed DLLs INSIDE the
+        # .pck. An empty-of-C# .pck for this scaffold weighs almost nothing;
+        # with the DLLs (BriskaBlast.dll + .NET runtime) embedded we expect
+        # well over 5 MiB. Fail loudly if not — better to break CI here than
+        # ship another unrunnable artifact.
+        run: |
+          test -f export/linux/BriskaBlast.x86_64
+          test -f export/linux/BriskaBlast.pck
+          pck_size=$(stat -c%s export/linux/BriskaBlast.pck)
+          echo "Linux .pck size: $pck_size bytes"
+          if [ "$pck_size" -lt 5242880 ]; then
+            echo "::error::Linux .pck is only $pck_size bytes — C# DLLs not embedded? Check that 'godot --headless --verbose --export-release' completed Godot's own internal dotnet publish step."
+            exit 1
+          fi
+        working-directory: client
+
+      - name: Export Windows Desktop
+        run: |
+          mkdir -p export/windows
+          godot --headless --verbose --export-release "Windows Desktop" "$PWD/export/windows/BriskaBlast.exe"
+        working-directory: client
+
+      - name: Verify Windows export embedded C#
+        run: |
+          test -f export/windows/BriskaBlast.exe
+          test -f export/windows/BriskaBlast.pck
+          pck_size=$(stat -c%s export/windows/BriskaBlast.pck)
+          echo "Windows .pck size: $pck_size bytes"
+          if [ "$pck_size" -lt 5242880 ]; then
+            echo "::error::Windows .pck is only $pck_size bytes — C# DLLs not embedded? Check that 'godot --headless --verbose --export-release' completed Godot's own internal dotnet publish step."
+            exit 1
+          fi
+        working-directory: client
+
+      # macOS is cross-exported HERE on the Linux runner, NOT on macos-latest:
+      # `godot --headless` reliably hangs on the macOS runner — it prints the
+      # banner then never exits (orphaned Godot process). Every invocation
+      # variant (--embedded, --quit-after 2, export-implicit-import) hung in
+      # testing on Godot 4.6.3 / macOS 15.7.7, despite all upstream macOS
+      # headless fixes being present. Godot's export templates are
+      # platform-independent, so Linux produces the same arm64 .app in seconds.
+      - name: Export macOS (arm64)
+        run: |
+          mkdir -p export/macos
+          godot --headless --verbose --export-release "macOS" "$PWD/export/macos/BriskaBlast.app"
+        working-directory: client
+
+      - name: Verify macOS export embedded C#
+        # Unlike Linux/Windows (managed DLLs embedded INSIDE the .pck), Godot's
+        # .NET macOS export lays the assemblies out as loose files under
+        # Contents/Resources/data_BriskaBlast_macos_<arch>/. A universal build
+        # has both arm64 and x86_64 dirs — assert the main BriskaBlast.dll in
+        # each, which proves Godot's internal dotnet publish ran for both arches.
+        run: |
+          APP="export/macos/BriskaBlast.app"
+          test -d "$APP"
+          for arch in arm64 x86_64; do
+            dll="$APP/Contents/Resources/data_BriskaBlast_macos_${arch}/BriskaBlast.dll"
+            if [ ! -f "$dll" ]; then
+              echo "::error::Missing managed assembly $dll — C# not embedded for $arch? Check Godot's internal dotnet publish step."
+              exit 1
+            fi
+            echo "macOS $arch BriskaBlast.dll: $(stat -c%s "$dll") bytes"
+          done
+        working-directory: client
+
+      - name: Install rcodesign (off-macOS ad-hoc signing)
+        run: |
+          RCODESIGN_VERSION="0.29.0"
+          curl -fsSL -o rcodesign.tar.gz \
+            "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/${RCODESIGN_VERSION}/apple-codesign-${RCODESIGN_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          tar xzf rcodesign.tar.gz
+          BIN="$(find . -type f -name rcodesign | head -1)"
+          sudo install -m 0755 "$BIN" /usr/local/bin/rcodesign
+          rcodesign --version
+
+      - name: Ad-hoc sign the .app (rcodesign)
+        # Tester-grade ad-hoc signature (no certificate) — MANDATORY because
+        # Apple Silicon refuses to launch unsigned arm64 binaries. NOT
+        # Developer-ID / notarized. `rcodesign sign` with no key produces an
+        # ad-hoc signature and recursively signs nested Mach-O by default.
+        run: |
+          rcodesign sign export/macos/BriskaBlast.app
+          # `rcodesign verify` only accepts a single Mach-O, not a .app bundle;
+          # the sign command above exits non-zero on real failures, so its
+          # success is the gate. Confirm the signature artifact was written.
+          test -f export/macos/BriskaBlast.app/Contents/_CodeSignature/CodeResources
+        working-directory: client
+
+      - name: Package Linux tar.gz
+        run: |
+          cd client/export/linux
+          tar czf "../../../briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}-linux.tar.gz" .
+
+      - name: Package Windows zip
+        run: |
+          cd client/export/windows
+          zip -qr "../../../briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}-windows.zip" .
+
+      - name: Package macOS tar.gz
+        run: |
+          # tar (not zip) preserves the .app bundle's symlinks + exec bits.
+          cd client/export/macos
+          tar czf \
+            "../../../briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}-macos.tar.gz" \
+            BriskaBlast.app
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: client-linux
+          name: briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}
           path: |
-            client/briskablast-client-linux.tar.gz
-            briskablast-client-linux.AppImage
-
-  build-windows:
-    name: Build Windows (.exe installer)
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: client -> target
-
-      - name: Build release binary
-        run: cargo build --release
-        working-directory: client
-
-      - name: Install NSIS
-        run: choco install nsis --yes
-
-      - name: Build installer
-        run: makensis tools/installer/client.nsi
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: client-windows
-          path: BriskaBlast-Client-Setup.exe
+            briskablast-client-*-linux.tar.gz
+            briskablast-client-*-windows.zip
+            briskablast-client-*-macos.tar.gz
 
   release:
     name: Publish GitHub Release
-    needs: [build-linux, build-windows]
+    needs: [build]
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/game-v')
+    # Default GITHUB_TOKEN has read-only contents scope; creating a release
+    # needs write. Mirrors release-server.yml / release-launcher.yml.
+    permissions:
+      contents: write
 
     steps:
-      - uses: actions/download-artifact@v8
+      # No `name:` — download the artifact bundle from `build` (now carries
+      # Linux + Windows + macOS, all cross-exported on the Linux runner).
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
 
-      - uses: softprops/action-gh-release@v3
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
         with:
-          files: artifacts/**/*
+          prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: |
+            artifacts/**/briskablast-client-*-linux.tar.gz
+            artifacts/**/briskablast-client-*-windows.zip
+            artifacts/**/briskablast-client-*-macos.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

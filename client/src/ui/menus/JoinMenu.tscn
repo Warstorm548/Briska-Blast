@@ -1,0 +1,77 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://src/ui/menus/JoinMenu.cs" id="1_script"]
+[ext_resource type="Texture2D" path="res://src/assets/sprites/backgrounds/BackgroundDefault.png" id="2_bg"]
+[ext_resource type="Theme" path="res://src/ui/theme/MenuTheme.tres" id="3_theme"]
+
+[node name="JoinMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme = ExtResource("3_theme")
+script = ExtResource("1_script")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+texture = ExtResource("2_bg")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="FormPanel" type="PanelContainer" parent="CenterContainer"]
+layout_mode = 2
+
+[node name="Margins" type="MarginContainer" parent="CenterContainer/FormPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 48
+theme_override_constants/margin_top = 48
+theme_override_constants/margin_right = 48
+theme_override_constants/margin_bottom = 48
+
+[node name="Content" type="VBoxContainer" parent="CenterContainer/FormPanel/Margins"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="Prompt" type="Label" parent="CenterContainer/FormPanel/Margins/Content"]
+layout_mode = 2
+text = "Enter your session code below"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 36
+
+[node name="CodeInput" type="LineEdit" parent="CenterContainer/FormPanel/Margins/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(560, 64)
+layout_mode = 2
+placeholder_text = "ABC123"
+alignment = 1
+max_length = 6
+theme_override_font_sizes/font_size = 32
+
+[node name="JoinButton" type="Button" parent="CenterContainer/FormPanel/Margins/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 64)
+layout_mode = 2
+text = "Join Game"
+
+[node name="ReturnButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 3
+anchor_top = 1.0
+anchor_left = 0.0
+anchor_right = 0.0
+anchor_bottom = 1.0
+offset_left = 40.0
+offset_top = -120.0
+offset_right = 320.0
+offset_bottom = -40.0
+text = "Return to Main Menu"

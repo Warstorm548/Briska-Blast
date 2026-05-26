@@ -10,6 +10,12 @@ ARG RELEASE_CHANNEL=dev
 COPY Cargo.toml Cargo.lock* ./
 COPY server/ ./server/
 COPY shared/ ./shared/
+# launcher is a workspace member (see root Cargo.toml). Cargo refuses to load
+# the workspace without every member's manifest readable — even when we use
+# `-p server`, Cargo.lock contains cross-member entries it verifies against
+# each manifest at workspace-load time. Copy the launcher dir so the manifest
+# is present; `-p server` keeps the launcher source out of the build graph.
+COPY launcher/ ./launcher/
 
 RUN RELEASE_CHANNEL=${RELEASE_CHANNEL} cargo build --release -p server
 
