@@ -6,7 +6,7 @@ The project is in early development — gameplay mechanics, content, and the use
 
 ## Platform Support
 
-BriskaBlast targets **Windows** and **Linux** with full cross-platform multiplayer — players on either platform can compete against each other in the same match.
+BriskaBlast targets **Windows**, **Linux**, and **macOS** (Apple Silicon + Intel, shipped as universal builds) with full cross-platform multiplayer — players on any supported platform can compete against each other in the same match.
 
 ## Current Status
 
@@ -14,15 +14,15 @@ Pre-alpha. Components are built in dependency order — server first, then game 
 
 | Component | Status |
 |---|---|
-| Matchmaking server (Rust + Axum + Redis) | **v0.5.1** — deployed. Player registration, session host/join with 2–4 player capacity, WebSocket signaling for WebRTC peer setup, admin panel, self-update system. |
-| Game client (Godot 4 + C#) | **v0.2.0** — menu UI scaffold plus launcher-handoff (`--launcher-handoff` reads username from a one-shot temp JSON). No playable game scene yet; no networking yet. |
-| Launcher (Rust + Iced) | Not started. Players will eventually install and update the game through it. |
+| Matchmaking server (Rust + Axum + Redis) | **v0.6.0** — deployed. Player registration, session host/join with 2–4 player capacity, WebSocket signaling for WebRTC peer setup, admin panel, self-update system. |
+| Game client (Godot 4 + C#) | **v0.3.0** — menu UI shell (main/host-setup/join/lobby/settings menus), session context, launcher-handoff (`--launcher-handoff` reads username from a one-shot temp JSON), and macOS universal export. No playable game scene yet; no networking yet. |
+| Launcher (Rust + Iced) | **v0.10.0** — installs and updates the game per release channel, persists identity, self-updates, and prompts for the Windows firewall rule on first play. |
 
 Component changes are tracked in their respective changelogs: [`ServerChangeLog.md`](ServerChangeLog.md), [`GameChangeLog.md`](GameChangeLog.md), [`LauncherChangeLog.md`](LauncherChangeLog.md).
 
 ## How to Get the Game
 
-> The launcher is not yet built. Until it ships, the game can only be run by contributors from source — see the development docs below.
+> The launcher is built (v0.10.0) but not yet publicly distributed during pre-alpha. For now the game is run by contributors from source — see the development docs below.
 
 When released, BriskaBlast will be launched through the **BriskaBlast Launcher**, which will handle installation, updates, and login. The launcher will let you choose which release channel to play on:
 

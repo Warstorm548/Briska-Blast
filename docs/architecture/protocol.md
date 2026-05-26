@@ -7,7 +7,7 @@
 ## Constraints
 
 - `shared/` is a Rust library crate shared between `server/` and `launcher/`. It must remain fully platform-agnostic: no browser APIs, no OS-specific built-ins.
-- The Godot 4 + C# client uses equivalent types defined in `client/scripts/` — it cannot directly import the Rust shared crate.
+- The Godot 4 + C# client uses equivalent types defined in `client/src/` — it cannot directly import the Rust shared crate.
 - Serialization format: JSON over HTTP for REST endpoints; JSON-text frames for WebSocket signaling.
 
 ## Message Flow

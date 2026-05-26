@@ -3,16 +3,21 @@
 BriskaBlast is split into four top-level packages plus build tooling.
 
 ## Client (`client/`)
-Godot 4 + C# project using Godot's scene/node tree. Game logic lives in C# scripts attached to nodes.
-- `scenes/` — `.tscn` scene files (game, UI, menus, HUD)
-- `scripts/` — C# scripts mirroring the scene hierarchy
-  - `game/` — game loop, entities, state machines
-  - `networking/` — WebRTC peer connections, server message handling
-  - `input/` — keyboard/mouse/gamepad handling
-  - `audio/` — sound playback and audio bus management
-  - `ui/` — menu, HUD, and overlay logic
-- `assets/` — sprites, fonts, shaders, audio, config
-- `addons/` — Godot plugins and third-party addons
+Godot 4 + C# project using Godot's scene/node tree. Game logic lives in C# scripts attached to nodes. Source lives under `client/src/`, with each `.tscn` scene paired with its C# controller in the same directory.
+
+**Built:**
+- `src/core/` — framework singletons and helpers: `SessionContext.cs` (autoloaded session state — codes, gamemode, player names, host tracking), `SettingsManager.cs` (autoloaded), `GameVersion.cs`, `LaunchArgs.cs` (parses `--launcher-handoff`)
+- `src/core/BuildConfig.cs` — **generated at build time** by the `GenerateBuildConfig` MSBuild target from `RELEASE_CHANNEL`; holds the per-channel `Channel` and `ServerHost` constants (do not edit by hand)
+- `src/ui/menus/` — implemented menus with paired `.tscn` + `.cs`: `MainMenu`, `HostSetupMenu`, `JoinMenu`, `SessionLobby`, `SettingsMenu`
+- `src/ui/theme/` — shared UI theming
+- `src/assets/` — sprites, fonts, shaders, audio, config
+
+**Planned (empty stubs):**
+- `src/game/` — game loop, entities, state machines
+- `src/networking/` — WebRTC peer connections, server message handling
+- `src/input/` — keyboard/mouse/gamepad handling
+- `src/rendering/` — render-layer helpers
+- `src/audio/` — sound playback and audio bus management
 
 ## Server (`server/src/`)
 Rust + Axum server on Tokio. Handles player identity, session signaling, version enforcement, the admin panel, and self-managed container updates. Session state is backed by Redis.
@@ -58,7 +63,7 @@ Two independent `TcpListener` instances run inside the same process and share `A
 
 ## Shared (`shared/`)
 Rust library crate shared between `server/` and `launcher/`. No OS-specific built-ins.
-The Godot client uses equivalent C# types defined in `client/scripts/`.
+The Godot client uses equivalent C# types defined in `client/src/`.
 - `src/protocol/messages.rs` — request/response types for all server REST endpoints (`HostRequest`, `JoinRequest`, `JoinResponse`, `SessionPollResponse`, `CloseSessionRequest`, `StartSessionRequest`, plus the minimal `JoinedPeer` peer-descriptor)
 - `src/types/gamemode.rs` — `GameMode` enum, the authoritative list of valid gamemode strings on the wire. Serde rejects unknown variants at deserialize time
 - `src/types/player.rs` — `PlayerId` type with sequential formatting
@@ -67,19 +72,27 @@ The Godot client uses equivalent C# types defined in `client/scripts/`.
 
 ## Launcher (`launcher/`)
 Rust + Iced standalone binary that runs before the game. See [`devtools.md`](../dev/devtools.md) for the dev branch channel.
-- `src/ui/` — launcher window, screens, layout components
-- `src/auth/` — login, account creation, token/session storage
-- `src/updater/` — core update engine
-  - `branches/` — manifest fetching and branch switching
-  - `downloader/` — file fetching and integrity verification
-  - `patcher/` — applying diffs and binary swapping
-- `src/news/` — patch notes feed, server status, announcements
-- `src/settings/` — launcher preferences and game launch options
-- `src/devtools/` — dev-branch-only overlay (hidden by default)
-- `src/networking/` — shared HTTP client and CDN helpers
-- `src/config/` — runtime config, env vars, launch flags
+
+**Built:**
+- `src/main.rs` — entry point; inits tracing, cleans up stale self-update artifacts, then boots the Iced application
+- `src/app.rs` — Iced state machine: `AppState` view-model and the `Message` enum; boot registers across channels and queries the latest release per channel
+- `src/channel.rs` — `Channel` enum (Stable / EA / Dev) and the per-channel server hostname mapping
+- `src/identity.rs` — per-user identity file (username + per-channel creds: `player_id`, `secret_token`, install location, installed version), stored under the OS data dir (outside the binary location for UAC/elevation safety)
+- `src/server_api.rs` — thin HTTP wrapper over `/register` and `/me/username` (pooled `reqwest`)
+- `src/paths.rs` — cross-platform data directory resolution (`directories` crate)
+- `src/firewall.rs` — Windows-only inbound firewall rule detection (`netsh`) and elevated add-rule via UAC on first Play
+- `src/game_launch/` — spawns the installed game with a one-shot identity handoff (`--launcher-handoff <temp.json>`) and awaits exit
+- `src/ui/` (incl. `ui/center/`) — five-zone window layout (top bar, left rail, center modals, right rail/news, bottom progress bar) and theming
+- `src/updater/` — update engine
+  - `github.rs` — launcher self-update via the `self_update` rename-trick (filters `launcher-v*` release tags)
+  - `cleanup.rs` — removes orphaned self-update artifacts at startup (unit-tested)
+  - `branches/` — per-channel game install/update: `github.rs` (release discovery by channel + `game-v` tag), `installer.rs` (platform asset selection, streaming download with progress, archive extraction, `installed.json` manifest)
 - `assets/` — launcher-specific backgrounds, icons, fonts
-- `tests/` — launcher integration tests
+
+**Planned (empty stubs):**
+- `src/auth/`, `src/news/`, `src/settings/`, `src/devtools/`, `src/networking/`, `src/config/` — reserved module directories (`.gitkeep` only); current functionality lives in the top-level files above
+- `src/updater/downloader/`, `src/updater/patcher/` — reserved for a future diff/patch download engine (today's installer downloads full per-channel archives)
+- `tests/` — reserved for launcher integration tests (only `updater/cleanup.rs` has inline unit tests so far)
 
 ## Infrastructure
 - **Docker + Docker Compose** — server, Redis, and Watchtower run in containers for portable redeployment
