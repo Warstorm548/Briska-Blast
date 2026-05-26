@@ -11,39 +11,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.3.0] — 2026-05-25
 
-Adds a **macOS (Apple Silicon) export** target — Stage B of the macOS effort.
-The game can now be exported as an ad-hoc-signed `.app` for
-`aarch64-apple-darwin`, and the launcher knows how to install and launch it.
+Adds a **macOS (universal) export** target — Stage B of the macOS effort. The
+game now exports as an ad-hoc-signed **Universal 2** `.app` (Apple Silicon +
+Intel), and the launcher knows how to install and launch it.
+
+The export is **cross-built on the Linux CI runner**, not on a macOS runner:
+`godot --headless` reliably hangs on `macos-latest` — it prints the engine
+banner then never exits (orphaned Godot process), at `--import` and every other
+headless entry point. A 3-variant matrix probe (`--embedded`, `--quit-after 2`,
+export-implicit-import) all hung on Godot 4.6.3 / macOS 15.7.7, even though all
+three upstream macOS-headless fixes (godot#108696, #113267, #113269) are present
+in 4.6.3. Godot's export templates are platform-independent, so the Linux job
+produces the same `.app` in seconds — and ad-hoc signing is done off-macOS with
+`rcodesign`.
 
 ### Added
 
-- **macOS export preset** (`client/export_presets.cfg`, `[preset.2]`): arm64,
-  `bundle_identifier=com.phoenixwired.briskablast.client`, embedded C# DLLs
-  (`dotnet/embed_build_outputs=true`). Godot's own signing is disabled
-  (`codesign/codesign=0`); CI ad-hoc signs the bundle instead.
-- **`release-client.yml` macOS job** (on `macos-latest`, native arm64): exports
-  `BriskaBlast.app`, verifies the embedded-C# `.pck` (>5 MiB guard, same as
-  Linux/Windows), ad-hoc signs (`codesign --sign -`), and publishes
+- **macOS export preset** (`client/export_presets.cfg`, `[preset.2]`):
+  `binary_format/architecture=universal` (the official templates ship only
+  `godot_macos_release.universal`, and .NET macOS builds for both arches —
+  godot#94631), `bundle_identifier=com.phoenixwired.briskablast.client`. Godot's
+  own signing is disabled (`codesign/codesign=0`); CI ad-hoc signs instead.
+- **`project.godot` `[rendering]`**: `textures/vram_compression/import_etc2_astc=true`,
+  required for any universal/arm64 macOS export (the GPU uses the ETC2/ASTC
+  texture family). Harmless to the x86_64 Linux/Windows presets, which keep
+  using S3TC/BPTC.
+- **macOS cross-export in the Linux `build` job** (`release-client.yml`): exports
+  `BriskaBlast.app`, verifies the embedded C# by asserting `BriskaBlast.dll` in
+  **both** `Contents/Resources/data_BriskaBlast_macos_arm64/` and
+  `…_x86_64/` (Godot's .NET macOS export lays managed assemblies out as loose
+  files per-arch rather than embedding them in the `.pck` like Linux/Windows),
+  installs `rcodesign` (apple-codesign 0.29.0, Linux musl prebuilt), ad-hoc
+  signs the bundle, and publishes
   `briskablast-client-<channel>-<version>-macos.tar.gz` alongside the other
-  platform assets. Channel/version reused from the Linux job via `needs`.
+  platform assets. The dedicated `macos-latest` `build-macos` job was removed.
 - **`client/global.json`** pins the game project to the .NET 8 SDK
-  (`rollForward: latestFeature`). The macOS runner ships multiple SDKs (8.0 +
-  a newer one); without the pin, `dotnet new sln` used the newest SDK and
-  produced the new `.slnx` format, so `dotnet sln BriskaBlast.sln add` failed
-  and Godot's export plugin (which requires `<name>.sln`) couldn't build. The
-  pin makes every runner resolve .NET 8 like the Linux job already did.
+  (`rollForward: latestFeature`) so the export job resolves .NET 8 (and the
+  `dotnet new sln` / `dotnet sln add` step produces a `.sln`, not the newer
+  `.slnx`, which Godot's export plugin can't consume).
 
 ### Launcher-side (install/launch path)
 
-- `installer.rs`: `select_platform_asset` now matches `macos.tar.gz` on macOS,
-  and extraction resolves the in-bundle Mach-O
-  (`BriskaBlast.app/Contents/MacOS/BriskaBlast`) as the manifest executable.
-  `game_launch` needed no change — it spawns the manifest executable directly.
+- `installer.rs`: `select_platform_asset` matches `macos.tar.gz` on macOS, and
+  extraction resolves the in-bundle Mach-O
+  (`BriskaBlast.app/Contents/MacOS/…`) as the manifest executable. `game_launch`
+  needed no change — it spawns the manifest executable directly.
 
 ### Notes
 
 - Ad-hoc signing is tester-grade (right-click → Open the first time, or strip
   the quarantine xattr), **not** Developer-ID / notarized for public download.
+- The `.app` is CI-valid but **not yet launch-tested on real Mac hardware** —
+  smoke-testing on a Mac before a public release is advised.
 
 ---
 
