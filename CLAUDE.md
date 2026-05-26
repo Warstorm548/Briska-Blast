@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Briska Blast is a cross-platform multiplayer online game targeting Windows and Linux.
+Briska Blast is a cross-platform multiplayer online game targeting Windows, Linux, and macOS.
 Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 
 ## Technology Stack
@@ -21,16 +21,16 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Process Management | Systemd / Docker restart policies |
 | Admin Interface | Built-in admin panel at `/admin` |
 
-**Platforms**: Windows + Ubuntu/Linux
+**Platforms**: Windows + Ubuntu/Linux + macOS (Apple Silicon + Intel, universal builds via CI)
 
 ## Build Status
 
 | Component | Status |
 |---|---|
-| Server foundation | ✓ Complete — see `ServerChangeLog.md` |
+| Server foundation | ✓ Complete (v0.6.0) — see `ServerChangeLog.md` |
 | Shared crate | ✓ Complete (protocol types, player/session types) |
-| Game client | Not started |
-| Launcher | In progress — see `LauncherChangeLog.md` |
+| Game client | In progress (v0.3.0) — menu/UI shell, session context, launcher handoff, macOS universal export; gameplay + networking not started. See `GameChangeLog.md` |
+| Launcher | In progress (v0.10.0) — identity, multi-channel install/update, self-update, Windows firewall prompt; see `LauncherChangeLog.md` |
 
 **Build order:** Server → Game → Launcher (each depends on the previous).
 
