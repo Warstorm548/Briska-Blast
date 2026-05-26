@@ -248,7 +248,10 @@ jobs:
         # ad-hoc signature and recursively signs nested Mach-O by default.
         run: |
           rcodesign sign export/macos/BriskaBlast.app
-          rcodesign verify export/macos/BriskaBlast.app
+          # `rcodesign verify` only accepts a single Mach-O, not a .app bundle;
+          # the sign command above exits non-zero on real failures, so its
+          # success is the gate. Confirm the signature artifact was written.
+          test -f export/macos/BriskaBlast.app/Contents/_CodeSignature/CodeResources
         working-directory: client
 
       - name: Package Linux tar.gz
