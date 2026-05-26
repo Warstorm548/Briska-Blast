@@ -213,18 +213,22 @@ jobs:
         working-directory: client
 
       - name: Verify macOS export embedded C#
-        # The .pck is bundled inside the .app at Contents/Resources/. Same
-        # >5 MiB embedded-DLL guard as Linux/Windows (stat -c%s on Linux).
+        # Unlike Linux/Windows (managed DLLs embedded INSIDE the .pck), Godot's
+        # .NET macOS export lays the assemblies out as loose files under
+        # Contents/Resources/data_BriskaBlast_macos_<arch>/. A universal build
+        # has both arm64 and x86_64 dirs — assert the main BriskaBlast.dll in
+        # each, which proves Godot's internal dotnet publish ran for both arches.
         run: |
-          PCK="export/macos/BriskaBlast.app/Contents/Resources/BriskaBlast.pck"
-          test -d export/macos/BriskaBlast.app
-          test -f "$PCK"
-          pck_size=$(stat -c%s "$PCK")
-          echo "macOS .pck size: $pck_size bytes"
-          if [ "$pck_size" -lt 5242880 ]; then
-            echo "::error::macOS .pck is only $pck_size bytes — C# DLLs not embedded? Check that 'godot --headless --verbose --export-release' completed Godot's own internal dotnet publish step."
-            exit 1
-          fi
+          APP="export/macos/BriskaBlast.app"
+          test -d "$APP"
+          for arch in arm64 x86_64; do
+            dll="$APP/Contents/Resources/data_BriskaBlast_macos_${arch}/BriskaBlast.dll"
+            if [ ! -f "$dll" ]; then
+              echo "::error::Missing managed assembly $dll — C# not embedded for $arch? Check Godot's internal dotnet publish step."
+              exit 1
+            fi
+            echo "macOS $arch BriskaBlast.dll: $(stat -c%s "$dll") bytes"
+          done
         working-directory: client
 
       - name: Install rcodesign (off-macOS ad-hoc signing)
