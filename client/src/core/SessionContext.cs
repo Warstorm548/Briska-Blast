@@ -82,31 +82,40 @@ public partial class SessionContext : Node
     /// editor instances can host/join without the launcher. Release builds
     /// never self-register — they require the launcher's handoff.
     /// </summary>
-    public async Task<bool> EnsureIdentityAsync()
+    public Task<bool> EnsureIdentityAsync()
     {
         if (HasIdentity)
-            return true;
+            return Task.FromResult(true);
 
 #if DEBUG
         if (OS.HasFeature("editor"))
-        {
-            var devName = $"DevTester-{GD.Randi() % 10000}";
-            var result = await Api.RegisterAsync(devName);
-            if (result.Ok && result.Value is { } reg)
-            {
-                PlayerId = reg.PlayerId;
-                SecretToken = reg.SecretToken;
-                LocalUsername = reg.Username;
-                GD.Print($"[identity] dev self-registered as {PlayerId} ({LocalUsername}).");
-                return true;
-            }
-            GD.PushWarning($"[identity] dev self-register failed: {result.ErrorCode}");
-            return false;
-        }
+            return SelfRegisterAsync();
 #endif
         GD.PushWarning("[identity] no launcher identity available — cannot reach the server.");
+        return Task.FromResult(false);
+    }
+
+#if DEBUG
+    // Editor-only: self-provision a throwaway identity so two editor instances
+    // can host/join without the launcher. Compiled out of release builds —
+    // keeping this off EnsureIdentityAsync's body avoids an async-without-await
+    // (CS1998), which the release export treats as a hard error.
+    private async Task<bool> SelfRegisterAsync()
+    {
+        var devName = $"DevTester-{GD.Randi() % 10000}";
+        var result = await Api.RegisterAsync(devName);
+        if (result.Ok && result.Value is { } reg)
+        {
+            PlayerId = reg.PlayerId;
+            SecretToken = reg.SecretToken;
+            LocalUsername = reg.Username;
+            GD.Print($"[identity] dev self-registered as {PlayerId} ({LocalUsername}).");
+            return true;
+        }
+        GD.PushWarning($"[identity] dev self-register failed: {result.ErrorCode}");
         return false;
     }
+#endif
 
     /// <summary>Set up local state after a successful POST /host.</summary>
     public void StartHostSession(string code, string mode, int maxPlayers)
