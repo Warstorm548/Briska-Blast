@@ -164,17 +164,6 @@ jobs:
           godot --headless --verbose --export-release "Linux/X11" "$PWD/export/linux/BriskaBlast.x86_64"
         working-directory: client
 
-      # TEMP DIAGNOSTIC: Godot swallows the `dotnet publish` output into a log
-      # file. Dump it so we can see why the managed build fails in CI. Remove
-      # once the export embedding is fixed.
-      - name: Dump .NET export build log (diagnostic)
-        if: always()
-        run: |
-          for f in $(find "$HOME/.local/share/godot/mono/build_logs" -name 'msbuild_log.txt' 2>/dev/null); do
-            echo "===== $f ====="
-            cat "$f"
-          done
-
       - name: Verify Linux export embedded C#
         # `embed_build_outputs=true` should land the managed DLLs INSIDE the
         # .pck. An empty-of-C# .pck for this scaffold weighs almost nothing;
