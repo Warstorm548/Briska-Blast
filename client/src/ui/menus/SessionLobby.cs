@@ -1,11 +1,21 @@
 using Godot;
 using BriskaBlast.Core;
+using BriskaBlast.Net;
 
 namespace BriskaBlast.UI.Menus;
 
+/// <summary>
+/// Live lobby. Opens a signaling WebSocket on entry, drives the roster from
+/// server events (Identified / PeerJoined / PeerLeft / HostChanged), and
+/// backs the buttons with the REST endpoints. Stage 1 stops at
+/// <c>start_signaling</c> — WebRTC + gameplay are later stages.
+/// </summary>
 public partial class SessionLobby : Control
 {
     private HBoxContainer[] _slots = null!;
+    private SignalingClient _signaling = null!;
+    private Label _status = null!;
+    private bool _leaving;
 
     public override void _Ready()
     {
@@ -27,49 +37,152 @@ public partial class SessionLobby : Control
         GetNode<Button>("%CancelSessionButton").Pressed += OnCancelOrLeavePressed;
         GetNode<Button>("%ReturnToSetupButton").Pressed += OnReturnToSetupPressed;
 
-        RefreshFromContext();
+        _status = new Label { HorizontalAlignment = HorizontalAlignment.Center, Visible = false };
+        GetNode("LeftPanel/LeftMargins/LeftContent").AddChild(_status);
 
-#if DEBUG
-        GD.Print("[lobby debug] F1 = toggle host view, F2 = add player, F3 = remove last player");
-#endif
+        // Connect signaling. The SignalingClient is a child so it polls on the
+        // main thread — every callback below runs on the main thread and may
+        // touch the tree directly.
+        _signaling = new SignalingClient();
+        AddChild(_signaling);
+        _signaling.Identified += OnIdentified;
+        _signaling.PeerJoined += OnPeerJoined;
+        _signaling.PeerLeft += OnPeerLeft;
+        _signaling.HostChanged += OnHostChanged;
+        _signaling.StartSignaling += OnStartSignaling;
+        _signaling.SessionEnded += reason => LeaveToMenu($"Session ended ({reason}).");
+        _signaling.Kicked += reason => LeaveToMenu($"Removed from session ({reason}).");
+        _signaling.Closed += OnClosed;
+
+        var ctx = SessionContext.Instance;
+        _signaling.Connect(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
+
+        Render();
     }
 
-#if DEBUG
-    public override void _UnhandledInput(InputEvent @event)
-    {
-        if (@event is not InputEventKey keyEvent || !keyEvent.Pressed || keyEvent.Echo) return;
-        var ctx = SessionContext.Instance;
+    // ---- signaling callbacks (main thread) ----
 
-        switch (keyEvent.Keycode)
+    private void OnIdentified(string hostId, string[] peers, bool isHost)
+    {
+        var ctx = SessionContext.Instance;
+        ctx.HostPlayerId = hostId;
+        ctx.PlayerIds.Clear();
+        if (!string.IsNullOrEmpty(hostId))
+            ctx.PlayerIds.Add(hostId);
+        if (ctx.PlayerId != hostId)
+            ctx.PlayerIds.Add(ctx.PlayerId);
+        foreach (var p in peers)
+            if (p != hostId && p != ctx.PlayerId && !ctx.PlayerIds.Contains(p))
+                ctx.PlayerIds.Add(p);
+        Render();
+    }
+
+    private void OnPeerJoined(string playerId)
+    {
+        var ids = SessionContext.Instance.PlayerIds;
+        if (!ids.Contains(playerId))
+            ids.Add(playerId);
+        Render();
+    }
+
+    private void OnPeerLeft(string playerId, string reason)
+    {
+        SessionContext.Instance.PlayerIds.Remove(playerId);
+        Render();
+    }
+
+    private void OnHostChanged(string playerId)
+    {
+        SessionContext.Instance.HostPlayerId = playerId;
+        Render();
+    }
+
+    private void OnStartSignaling(string gamemode, int playerCount, string[] peers)
+    {
+        // Stage 1 endpoint: the lobby is fully wired up to here. WebRTC peer
+        // negotiation and gameplay arrive in later stages.
+        GetNode<Button>("%StartSessionButton").Disabled = true;
+        ShowStatus($"All {playerCount} players ready — starting… (gameplay lands in a later stage)");
+    }
+
+    private void OnClosed(int code, string reason)
+    {
+        if (_leaving)
+            return;
+        // 1000 is a normal close; anything else (4xxx app codes, 1006 abnormal)
+        // means we lost the lobby unexpectedly.
+        LeaveToMenu(code == 1000 ? "Disconnected from session." : $"Connection closed ({code}).");
+    }
+
+    // ---- buttons ----
+
+    private async void OnStartPressed()
+    {
+        var ctx = SessionContext.Instance;
+        ShowStatus("Starting…");
+        var result = await ctx.Api.StartSessionAsync(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
+        if (!result.Ok)
         {
-            case Key.F1:
-                ctx.LocalPlayerIsHost = !ctx.LocalPlayerIsHost;
-                GD.Print($"[lobby debug] LocalPlayerIsHost = {ctx.LocalPlayerIsHost}");
-                RefreshFromContext();
-                break;
-            case Key.F2:
-                if (ctx.PlayerNames.Count < ctx.MaxPlayers)
-                {
-                    var n = ctx.PlayerNames.Count + 1;
-                    ctx.PlayerNames.Add($"Player Username {n}");
-                    GD.Print($"[lobby debug] added Player Username {n}");
-                    RefreshFromContext();
-                }
-                break;
-            case Key.F3:
-                if (ctx.PlayerNames.Count > 1)
-                {
-                    ctx.PlayerNames.RemoveAt(ctx.PlayerNames.Count - 1);
-                    if (ctx.HostIndex >= ctx.PlayerNames.Count) ctx.HostIndex = 0;
-                    GD.Print($"[lobby debug] removed last player; remaining = {ctx.PlayerNames.Count}");
-                    RefreshFromContext();
-                }
-                break;
+            var why = result.ErrorCode switch
+            {
+                "session_not_startable" => "Not everyone is connected yet.",
+                _ => $"Could not start: {result.ErrorCode}",
+            };
+            Callable.From(() => ShowStatus(why)).CallDeferred();
+        }
+        // Success → the server broadcasts start_signaling; OnStartSignaling handles it.
+    }
+
+    private async void OnCancelOrLeavePressed()
+    {
+        var ctx = SessionContext.Instance;
+        if (ctx.LocalPlayerIsHost)
+        {
+            // Host cancels → tear the session down server-side.
+            await ctx.Api.CloseSessionAsync(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
+            Callable.From(() => LeaveToMenu("")).CallDeferred();
+        }
+        else
+        {
+            // Joiner leaves → explicit Leave frees the slot in the lobby.
+            _signaling.SendLeave();
+            LeaveToMenu("");
         }
     }
-#endif
 
-    private void RefreshFromContext()
+    private async void OnReturnToSetupPressed()
+    {
+        var ctx = SessionContext.Instance;
+        await ctx.Api.CloseSessionAsync(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
+        Callable.From(() =>
+        {
+            _leaving = true;
+            _signaling.CloseConnection();
+            SessionContext.Instance.ClearSession();
+            GetTree().ChangeSceneToFile("res://src/ui/menus/HostSetupMenu.tscn");
+        }).CallDeferred();
+    }
+
+    private async void OnPromote(int slotIndex)
+    {
+        var ctx = SessionContext.Instance;
+        if (slotIndex < 0 || slotIndex >= ctx.PlayerIds.Count)
+            return;
+        var target = ctx.PlayerIds[slotIndex];
+        if (target == ctx.HostPlayerId)
+            return;
+
+        ShowStatus($"Promoting {ctx.DisplayNameFor(target)}…");
+        var result = await ctx.Api.TransferHostAsync(
+            ctx.SessionCode, ctx.PlayerId, ctx.SecretToken, target);
+        if (!result.Ok)
+            Callable.From(() => ShowStatus($"Promote failed: {result.ErrorCode}")).CallDeferred();
+        // Success → server broadcasts host_changed; OnHostChanged updates all clients.
+    }
+
+    // ---- rendering ----
+
+    private void Render()
     {
         var ctx = SessionContext.Instance;
 
@@ -82,47 +195,36 @@ public partial class SessionLobby : Control
         for (int i = 0; i < _slots.Length; i++)
         {
             var slot = _slots[i];
-            var nameLabel = slot.GetNode<Label>("Name");
-            var isHostLabel = slot.GetNode<Label>("IsHost");
-            var promoteBtn = slot.GetNode<Button>("Promote");
+            bool slotUsed = i < ctx.PlayerIds.Count;
+            string pid = slotUsed ? ctx.PlayerIds[i] : "";
+            bool slotIsHost = slotUsed && pid == ctx.HostPlayerId;
 
-            bool slotUsed = i < ctx.PlayerNames.Count;
-            bool slotIsHost = slotUsed && i == ctx.HostIndex;
-
-            nameLabel.Text = slotUsed ? ctx.PlayerNames[i] : "Empty Slot";
-            isHostLabel.Visible = slotIsHost;
-            promoteBtn.Visible = slotUsed && !slotIsHost && ctx.LocalPlayerIsHost;
+            slot.GetNode<Label>("Name").Text = slotUsed ? ctx.DisplayNameFor(pid) : "Empty Slot";
+            slot.GetNode<Label>("IsHost").Visible = slotIsHost;
+            slot.GetNode<Button>("Promote").Visible = slotUsed && ctx.LocalPlayerIsHost && !slotIsHost;
         }
 
         GetNode<Button>("%StartSessionButton").Visible = ctx.LocalPlayerIsHost;
         GetNode<Button>("%ReturnToSetupButton").Visible = ctx.LocalPlayerIsHost;
-        var cancelBtn = GetNode<Button>("%CancelSessionButton");
-        cancelBtn.Visible = true;
-        cancelBtn.Text = ctx.LocalPlayerIsHost ? "Cancel Session" : "Leave Session";
+        GetNode<Button>("%CancelSessionButton").Text =
+            ctx.LocalPlayerIsHost ? "Cancel Session" : "Leave Session";
     }
 
-    private void OnPromote(int slotIndex)
+    private void ShowStatus(string message)
     {
-        var ctx = SessionContext.Instance;
-        ctx.PromoteToHost(slotIndex);
-        ctx.LocalPlayerIsHost = false;
-        RefreshFromContext();
+        _status.Text = message;
+        _status.Visible = !string.IsNullOrEmpty(message);
     }
 
-    private void OnStartPressed()
+    private void LeaveToMenu(string message)
     {
-        GD.Print($"Start: would start session {SessionContext.Instance.SessionCode}");
-    }
-
-    private void OnCancelOrLeavePressed()
-    {
+        if (_leaving)
+            return;
+        _leaving = true;
+        if (!string.IsNullOrEmpty(message))
+            GD.Print($"[lobby] {message}");
+        _signaling.CloseConnection();
         SessionContext.Instance.ClearSession();
         GetTree().ChangeSceneToFile("res://src/ui/menus/MainMenu.tscn");
-    }
-
-    private void OnReturnToSetupPressed()
-    {
-        SessionContext.Instance.ClearSession();
-        GetTree().ChangeSceneToFile("res://src/ui/menus/HostSetupMenu.tscn");
     }
 }
