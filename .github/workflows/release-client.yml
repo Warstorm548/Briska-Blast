@@ -154,14 +154,17 @@ jobs:
         run: dotnet restore
         working-directory: client
 
+      - name: Fetch WebRTC GDExtension
+        run: ./scripts/fetch-webrtc.sh
+
       - name: Pre-import resources
-        run: godot --headless --import
+        run: ../scripts/godot-headless.sh --headless --import
         working-directory: client
 
       - name: Export Linux/X11
         run: |
           mkdir -p export/linux
-          godot --headless --verbose --export-release "Linux/X11" "$PWD/export/linux/BriskaBlast.x86_64"
+          ../scripts/godot-headless.sh --headless --verbose --export-release "Linux/X11" "$PWD/export/linux/BriskaBlast.x86_64"
         working-directory: client
 
       - name: Verify Linux export embedded C#
@@ -184,7 +187,7 @@ jobs:
       - name: Export Windows Desktop
         run: |
           mkdir -p export/windows
-          godot --headless --verbose --export-release "Windows Desktop" "$PWD/export/windows/BriskaBlast.exe"
+          ../scripts/godot-headless.sh --headless --verbose --export-release "Windows Desktop" "$PWD/export/windows/BriskaBlast.exe"
         working-directory: client
 
       - name: Verify Windows export embedded C#
@@ -209,7 +212,7 @@ jobs:
       - name: Export macOS (arm64)
         run: |
           mkdir -p export/macos
-          godot --headless --verbose --export-release "macOS" "$PWD/export/macos/BriskaBlast.app"
+          ../scripts/godot-headless.sh --headless --verbose --export-release "macOS" "$PWD/export/macos/BriskaBlast.app"
         working-directory: client
 
       - name: Verify macOS export embedded C#
@@ -229,6 +232,25 @@ jobs:
             fi
             echo "macOS $arch BriskaBlast.dll: $(stat -c%s "$dll") bytes"
           done
+        working-directory: client
+
+      # The WebRTC GDExtension's native library must be bundled into each
+      # export, or WebRtcPeerConnection.Create() returns null at runtime. The
+      # .pck checks above don't cover native libs (they sit beside the binary,
+      # not in the .pck), so assert one is present per platform — this is the
+      # fail-fast gate for the macOS universal cross-export in particular.
+      - name: Verify WebRTC native libs bundled
+        run: |
+          fail=0
+          for plat in linux windows macos; do
+            if find "export/$plat" -iname '*webrtc_native*' 2>/dev/null | grep -q .; then
+              echo "$plat: WebRTC native lib present"
+            else
+              echo "::error::$plat export is missing the WebRTC native lib — GDExtension not bundled."
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ]
         working-directory: client
 
       - name: Install rcodesign (off-macOS ad-hoc signing)

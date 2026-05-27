@@ -9,6 +9,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.0] — 2026-05-27
+
+Stage 2 of multiplayer: `start_signaling` now establishes real **peer-to-peer
+WebRTC DataChannel** connections. See
+[`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+Finish line is a DataChannel round-trip; gameplay over the transport is Stage 3.
+
+### Added
+
+- **`webrtc-native` GDExtension integration.** `scripts/fetch-webrtc.sh` pins
+  release `1.1.0-stable` (Godot 4.1+) and extracts it into
+  `client/addons/webrtc/` (git-ignored); CI fetches it before `godot --import`.
+  Without it Godot's `WebRtcPeerConnection` is interface-only.
+- **`IPeerTransport`** (`client/src/net/IPeerTransport.cs`) — topology-agnostic
+  seam (`Send`/`Broadcast` + `PeerConnected`/`PeerData`/`PeerDisconnected`/
+  `PeerFailed`) the Stage 3 game layer will consume. Topology is a
+  per-game-mode strategy, so future modes can swap in a relay/SFU transport.
+- **`WebRtcMeshTransport`** — full mesh of `WebRtcPeerConnection` +
+  `WebRtcDataChannel` per peer; STUN-only ICE; deterministic glare rule
+  (smaller `player_id` offers); buffers remote ICE until the remote
+  description is set.
+- **Signaling negotiation** — `SignalingClient` gains offer/answer/ice +
+  `peer_connection_failed` senders and surfaces the inbound offer/answer/ice
+  frames as events.
+- **CI:** `scripts/godot-headless.sh` tolerates the webrtc-native headless
+  teardown segfault (which fires after the export artifacts are written);
+  a new "Verify WebRTC native libs bundled" gate asserts the native lib
+  ships in every platform export.
+
+### Changed
+
+- **Lobby:** on `start_signaling` the lobby builds the WebRTC mesh and proves
+  a DataChannel round-trip (ping/pong), showing "N/N connected · M echo OK".
+
+### Known limitations
+
+- **No TURN** — symmetric-NAT peers can't connect yet (deferred). STUN only.
+
 ## [0.4.0] — 2026-05-26
 
 Stage 1 of multiplayer: the menu shell becomes a **working lobby over the

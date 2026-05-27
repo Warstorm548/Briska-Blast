@@ -26,3 +26,6 @@ Thumbs.db
 # Contains the channel + server hostname baked into this build variant.
 src/core/BuildConfig.cs
 src/core/BuildConfig.cs.uid
+
+# Fetched by scripts/fetch-webrtc.sh (pinned webrtc-native GDExtension; not committed).
+addons/webrtc/

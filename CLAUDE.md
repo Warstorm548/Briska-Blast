@@ -29,7 +29,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 |---|---|
 | Server foundation | ✓ Complete (v0.7.0) — see `ServerChangeLog.md` |
 | Shared crate | ✓ Complete (v0.2.0 — protocol types, player/session types) |
-| Game client | In progress (v0.4.0) — menu/UI shell, working multiplayer lobby over the live server (host/join/lobby + signaling); WebRTC + gameplay not started. See `GameChangeLog.md` and `docs/planning/multiplayer-client-stages.md` |
+| Game client | In progress (v0.5.0) — multiplayer lobby over the live server + WebRTC peer-to-peer DataChannels (mesh) behind `IPeerTransport`; gameplay (Stage 3) not started. See `GameChangeLog.md` and `docs/planning/multiplayer-client-stages.md` |
 | Launcher | In progress (v0.11.0) — identity (+ game handoff), multi-channel install/update, self-update, Windows firewall prompt; see `LauncherChangeLog.md` |
 
 **Build order:** Server → Game → Launcher (each depends on the previous).
