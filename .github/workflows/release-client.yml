@@ -158,13 +158,13 @@ jobs:
         run: ./scripts/fetch-webrtc.sh
 
       - name: Pre-import resources
-        run: godot --headless --import
+        run: ../scripts/godot-headless.sh --headless --import
         working-directory: client
 
       - name: Export Linux/X11
         run: |
           mkdir -p export/linux
-          godot --headless --verbose --export-release "Linux/X11" "$PWD/export/linux/BriskaBlast.x86_64"
+          ../scripts/godot-headless.sh --headless --verbose --export-release "Linux/X11" "$PWD/export/linux/BriskaBlast.x86_64"
         working-directory: client
 
       - name: Verify Linux export embedded C#
@@ -187,7 +187,7 @@ jobs:
       - name: Export Windows Desktop
         run: |
           mkdir -p export/windows
-          godot --headless --verbose --export-release "Windows Desktop" "$PWD/export/windows/BriskaBlast.exe"
+          ../scripts/godot-headless.sh --headless --verbose --export-release "Windows Desktop" "$PWD/export/windows/BriskaBlast.exe"
         working-directory: client
 
       - name: Verify Windows export embedded C#
@@ -212,7 +212,7 @@ jobs:
       - name: Export macOS (arm64)
         run: |
           mkdir -p export/macos
-          godot --headless --verbose --export-release "macOS" "$PWD/export/macos/BriskaBlast.app"
+          ../scripts/godot-headless.sh --headless --verbose --export-release "macOS" "$PWD/export/macos/BriskaBlast.app"
         working-directory: client
 
       - name: Verify macOS export embedded C#

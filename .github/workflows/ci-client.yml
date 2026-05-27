@@ -78,5 +78,5 @@ jobs:
         run: ./scripts/fetch-webrtc.sh
 
       - name: Validate scenes (headless import)
-        run: godot --headless --import
+        run: ../scripts/godot-headless.sh --headless --import
         working-directory: client
