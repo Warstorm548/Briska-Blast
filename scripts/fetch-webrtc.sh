@@ -13,6 +13,9 @@ set -euo pipefail
 VERSION="1.1.0-stable"          # webrtc-native release tag (Godot 4.1+; compat 4.6.3)
 ASSET="godot-extension-webrtc.zip"
 URL="https://github.com/godotengine/webrtc-native/releases/download/${VERSION}/${ASSET}"
+# SHA-256 of the pinned asset — verified before extraction since this binary is
+# bundled into shipped game builds. Update alongside VERSION on an upgrade.
+EXPECTED_SHA256="5a0b01b279a1d04b36dde7273469fcf00839d6cdb1f274a32960d94acf347c77"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADDONS_DIR="${SCRIPT_DIR}/../client/addons"
@@ -30,6 +33,19 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 curl -fsSL -o "${TMP}/webrtc.zip" "$URL"
+
+# Verify integrity before extracting.
+if command -v sha256sum >/dev/null 2>&1; then
+  actual_sha="$(sha256sum "${TMP}/webrtc.zip" | awk '{print $1}')"
+else
+  actual_sha="$(shasum -a 256 "${TMP}/webrtc.zip" | awk '{print $1}')"
+fi
+if [ "$actual_sha" != "$EXPECTED_SHA256" ]; then
+  echo "ERROR: webrtc-native checksum mismatch — refusing to extract." >&2
+  echo "  expected ${EXPECTED_SHA256}" >&2
+  echo "  actual   ${actual_sha}" >&2
+  exit 1
+fi
 
 # The archive's top-level folder is `webrtc/`, so extracting into ADDONS_DIR
 # produces client/addons/webrtc/. The zip has no symlinks, so either tool is

@@ -97,6 +97,15 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
 
     public void Close()
     {
+        // Detach signaling handlers so a reused instance (or a late teardown)
+        // can't double-subscribe or fire callbacks after close.
+        if (_signaling is not null)
+        {
+            _signaling.OfferReceived -= OnOfferReceived;
+            _signaling.AnswerReceived -= OnAnswerReceived;
+            _signaling.IceCandidateReceived -= OnIceReceived;
+            _signaling = null!;
+        }
         foreach (var link in _peers.Values)
         {
             link.Channel?.Close();

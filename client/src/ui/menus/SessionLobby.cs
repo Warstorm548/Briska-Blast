@@ -108,6 +108,11 @@ public partial class SessionLobby : Control
 
     private void OnStartSignaling(string gamemode, int playerCount, string[] peers)
     {
+        // start_signaling is a one-shot server transition, but guard anyway so a
+        // duplicate can't leak a second transport or inflate the peer counters.
+        if (_transport != null)
+            return;
+
         GetNode<Button>("%StartSessionButton").Disabled = true;
 
         // Stage 2 endpoint: establish a WebRTC mesh to every peer and prove a
@@ -165,6 +170,8 @@ public partial class SessionLobby : Control
 
     private void OnPeerFailed(string peerId)
     {
+        _connectedPeers.Remove(peerId);
+        _echoedPeers.Remove(peerId);
         GD.Print($"[lobby] peer {peerId} connection failed (likely NAT without TURN).");
         RenderTransportStatus();
     }
