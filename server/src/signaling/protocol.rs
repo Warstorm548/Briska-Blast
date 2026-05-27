@@ -59,6 +59,10 @@ pub enum ServerMsg {
         player_id: String,
         reason: &'static str,
     },
+    /// Broadcast when the host role moves to a different player. Currently
+    /// only fired by a voluntary `/session/:code/host` transfer; automatic
+    /// join-order promotion on host disconnect is a deferred follow-up.
+    HostChanged { player_id: String },
     /// Broadcast when the host calls /start. Clients begin WebRTC negotiation
     /// on receipt. `peers` is the authoritative roster at start time.
     StartSignaling {
