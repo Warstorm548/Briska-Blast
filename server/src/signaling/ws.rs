@@ -89,12 +89,19 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
     // Single owner of the WS — no split, no spawned tasks, no abort
     // coordination. select! polls both arms; either completion drops us
     // into cleanup.
+    //
+    // `explicit_leave` records that the client sent a `Leave` frame (a
+    // deliberate "I'm out") rather than the socket merely dropping. Only a
+    // deliberate leave frees a joiner's Redis slot — a transient drop keeps
+    // the slot so the player can reconnect and re-Identify.
+    let mut explicit_leave = false;
     loop {
         tokio::select! {
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
                         if !handle_client_frame(&text, &code, &player_id, &state).await {
+                            explicit_leave = true;
                             break; // explicit Leave
                         }
                     }
@@ -143,19 +150,28 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
             &code,
             ServerMsg::PeerLeft {
                 player_id: player_id.clone(),
-                reason: "disconnect",
+                reason: if explicit_leave { "leave" } else { "disconnect" },
             },
             None,
         )
         .await;
 
-    // If the host disconnected while the session was still in Waiting,
-    // tear the whole lobby down — otherwise joiners would sit on a
-    // defunct session until TTL. Joiner-list mutation in Starting/Active
-    // is deferred (it races with /start and warrants its own commit).
     if is_host {
+        // If the host disconnected while the session was still in Waiting,
+        // tear the whole lobby down — otherwise joiners would sit on a
+        // defunct session until TTL. Joiner-list mutation in Starting/Active
+        // is deferred (it races with /start and warrants its own commit).
         if let Err(e) = end_session_if_waiting(&state, &code).await {
             tracing::warn!("ws: host-disconnect cleanup failed for {}: {}", code, e);
+        }
+    } else if explicit_leave {
+        // A joiner deliberately left. Free their Redis slot so the lobby's
+        // capacity is correct and /start's "all peers ready" check can pass
+        // for the remaining members. Only on an explicit leave AND only in
+        // Waiting — a transient socket drop keeps the slot for reconnect,
+        // and a leave mid-game is the deferred auto-promotion concern.
+        if let Err(e) = remove_joiner_if_waiting(&state, &code, &player_id).await {
+            tracing::warn!("ws: joiner-leave cleanup failed for {} in {}: {}", player_id, code, e);
         }
     }
 
@@ -377,6 +393,81 @@ return cjson.encode({result = 'deleted'})
         .await;
 
     tracing::info!("ws: session {} ended (host disconnected during waiting)", code);
+    Ok(())
+}
+
+/// On an explicit joiner leave, remove that joiner from the session's
+/// Redis roster — but only while the session is still in Waiting. Past
+/// Waiting the match has started and roster mutation is the deferred
+/// auto-promotion concern.
+///
+/// Atomic for the same reason `end_session_if_waiting` is: a non-atomic
+/// GET-then-SET races with `/session/:code/start`. Here the single Lua
+/// script reads, status-checks, removes, and writes as one operation.
+/// `/start`'s own CAS (its `expected_joiner_count` guard) handles the
+/// cross-operation race — if this removal lands between /start's WS-ready
+/// check and its transaction, /start sees the count mismatch and retries.
+async fn remove_joiner_if_waiting(
+    state: &AppState,
+    code: &str,
+    player_id: &str,
+) -> Result<(), String> {
+    // lua-cjson encodes an empty Lua table as `{}` (a JSON object). If
+    // removing the last joiner empties the list, the naive re-encode would
+    // write `"joiners":{}`, which then fails to deserialize into the Rust
+    // `Vec<JoinerEntry>`. Force it back to `[]` in that one case.
+    const REMOVE_JOINER_IF_WAITING_SCRIPT: &str = r#"
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+  return cjson.encode({result = 'not_found'})
+end
+local session = cjson.decode(raw)
+if session.status ~= 'waiting' then
+  return cjson.encode({result = 'not_waiting'})
+end
+local found_idx = nil
+for i, j in ipairs(session.joiners) do
+  if j.player_id == ARGV[1] then
+    found_idx = i
+    break
+  end
+end
+if not found_idx then
+  return cjson.encode({result = 'not_joiner'})
+end
+table.remove(session.joiners, found_idx)
+local encoded = cjson.encode(session)
+if #session.joiners == 0 then
+  encoded = string.gsub(encoded, '"joiners":{}', '"joiners":[]')
+end
+redis.call('SET', KEYS[1], encoded, 'EX', tonumber(ARGV[2]))
+return cjson.encode({result = 'removed'})
+"#;
+
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "result", rename_all = "snake_case")]
+    enum RemoveOutcome {
+        Removed,
+        NotFound,
+        NotWaiting,
+        NotJoiner,
+    }
+
+    let mut conn = state.redis.get().await.map_err(|e| e.to_string())?;
+    let script = deadpool_redis::redis::Script::new(REMOVE_JOINER_IF_WAITING_SCRIPT);
+    let raw: String = script
+        .key(format!("session:{}", code))
+        .arg(player_id)
+        .arg(state.config.session_ttl_secs)
+        .invoke_async(&mut *conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    let outcome: RemoveOutcome =
+        serde_json::from_str(&raw).map_err(|e| format!("malformed lua result: {e}"))?;
+
+    if matches!(outcome, RemoveOutcome::Removed) {
+        tracing::info!("ws: removed joiner {} from waiting session {}", player_id, code);
+    }
     Ok(())
 }
 
