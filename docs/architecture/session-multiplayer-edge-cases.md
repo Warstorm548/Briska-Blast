@@ -67,13 +67,25 @@ WS handlers see the broadcast and propagate it to clients.
 
 ### Joiner WS disconnect during Waiting
 
-Joiner loses their WS while the lobby is still filling. The joiner's
-entry stays in `Session.joiners` so capacity accounting is unaffected,
-and `PeerLeft { reason: "disconnect" }` broadcasts to the lobby.
+The server distinguishes a **deliberate leave** (the client sent a
+`Leave` frame) from a **transient drop** (the socket just died):
 
-The joiner can re-`Identify` on a new WS to rejoin signaling. `/start`
-will refuse to transition while their WS is missing (the `not_all_peers_ready`
-precondition), so the host either waits for them or asks them to leave.
+- **Transient drop:** the joiner's entry stays in `Session.joiners` so
+  capacity accounting is unaffected, and `PeerLeft { reason: "disconnect" }`
+  broadcasts to the lobby. The joiner can re-`Identify` on a new WS to
+  rejoin signaling. `/start` refuses to transition while their WS is
+  missing (the `not_all_peers_ready` precondition), so the host either
+  waits for them or asks them to leave.
+- **Deliberate leave (Waiting only):** `ws.rs::remove_joiner_if_waiting`
+  removes the joiner from `Session.joiners` in Redis via a single Lua
+  script, and `PeerLeft { reason: "leave" }` broadcasts. This frees the
+  slot so the lobby capacity is correct and `/start`'s "all peers ready"
+  check can pass for the remaining members. (Without this, a player who
+  left would keep their slot until TTL and permanently block `/start`.)
+
+A leave **past Waiting** (Starting/Active) still only broadcasts
+`PeerLeft` and removes the SignalHub sender — the Redis roster mutation
+there is the deferred auto-promotion concern (see below).
 
 ### Joiner WS disconnect during Starting / Active
 

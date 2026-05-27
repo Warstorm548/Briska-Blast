@@ -44,10 +44,12 @@ pub enum ClientMsg {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMsg {
     /// Sent in reply to a successful Identify. Tells the client which player
-    /// the server has bound to this connection, plus the current lobby roster
-    /// at identify time so the client doesn't need a separate poll.
+    /// the server has bound to this connection, who the authoritative host
+    /// is, plus the current lobby roster at identify time so the client
+    /// doesn't need a separate poll.
     Identified {
         your_player_id: String,
+        host_player_id: String,
         peers: Vec<String>,
         is_host: bool,
     },
@@ -59,6 +61,10 @@ pub enum ServerMsg {
         player_id: String,
         reason: &'static str,
     },
+    /// Broadcast when the host role moves to a different player. Currently
+    /// only fired by a voluntary `/session/:code/host` transfer; automatic
+    /// join-order promotion on host disconnect is a deferred follow-up.
+    HostChanged { player_id: String },
     /// Broadcast when the host calls /start. Clients begin WebRTC negotiation
     /// on receipt. `peers` is the authoritative roster at start time.
     StartSignaling {

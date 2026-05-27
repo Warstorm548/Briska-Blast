@@ -9,6 +9,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.4.0] — 2026-05-26
+
+Stage 1 of multiplayer: the menu shell becomes a **working lobby over the
+live server**. See [`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md)
+for the full staged plan. Stops at `start_signaling` — WebRTC peer
+connection and gameplay are later stages.
+
+### Added
+
+- **Client networking layer (`client/src/net/`):**
+  - `ServerEndpoint` — base URLs from the compile-time-baked `BuildConfig`
+    host. No runtime host selection — channel isolation stays at the
+    build-artifact level.
+  - `Dto` + `ServerApi` — snake_case DTOs mirroring `shared/`, an
+    `HttpClient` wrapper over `/register`, `/host`, `/join`,
+    `GET /session/:code`, `/start`, `DELETE`, and `/session/:code/host`.
+    Sends `X-Game-Version` + `X-Launcher-Version`; returns typed
+    `ApiResult` so the UI branches on the server's `error` code.
+  - `SignalingClient` — a `Node` polling `WebSocketPeer` on the main
+    thread; sends `identify`/`leave`, surfaces Identified / PeerJoined /
+    PeerLeft / HostChanged / StartSignaling / SessionEnded / Kicked /
+    Closed. WebRTC frames are received but not yet acted on.
+- **Identity handoff:** `LaunchArgs.Handoff` now carries `player_id`,
+  `secret_token`, `launcher_version`, and `channel`. `SessionContext` holds
+  the identity, owns the `ServerApi`, asserts the handoff channel matches
+  the build, and (DEBUG/editor only, no handoff) self-registers so two
+  editor instances can test without the launcher.
+
+### Changed
+
+- **Host / Join / Lobby menus** now make real server calls. The lobby
+  roster is driven entirely by signaling events, with manual host handoff,
+  Start, Cancel/Leave, and `SessionEnded`/`Kicked`/disconnect handling.
+  Replaces the F1/F2/F3 fake-player debug. Peers show as `Player <id>`
+  (the server roster has no usernames yet).
+
 ## [0.3.0] — 2026-05-25
 
 Adds a **macOS (universal) export** target — Stage B of the macOS effort. The

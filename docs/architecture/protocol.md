@@ -31,10 +31,11 @@ Once WebRTC peer connections are established, the server is **not** in the game-
 | `/session/{code}` | GET | none | Poll session status, capacity, and joiner roster |
 | `/session/{code}` | DELETE | token (host) | Explicit session teardown — frees the code immediately |
 | `/session/{code}/start` | POST | token (host) | Transition lobby Waiting → Starting and trigger signaling |
+| `/session/{code}/host` | POST | token (host) | Voluntarily hand the host role to a listed joiner (Waiting only); broadcasts `HostChanged` |
 
 All authenticated POSTs carry `player_id` + `secret_token` in the JSON body. Token validation: SHA-256 of the supplied token compared against `player:<id>:token_hash` in Redis.
 
-`/host`, `/join`, and `/session/{code}/start` are version-gated — see [Version Enforcement](#version-enforcement) below. `/ws/session/{code}` is not — clients are already gated by the REST step they used to learn the code.
+`/host`, `/join`, `/session/{code}/start`, and `/session/{code}/host` are version-gated — see [Version Enforcement](#version-enforcement) below. `/ws/session/{code}` is not — clients are already gated by the REST step they used to learn the code.
 
 ## WebSocket Endpoint
 
@@ -55,6 +56,8 @@ Close codes (4xxx, app-defined):
 | `4500` | `internal` | Redis fault, decoding failure, etc. |
 
 After `Identified`, the client and server exchange the messages documented in `server/src/signaling/protocol.rs` (`ClientMsg` for incoming, `ServerMsg` for outgoing). The server attests `from` on every relayed message based on the authenticated WS connection — clients cannot forge a `from` field.
+
+Lobby lifecycle frames (server → client): `PeerJoined`, `PeerLeft { reason }` (`"disconnect"` for a dropped socket, `"leave"` for a deliberate `Leave`), `HostChanged { player_id }` (host role moved — currently only via a voluntary `/session/{code}/host` transfer), `SessionEnded { reason }`, and `Kicked { reason }`.
 
 ## End-to-end signaling flow
 

@@ -55,6 +55,7 @@ async fn main() {
         .route("/host", post(api::host::host))
         .route("/join", post(api::join::join))
         .route("/session/:code/start", post(api::start::start_session))
+        .route("/session/:code/host", post(api::session::transfer_host))
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::version::check_version,

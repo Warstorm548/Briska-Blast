@@ -86,3 +86,13 @@ pub struct StartSessionRequest {
     pub player_id: String,
     pub secret_token: String,
 }
+
+/// Host voluntarily hands the host role to another player already in the
+/// lobby. `player_id`/`secret_token` authenticate the *current* host;
+/// `new_host_player_id` must be one of the session's joiners.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TransferHostRequest {
+    pub player_id: String,
+    pub secret_token: String,
+    pub new_host_player_id: String,
+}

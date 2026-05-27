@@ -14,15 +14,15 @@ Pre-alpha. Components are built in dependency order — server first, then game 
 
 | Component | Status |
 |---|---|
-| Matchmaking server (Rust + Axum + Redis) | **v0.6.0** — deployed. Player registration, session host/join with 2–4 player capacity, WebSocket signaling for WebRTC peer setup, admin panel, self-update system. |
-| Game client (Godot 4 + C#) | **v0.3.0** — menu UI shell (main/host-setup/join/lobby/settings menus), session context, launcher-handoff (`--launcher-handoff` reads username from a one-shot temp JSON), and macOS universal export. No playable game scene yet; no networking yet. |
-| Launcher (Rust + Iced) | **v0.10.0** — installs and updates the game per release channel, persists identity, self-updates, and prompts for the Windows firewall rule on first play. |
+| Matchmaking server (Rust + Axum + Redis) | **v0.7.0** — deployed. Player registration, session host/join with 2–4 player capacity, manual host transfer, WebSocket signaling for WebRTC peer setup, admin panel, self-update system. |
+| Game client (Godot 4 + C#) | **v0.4.0** — menu UI shell plus a working multiplayer **lobby over the live server**: real host/join, signaling-driven roster, manual promote, and disconnect handling. WebRTC peer connection and gameplay are later stages (see [`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md)). |
+| Launcher (Rust + Iced) | **v0.11.0** — installs and updates the game per release channel, persists identity, hands the client its identity + version on launch, self-updates, and prompts for the Windows firewall rule on first play. |
 
 Component changes are tracked in their respective changelogs: [`ServerChangeLog.md`](ServerChangeLog.md), [`GameChangeLog.md`](GameChangeLog.md), [`LauncherChangeLog.md`](LauncherChangeLog.md).
 
 ## How to Get the Game
 
-> The launcher is built (v0.10.0) but not yet publicly distributed during pre-alpha. For now the game is run by contributors from source — see the development docs below.
+> The launcher is built (v0.11.0) but not yet publicly distributed during pre-alpha. For now the game is run by contributors from source — see the development docs below.
 
 When released, BriskaBlast will be launched through the **BriskaBlast Launcher**, which will handle installation, updates, and login. The launcher will let you choose which release channel to play on:
 
