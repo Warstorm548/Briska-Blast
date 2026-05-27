@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.11.0] — 2026-05-26
+
+Extends the game handoff so the launched client can authenticate to the
+server. Part of Stage 1 of multiplayer — see
+[`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+
+### Changed
+
+- **Identity + version handoff.** The launcher→game handoff file grew from
+  `{username}` to `{username, player_id, secret_token, launcher_version,
+  channel}` (`game_launch/mod.rs`). The client needs the channel's
+  `player_id` + `secret_token` to authenticate every server call
+  (`/host`, `/join`, the WS `identify`), and `launcher_version` to satisfy
+  the version gate's `X-Launcher-Version` check — neither of which the game
+  can know on its own. Creds are pulled from the channel's `ChannelCreds`
+  at the single `launch_game` choke point in `app.rs`.
+
+### Security
+
+- The handoff file now carries the `secret_token`. On unix it is already
+  created `0o600`; the Windows plaintext-in-temp exposure is a known v1 gap
+  (uuid-named, short-lived). The WS-ticket auth roadmap item removes the
+  raw token from the wire entirely.
+
 ## [0.10.0] — 2026-05-25
 
 macOS (Apple Silicon) support for the launcher itself — Stage A of the macOS

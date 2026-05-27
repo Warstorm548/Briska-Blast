@@ -1,6 +1,6 @@
 [package]
 name = "launcher"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 description = "BriskaBlast Launcher — manages install, update, and launch of the BriskaBlast game across stable, ea, and dev channels."
 license = "AGPL-3.0-or-later"

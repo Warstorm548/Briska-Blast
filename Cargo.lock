@@ -2427,7 +2427,7 @@ dependencies = [
 
 [[package]]
 name = "launcher"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "chrono",
  "directories",
@@ -4175,7 +4175,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "axum",
  "bcrypt",
@@ -4241,7 +4241,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",

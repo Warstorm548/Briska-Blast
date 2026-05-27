@@ -5,6 +5,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.0] — 2026-05-26
+
+Server companions for Stage 1 of the multiplayer client — see
+[`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+All three are small, focused additions that make a real lobby work.
+
+### Added
+
+- **Manual host transfer — `POST /session/:code/host`.** Lets the current
+  host voluntarily hand the host role to a listed joiner, backing the
+  lobby's "Promote" button. The read-validate-swap-write runs as a single
+  Lua script (same atomicity as `/join` and `/start`): the demoted host
+  re-enters `joiners` with a fresh timestamp (back of the join order), the
+  new host moves out of `joiners`, and a `HostChanged` signaling frame is
+  broadcast. Restricted to Waiting. Adds `TransferHostRequest` to `shared/`
+  and `ServerMsg::HostChanged`. Route is version-gated, next to `/start`.
+- **`host_player_id` in the `Identified` frame.** A joiner previously had
+  no way to learn who the host is; the WS `Identified` reply now includes
+  it so every client can render the host marker and anchor `HostChanged`.
+
+### Changed
+
+- **Free a joiner's slot on explicit leave (Waiting).** A joiner who sends
+  a `Leave` frame while the session is Waiting is now removed from the
+  Redis roster via an atomic `remove_joiner_if_waiting` script. Without
+  this the slot stayed occupied until TTL, miscounting capacity and
+  permanently blocking `/start` (its "all peers ready" check could never
+  pass). A transient socket drop still keeps the slot for reconnect — only
+  a deliberate leave frees it. `PeerLeft` now carries `reason` `"leave"`
+  vs `"disconnect"`. (Guards the lua-cjson empty-table-as-`{}` pitfall so
+  removing the last joiner still serializes `"joiners":[]`.)
+
 ## [0.6.0] — 2026-05-23
 
 First cut of the per-user **dev_flag** pipeline that gates the launcher's
