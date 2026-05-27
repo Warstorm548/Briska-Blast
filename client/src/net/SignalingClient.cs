@@ -48,6 +48,12 @@ public partial class SignalingClient : Node
         _playerId = playerId;
         _secretToken = secretToken;
 
+        // Reset lifecycle flags so a reused instance re-sends identify and can
+        // emit Closed again, rather than carrying stale state from a prior run.
+        _identifySent = false;
+        _closedEmitted = false;
+        _active = false;
+
         var url = $"{ServerEndpoint.WsBase}/ws/session/{code}";
         var err = _ws.ConnectToUrl(url);
         if (err != Error.Ok)
@@ -63,8 +69,14 @@ public partial class SignalingClient : Node
     /// leaves the lobby). The server frees the slot when in Waiting.</summary>
     public void SendLeave()
     {
-        if (_ws.GetReadyState() == WebSocketPeer.State.Open)
-            _ws.SendText(JsonSerializer.Serialize(new LeaveFrame("leave"), Json.Options));
+        if (_ws.GetReadyState() != WebSocketPeer.State.Open)
+            return;
+        _ws.SendText(JsonSerializer.Serialize(new LeaveFrame("leave"), Json.Options));
+        // Flush now: the lobby tears the socket down immediately after this, so
+        // without an explicit Poll the queued frame can be dropped before it
+        // reaches the wire — and the server would then see a plain disconnect
+        // (slot kept for reconnect) instead of an explicit leave (slot freed).
+        _ws.Poll();
     }
 
     /// <summary>Initiate a clean close. Safe to call repeatedly.</summary>

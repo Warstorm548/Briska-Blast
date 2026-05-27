@@ -415,9 +415,17 @@ async fn remove_joiner_if_waiting(
     player_id: &str,
 ) -> Result<(), String> {
     // lua-cjson encodes an empty Lua table as `{}` (a JSON object). If
-    // removing the last joiner empties the list, the naive re-encode would
-    // write `"joiners":{}`, which then fails to deserialize into the Rust
-    // `Vec<JoinerEntry>`. Force it back to `[]` in that one case.
+    // removing the last joiner empties `session.joiners`, the naive re-encode
+    // would write `"joiners":{}`, which then fails to deserialize into the
+    // Rust `Vec<JoinerEntry>`. The `string.gsub` below forces it back to `[]`
+    // in that one case.
+    //
+    // Safety of the literal-substring gsub: it intentionally targets the exact
+    // JSON fragment lua-cjson produces for an empty `session.joiners`. No other
+    // session field can contain that substring — `code` is from a brace-free
+    // alphabet, `host_player_id` is digits, `gamemode`/`status` are fixed
+    // lowercase words, and `player_count` is a number. Revisit this gsub if the
+    // Session shape gains a free-form string field.
     const REMOVE_JOINER_IF_WAITING_SCRIPT: &str = r#"
 local raw = redis.call('GET', KEYS[1])
 if not raw then

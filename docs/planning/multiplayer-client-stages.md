@@ -55,8 +55,9 @@ players ready"; no peer connection is made yet.
 
 **Known Stage 1 limitations (deferred):**
 - Peers display as `Player <id>` — the server roster carries no usernames.
-- Dev testing uses a DEBUG/editor-only self-register fallback and a
-  `BRISKA_DEV_SERVER` env override; neither exists in release builds.
+- Running from the editor (no launcher handoff) uses a DEBUG/editor-only
+  self-register fallback to get an identity; it doesn't exist in release
+  builds. The server host is always the compile-time-baked channel host.
 
 ---
 
@@ -91,7 +92,7 @@ later view swap rather than a rewrite.
 
 **The sim-on-plane architecture (committed decision):**
 
-```
+```text
 GameState  (plain data — no Godot nodes)
   ball:    { x, y, vx, vy }
   paddles: [ ... ]

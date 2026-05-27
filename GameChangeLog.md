@@ -20,8 +20,8 @@ connection and gameplay are later stages.
 
 - **Client networking layer (`client/src/net/`):**
   - `ServerEndpoint` — base URLs from the compile-time-baked `BuildConfig`
-    host, with a DEBUG/editor-only `BRISKA_DEV_SERVER` override for local
-    testing (never present in release builds, so channel isolation holds).
+    host. No runtime host selection — channel isolation stays at the
+    build-artifact level.
   - `Dto` + `ServerApi` — snake_case DTOs mirroring `shared/`, an
     `HttpClient` wrapper over `/register`, `/host`, `/join`,
     `GET /session/:code`, `/start`, `DELETE`, and `/session/:code/host`.
