@@ -1414,8 +1414,30 @@ fn launch_game(
     username: String,
 ) -> Task<Message> {
     state.game_running = true;
+
+    // The game authenticates to the server with this channel's identity, so
+    // hand it the player_id + secret_token. Creds should always exist for an
+    // installed channel (registration runs on first launch), but if the row
+    // is somehow missing we still launch with empty creds — the game surfaces
+    // the auth failure itself rather than the launcher silently refusing Play.
+    let (player_id, secret_token) = match state.identity.channels.get(&channel) {
+        Some(creds) => (creds.player_id.clone(), creds.secret_token.clone()),
+        None => {
+            tracing::warn!(?channel, "no identity creds for channel at launch — game will fail auth");
+            (String::new(), String::new())
+        }
+    };
+    let launcher_version = env!("CARGO_PKG_VERSION").to_string();
+
     Task::perform(
-        crate::game_launch::spawn_and_wait(channel, install_dir, username),
+        crate::game_launch::spawn_and_wait(
+            channel,
+            install_dir,
+            username,
+            player_id,
+            secret_token,
+            launcher_version,
+        ),
         move |result| Message::GameExited { channel, result },
     )
 }

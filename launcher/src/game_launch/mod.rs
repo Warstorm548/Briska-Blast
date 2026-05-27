@@ -1,13 +1,21 @@
 //! Spawn the installed game executable with a one-shot identity handoff.
 //!
-//! Protocol mirror of Stage 1's `client/src/core/LaunchArgs.cs`:
+//! Protocol mirror of `client/src/core/LaunchArgs.cs`:
 //!   1. Launcher writes `${TMPDIR}/briskablast-handoff-<uuid>.json`
-//!      containing `{"username": "..."}` (perms `0600` on unix).
+//!      containing the channel's identity + the launcher version (perms
+//!      `0600` on unix — the file now carries the secret token).
 //!   2. Launcher spawns the game executable with
 //!      `--launcher-handoff <path>` as its single arg.
 //!   3. Game reads + **deletes** the file on startup; if the game crashes
 //!      before that, the file is left behind. Acceptable for v1 —
 //!      cleaning it from the launcher side races against the game's read.
+//!
+//! Why the extra fields: every server call the client makes (`/host`,
+//! `/join`, the WS `identify` frame) needs `player_id` + `secret_token`,
+//! and the version gate (`server/src/middleware/version.rs`) checks
+//! `X-Launcher-Version` too — which the game has no way to know on its
+//! own. The `channel` lets the client assert it wasn't handed credentials
+//! for a different channel than the one it was built for.
 //!
 //! `spawn_and_wait` is the single public entry point: writes the file,
 //! spawns the binary, awaits exit, returns the exit code. Errors at any
@@ -26,6 +34,10 @@ const HANDOFF_FLAG: &str = "--launcher-handoff";
 #[derive(Debug, Clone, Serialize)]
 struct Handoff<'a> {
     username: &'a str,
+    player_id: &'a str,
+    secret_token: &'a str,
+    launcher_version: &'a str,
+    channel: Channel,
 }
 
 /// Spawn the channel's installed game, wait for it to exit. The handoff
@@ -38,6 +50,9 @@ pub async fn spawn_and_wait(
     channel: Channel,
     install_dir: PathBuf,
     username: String,
+    player_id: String,
+    secret_token: String,
+    launcher_version: String,
 ) -> Result<Option<i32>, String> {
     let manifest = installed_manifest(&install_dir)
         .await
@@ -57,7 +72,14 @@ pub async fn spawn_and_wait(
         ));
     }
 
-    let handoff_path = write_handoff(&username).await?;
+    let handoff_path = write_handoff(&Handoff {
+        username: &username,
+        player_id: &player_id,
+        secret_token: &secret_token,
+        launcher_version: &launcher_version,
+        channel,
+    })
+    .await?;
     // RAII guard — removes the handoff file on scope exit (including the
     // early-return `?` from spawn / wait failures below) so a crashing
     // launcher can't leave secret-shaped temp files behind. If the game
@@ -130,11 +152,11 @@ impl Drop for HandoffCleanup {
     }
 }
 
-async fn write_handoff(username: &str) -> Result<PathBuf, String> {
+async fn write_handoff(handoff: &Handoff<'_>) -> Result<PathBuf, String> {
     let name = format!("briskablast-handoff-{}.json", uuid::Uuid::new_v4());
     let path = std::env::temp_dir().join(name);
 
-    let payload = serde_json::to_vec(&Handoff { username })
+    let payload = serde_json::to_vec(handoff)
         .map_err(|e| format!("serialize handoff: {e}"))?;
 
     // On unix, atomically create the file with 0o600 from the start so a
@@ -143,8 +165,10 @@ async fn write_handoff(username: &str) -> Result<PathBuf, String> {
     // (rather than overwrite) if the path was somehow pre-created — extra
     // belt for the random-uuid suspenders. On non-unix targets we fall
     // back to the standard create — Windows file perms aren't expressible
-    // through OpenOptionsExt and the handoff payload is non-sensitive in
-    // Stage 5 anyway (username only; no secret yet).
+    // through OpenOptionsExt. The payload now carries the secret_token, so
+    // the Windows plaintext-in-temp exposure is a known v1 gap (the file is
+    // uuid-named and short-lived; see the WS-ticket roadmap entry for the
+    // hardening that removes the raw token from the wire entirely).
     #[cfg(unix)]
     let mut f = tokio::fs::OpenOptions::new()
         .write(true)
@@ -173,19 +197,33 @@ async fn write_handoff(username: &str) -> Result<PathBuf, String> {
 mod tests {
     use super::*;
 
+    fn sample(username: &'static str) -> Handoff<'static> {
+        Handoff {
+            username,
+            player_id: "000000042",
+            secret_token: "deadbeefcafef00d",
+            launcher_version: "0.10.0",
+            channel: Channel::Dev,
+        }
+    }
+
     #[tokio::test]
-    async fn handoff_roundtrips_username() {
-        let path = write_handoff("BlastQueen99").await.unwrap();
+    async fn handoff_roundtrips_all_fields() {
+        let path = write_handoff(&sample("BlastQueen99")).await.unwrap();
         let bytes = tokio::fs::read(&path).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["username"], "BlastQueen99");
+        assert_eq!(v["player_id"], "000000042");
+        assert_eq!(v["secret_token"], "deadbeefcafef00d");
+        assert_eq!(v["launcher_version"], "0.10.0");
+        assert_eq!(v["channel"], "dev");
         let _ = tokio::fs::remove_file(&path).await;
     }
 
     #[tokio::test]
     async fn handoff_paths_are_unique() {
-        let a = write_handoff("x").await.unwrap();
-        let b = write_handoff("x").await.unwrap();
+        let a = write_handoff(&sample("x")).await.unwrap();
+        let b = write_handoff(&sample("x")).await.unwrap();
         assert_ne!(a, b);
         let _ = tokio::fs::remove_file(&a).await;
         let _ = tokio::fs::remove_file(&b).await;
