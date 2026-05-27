@@ -1,4 +1,6 @@
 using Godot;
+using System.Collections.Generic;
+using System.Text;
 using BriskaBlast.Core;
 using BriskaBlast.Net;
 
@@ -16,6 +18,13 @@ public partial class SessionLobby : Control
     private SignalingClient _signaling = null!;
     private Label _status = null!;
     private bool _leaving;
+
+    // Stage 2 WebRTC: the mesh transport plus the per-peer status that drives
+    // the "connected · echo OK" finish-line readout.
+    private WebRtcMeshTransport? _transport;
+    private int _expectedPeers;
+    private readonly HashSet<string> _connectedPeers = new();
+    private readonly HashSet<string> _echoedPeers = new();
 
     public override void _Ready()
     {
@@ -99,11 +108,69 @@ public partial class SessionLobby : Control
 
     private void OnStartSignaling(string gamemode, int playerCount, string[] peers)
     {
-        // Stage 1 endpoint: the lobby is fully wired up to here. WebRTC peer
-        // negotiation and gameplay arrive in later stages.
         GetNode<Button>("%StartSessionButton").Disabled = true;
-        ShowStatus($"All {playerCount} players ready — starting… (gameplay lands in a later stage)");
+
+        // Stage 2 endpoint: establish a WebRTC mesh to every peer and prove a
+        // DataChannel round-trip. Gameplay over this transport arrives in Stage 3.
+        _expectedPeers = peers.Length;
+        if (_expectedPeers == 0)
+        {
+            ShowStatus("Started — no other peers to connect to.");
+            return;
+        }
+
+        _transport = new WebRtcMeshTransport();
+        _transport.Init(_signaling);
+        _transport.PeerConnected += OnPeerConnected;
+        _transport.PeerData += OnPeerData;
+        _transport.PeerDisconnected += OnPeerDisconnected;
+        _transport.PeerFailed += OnPeerFailed;
+        AddChild(_transport);
+
+        _transport.Connect(SessionContext.Instance.PlayerId, peers);
+        ShowStatus($"Connecting to {_expectedPeers} peer(s)…");
     }
+
+    // ---- WebRTC mesh callbacks (main thread; transport polls in _Process) ----
+
+    private const string Ping = "ping:";
+    private const string Pong = "pong:";
+
+    private void OnPeerConnected(string peerId)
+    {
+        _connectedPeers.Add(peerId);
+        // Kick the round-trip: send a ping the peer will pong back.
+        _transport?.Send(peerId, Encoding.UTF8.GetBytes(Ping + SessionContext.Instance.PlayerId));
+        RenderTransportStatus();
+    }
+
+    private void OnPeerData(string peerId, byte[] data)
+    {
+        var msg = Encoding.UTF8.GetString(data);
+        if (msg.StartsWith(Ping))
+            _transport?.Send(peerId, Encoding.UTF8.GetBytes(Pong + SessionContext.Instance.PlayerId));
+        else if (msg.StartsWith(Pong))
+        {
+            _echoedPeers.Add(peerId);
+            RenderTransportStatus();
+        }
+    }
+
+    private void OnPeerDisconnected(string peerId)
+    {
+        _connectedPeers.Remove(peerId);
+        _echoedPeers.Remove(peerId);
+        RenderTransportStatus();
+    }
+
+    private void OnPeerFailed(string peerId)
+    {
+        GD.Print($"[lobby] peer {peerId} connection failed (likely NAT without TURN).");
+        RenderTransportStatus();
+    }
+
+    private void RenderTransportStatus() =>
+        ShowStatus($"WebRTC: {_connectedPeers.Count}/{_expectedPeers} connected · {_echoedPeers.Count} echo OK");
 
     private void OnClosed(int code, string reason)
     {
@@ -223,6 +290,7 @@ public partial class SessionLobby : Control
         _leaving = true;
         if (!string.IsNullOrEmpty(message))
             GD.Print($"[lobby] {message}");
+        _transport?.Close();
         _signaling.CloseConnection();
         SessionContext.Instance.ClearSession();
         GetTree().ChangeSceneToFile("res://src/ui/menus/MainMenu.tscn");

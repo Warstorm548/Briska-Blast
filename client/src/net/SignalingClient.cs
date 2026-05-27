@@ -32,6 +32,12 @@ public partial class SignalingClient : Node
     /// the server, or transport codes like 1006) and the reason string.</summary>
     public event Action<int, string>? Closed;
 
+    // WebRTC negotiation relays (server attests `from`). The transport layer
+    // subscribes to these and feeds them into the matching peer connection.
+    public event Action<string, string>? OfferReceived;          // (from, sdp)
+    public event Action<string, string>? AnswerReceived;         // (from, sdp)
+    public event Action<string, string, string, int>? IceCandidateReceived; // (from, candidate, sdpMid, sdpMLineIndex)
+
     private readonly WebSocketPeer _ws = new();
     private string _playerId = "";
     private string _secretToken = "";
@@ -41,6 +47,10 @@ public partial class SignalingClient : Node
 
     private sealed record IdentifyFrame(string Type, string PlayerId, string SecretToken);
     private sealed record LeaveFrame(string Type);
+    private sealed record OfferFrame(string Type, string To, string Sdp);
+    private sealed record AnswerFrame(string Type, string To, string Sdp);
+    private sealed record IceFrame(string Type, string To, string Candidate, string SdpMid, int SdpMLineIndex);
+    private sealed record PeerConnectionFailedFrame(string Type, string Peer, string Reason);
 
     /// <summary>Open the WS for <paramref name="code"/> and begin identifying.</summary>
     public void Connect(string code, string playerId, string secretToken)
@@ -84,6 +94,26 @@ public partial class SignalingClient : Node
     {
         if (_active)
             _ws.Close();
+    }
+
+    // WebRTC negotiation senders. `to` is the target peer's player_id; the
+    // server attests `from` from this authenticated connection.
+    public void SendOffer(string to, string sdp) => SendFrame(new OfferFrame("offer", to, sdp));
+
+    public void SendAnswer(string to, string sdp) => SendFrame(new AnswerFrame("answer", to, sdp));
+
+    public void SendIceCandidate(string to, string candidate, string sdpMid, int sdpMLineIndex) =>
+        SendFrame(new IceFrame("ice_candidate", to, candidate, sdpMid, sdpMLineIndex));
+
+    /// <summary>Report that a direct connection to <paramref name="peer"/>
+    /// could not be established (e.g. ICE exhausted). The server logs it.</summary>
+    public void SendPeerConnectionFailed(string peer, string reason) =>
+        SendFrame(new PeerConnectionFailedFrame("peer_connection_failed", peer, reason));
+
+    private void SendFrame<T>(T frame)
+    {
+        if (_ws.GetReadyState() == WebSocketPeer.State.Open)
+            _ws.SendText(JsonSerializer.Serialize(frame, Json.Options));
     }
 
     public override void _Process(double delta)
@@ -160,10 +190,17 @@ public partial class SignalingClient : Node
                     Kicked?.Invoke(Str(root, "reason"));
                     break;
                 case "offer":
+                    OfferReceived?.Invoke(Str(root, "from"), Str(root, "sdp"));
+                    break;
                 case "answer":
+                    AnswerReceived?.Invoke(Str(root, "from"), Str(root, "sdp"));
+                    break;
                 case "ice_candidate":
-                    // WebRTC negotiation is a later stage — acknowledged, not acted on.
-                    GD.Print($"[signaling] received '{typeEl.GetString()}' (WebRTC stage handles this)");
+                    IceCandidateReceived?.Invoke(
+                        Str(root, "from"),
+                        Str(root, "candidate"),
+                        Str(root, "sdp_mid"),
+                        IntProp(root, "sdp_m_line_index"));
                     break;
                 default:
                     GD.Print($"[signaling] ignoring unknown frame type '{typeEl.GetString()}'");
@@ -178,6 +215,9 @@ public partial class SignalingClient : Node
 
     private static string Str(JsonElement obj, string name) =>
         obj.TryGetProperty(name, out var el) ? el.GetString() ?? "" : "";
+
+    private static int IntProp(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var el) && el.TryGetInt32(out var v) ? v : 0;
 
     private static string[] ReadStrings(JsonElement obj, string name)
     {
