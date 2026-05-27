@@ -74,6 +74,9 @@ jobs:
         run: dotnet build --configuration Release
         working-directory: client
 
+      - name: Fetch WebRTC GDExtension
+        run: ./scripts/fetch-webrtc.sh
+
       - name: Validate scenes (headless import)
         run: godot --headless --import
         working-directory: client
