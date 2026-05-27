@@ -44,10 +44,12 @@ pub enum ClientMsg {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMsg {
     /// Sent in reply to a successful Identify. Tells the client which player
-    /// the server has bound to this connection, plus the current lobby roster
-    /// at identify time so the client doesn't need a separate poll.
+    /// the server has bound to this connection, who the authoritative host
+    /// is, plus the current lobby roster at identify time so the client
+    /// doesn't need a separate poll.
     Identified {
         your_player_id: String,
+        host_player_id: String,
         peers: Vec<String>,
         is_host: bool,
     },

@@ -40,8 +40,8 @@ pub async fn ws_handler(
 
 async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
     // Phase 1: Identify-frame auth with deadline.
-    let (player_id, is_host) = match identify(&mut socket, &code, &state).await {
-        Ok(pair) => pair,
+    let (player_id, is_host, host_player_id) = match identify(&mut socket, &code, &state).await {
+        Ok(triple) => triple,
         Err(_) => return, // identify() already closed the socket with the right code
     };
 
@@ -64,6 +64,7 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
 
     let identified = ServerMsg::Identified {
         your_player_id: player_id.clone(),
+        host_player_id,
         peers,
         is_host,
     };
@@ -180,11 +181,12 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
 
 /// Reads the first frame, validates the token, confirms membership.
 /// Closes the socket with the appropriate 4xxx code on any failure.
+/// On success returns `(player_id, is_host, host_player_id)`.
 async fn identify(
     socket: &mut WebSocket,
     code: &str,
     state: &AppState,
-) -> Result<(String, bool), ()> {
+) -> Result<(String, bool, String), ()> {
     let first = match tokio::time::timeout(IDENTIFY_DEADLINE, socket.recv()).await {
         Ok(Some(Ok(Message::Text(text)))) => text,
         _ => {
@@ -242,7 +244,7 @@ async fn identify(
     }
 
     let is_host = session.host_player_id == player_id;
-    Ok((player_id, is_host))
+    Ok((player_id, is_host, session.host_player_id))
 }
 
 /// Roster of everyone in the session EXCEPT the requesting player. Used
