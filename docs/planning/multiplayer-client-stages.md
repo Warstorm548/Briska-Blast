@@ -61,27 +61,38 @@ players ready"; no peer connection is made yet.
 
 ---
 
-## Stage 2 — WebRTC signaling + peer connection
+## Stage 2 — WebRTC peer connection ✅
 
-**Goal:** turn `start_signaling` into actual peer-to-peer connections.
+**Delivers:** `start_signaling` now establishes real peer-to-peer WebRTC
+DataChannels. Finish line proven by a ping/pong round-trip in the lobby
+("N/N connected · M echo OK"); gameplay over the transport is Stage 3.
 
-**Notes for crossing this bridge:**
-- **Godot 4 C# caveat:** `WebRtcPeerConnection` in the core API is an
-  *interface only* — establishing real connections requires the
-  `webrtc-native` GDExtension (the `webrtc` addon) added to the project and
-  shipped in every export. Budget time for getting that building on all
-  three platforms (and the macOS universal export).
-- The wire shape already exists: `ClientMsg::{Offer, Answer, IceCandidate,
-  PeerConnectionFailed}` and the matching `ServerMsg` relays
-  (`server/src/signaling/protocol.rs`). `SignalingClient` already receives
-  `offer`/`answer`/`ice_candidate` and currently just logs them — that's
-  where negotiation hooks in.
-- **ICE servers:** STUN `stun.l.google.com:19302` for now. TURN is a later
-  item (see Later work) — symmetric-NAT peers can't connect until then.
-- **Topology:** every pair negotiates its own offer/answer/ICE, so `n`
-  players form an `n*(n-1)/2` mesh.
-- This is the right moment to adopt the WS-ticket auth pattern (Later work)
-  — define it once for the client at the same time.
+**How it was built:**
+- **`webrtc-native` GDExtension**, fetched (not committed) by
+  `scripts/fetch-webrtc.sh` (pinned `1.1.0-stable`, Godot 4.1+) into
+  `client/addons/webrtc/`; CI runs it before `godot --import`. Without it
+  `WebRtcPeerConnection` is interface-only.
+- **Headless teardown crash:** with the extension loaded, `godot --headless`
+  segfaults on *exit* (after the work + artifacts are done). CI wraps the
+  headless calls in `scripts/godot-headless.sh`, which forgives the
+  SIGSEGV/SIGABRT at exit and relies on the export-verification steps (pck
+  size, per-arch DLL, native-lib presence) to catch real failures. The
+  extension's editor library is kept so local in-editor play (F5, which
+  reports `OS.has_feature("editor")`) still has WebRTC.
+- **`IPeerTransport`** (`client/src/net/IPeerTransport.cs`) is the
+  topology-agnostic seam the game layer consumes — **topology is a
+  per-game-mode strategy**: a future mode can supply a relay/SFU transport
+  without touching gameplay. `WebRtcMeshTransport` is the Extended-mode
+  implementation (full mesh).
+- **Negotiation** rides `SignalingClient` (offer/answer/ice already relayed
+  by the server). Glare avoided by a deterministic rule: the
+  lexicographically-smaller `player_id` offers and owns the data channel.
+- **ICE:** STUN `stun.l.google.com:19302` only. **No TURN** — symmetric-NAT
+  peers still can't connect (see Later work). Topology is the `n*(n-1)/2`
+  mesh.
+
+**Deferred from Stage 2:** the WS-ticket auth hardening (still cleartext
+token in the WS `identify`) and TURN.
 
 ---
 
