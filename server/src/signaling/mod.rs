@@ -116,6 +116,12 @@ impl SignalHub {
     ) -> Option<HashMap<String, i64>> {
         let mut rooms = self.rooms.write().await;
         let room = rooms.get_mut(code)?;
+        // Only credit players currently in the room — don't let a report mint a
+        // tally entry for an arbitrary / departed id. (Trajectory validation of
+        // *who* scored remains the later hook.)
+        if !room.senders.contains_key(scoring_player_id) {
+            return None;
+        }
         *room.scores.entry(scoring_player_id.to_string()).or_insert(0) += 1;
         Some(room.scores.clone())
     }
@@ -278,7 +284,8 @@ mod tests {
     #[tokio::test]
     async fn record_score_accumulates_across_players() {
         let hub = SignalHub::default();
-        let (_, _rx) = hub.join_room("ABC", "0000001").await;
+        let (_, _rx1) = hub.join_room("ABC", "0000001").await;
+        let (_, _rx2) = hub.join_room("ABC", "0000002").await;
 
         hub.record_score("ABC", "0000001").await.unwrap();
         hub.record_score("ABC", "0000002").await.unwrap();
@@ -286,6 +293,15 @@ mod tests {
 
         assert_eq!(tally.get("0000001"), Some(&2));
         assert_eq!(tally.get("0000002"), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn record_score_for_non_member_returns_none() {
+        let hub = SignalHub::default();
+        let (_, _rx) = hub.join_room("ABC", "0000001").await;
+        // 0000002 never joined — its report mints no tally entry.
+        assert!(hub.record_score("ABC", "0000002").await.is_none());
+        assert!(hub.record_score("ABC", "0000001").await.unwrap().get("0000002").is_none());
     }
 
     #[tokio::test]

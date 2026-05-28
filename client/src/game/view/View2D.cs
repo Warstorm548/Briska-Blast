@@ -86,7 +86,7 @@ public partial class View2D : Node2D, IGameView
                 _ballSprites[ball.Id] = sprite;
             }
             sprite.Position = ball.Pos;
-            if (ballSize.X > 0)
+            if (ballSize.X > 0 && ballSize.Y > 0)
                 sprite.Scale = new Vector2(ball.Radius * 2f / ballSize.X, ball.Radius * 2f / ballSize.Y);
         }
 

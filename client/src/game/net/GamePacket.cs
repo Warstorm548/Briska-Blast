@@ -73,7 +73,7 @@ public static class GamePacket
     public static bool TryReadBallHandoff(byte[] data, out BallHandoffPacket pkt)
     {
         pkt = default;
-        if (data.Length < 2 || data[0] != (byte)GameMsg.BallHandoff)
+        if (data is null || data.Length < 2 || data[0] != (byte)GameMsg.BallHandoff)
             return false;
 
         try

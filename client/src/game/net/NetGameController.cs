@@ -70,8 +70,15 @@ public sealed class NetGameController : IDisposable
         if (!_peerToEdge.TryGetValue(peerId, out var entryEdge))
             return; // peer no longer mapped (already dropped) — discard
 
+        // The numbers came off the wire from a peer: reject NaN/Infinity so a
+        // malformed or hostile packet can't poison the ball's pos/vel (a NaN
+        // ball never collides and corrupts the sim). Along is a fraction; clamp it.
+        if (!float.IsFinite(pkt.Perp) || !float.IsFinite(pkt.Tang) || !float.IsFinite(pkt.Along))
+            return;
+        float along = Mathf.Clamp(pkt.Along, 0f, 1f);
+
         var (pos, vel) = BallTransform.FromCanonical(
-            entryEdge, pkt.Perp, pkt.Tang, pkt.Along,
+            entryEdge, pkt.Perp, pkt.Tang, along,
             _state.ArenaWidth, _state.ArenaHeight, _spawnRadius);
 
         // Fast-forward by transit time (clamped) so the ball doesn't visually

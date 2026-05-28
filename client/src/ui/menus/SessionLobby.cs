@@ -135,7 +135,16 @@ public partial class SessionLobby : Control
         _transport = null;
         _leaving = true; // handing off, not tearing down
 
-        GetTree().ChangeSceneToFile("res://src/game/GameScene.tscn");
+        // If the scene change fails we've already handed off our signaling, so
+        // this lobby can't continue safely — tear the net down and fall back to
+        // the main menu rather than linger with a null socket.
+        if (GetTree().ChangeSceneToFile("res://src/game/GameScene.tscn") != Error.Ok)
+        {
+            GD.PushError("[lobby] failed to enter GameScene — returning to menu.");
+            ctx.TeardownNet();
+            ctx.ClearSession();
+            GetTree().ChangeSceneToFile("res://src/ui/menus/MainMenu.tscn");
+        }
     }
 
     /// <summary>Detach every signaling handler this lobby installed. The socket

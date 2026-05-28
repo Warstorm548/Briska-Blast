@@ -117,7 +117,7 @@ public static class GameSimulation
             // A point goes to the last hitter — unless that's the scored-on
             // player (a self-goal doesn't count) or nobody had hit it. Either
             // way the event fires so the scored-on player serves a replacement.
-            bool counts = ball.LastHitterId.Length > 0 && ball.LastHitterId != state.LocalPlayerId;
+            bool counts = !string.IsNullOrEmpty(ball.LastHitterId) && ball.LastHitterId != state.LocalPlayerId;
             result.Scores.Add(new ScoreEvent(counts ? ball.LastHitterId : ""));
             return true;
         }
