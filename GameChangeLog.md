@@ -9,6 +9,52 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.0] — 2026-05-27
+
+Stage 3 of multiplayer: a playable **Extended-mode** round over the WebRTC
+mesh from v0.5.0. See
+[`docs/architecture/extended-mode.md`](docs/architecture/extended-mode.md) and
+[`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+
+Each player renders only their own screen; the ball lives on one screen at a
+time and crosses to a peer through a shared edge. No solo mode this stage —
+the game is entered from the lobby Start transition.
+
+### Added
+
+- **Simulation core** (`src/game/`): `GameState` (plain, node-free, per-screen
+  data; multi-ball-ready), `GameSimulation.Step` (paddle reflection with
+  hit-offset english, trigonometric wall reflection, goal/score detection),
+  and `BallTransform` (frame-independent perp/tang/along handoff math).
+- **Swappable 2D view** (`src/game/view/`): `IGameView` + `View2D : Node2D`
+  drawing background, paddle, white `Ball.png`, the four edges colour-coded by
+  kind (wall/portal/goal), and a scoreboard. A future `View3D` is a view swap.
+- **Game scene** (`src/game/GameScene.*`): builds the edge map from the roster
+  (peers → Top/Right/Left; bottom goal), runs the sim each physics frame, paddle
+  on Left/Right arrows, serve on Space. The host serves the first ball; the
+  scored-on player serves thereafter.
+- **Ball handoff** (`src/game/net/`): compact binary `GamePacket` (`BallHandoff`)
+  and `NetGameController` — sim handoff → directed `Send` to the one peer across
+  the crossed edge; inbound → mapped onto the local entry edge and fast-forwarded
+  by transit time. Names only `IPeerTransport`.
+- **Server-relayed scoring**: a goal reports the last hitter to the server
+  (`SignalingClient.SendReportScore`); the authoritative `ScoreUpdate` broadcast
+  overwrites every client's scoreboard. Self-goals don't count.
+- **Input map**: `paddle_left` / `paddle_right` (arrows) + `serve` (Space).
+
+### Changed
+
+- **Lobby:** on `start_signaling` the lobby now hands the live signaling socket
+  + WebRTC transport to the `SessionContext` autoload (so they survive the scene
+  change) and transitions into `GameScene`. The Stage-2 ping/pong heartbeat is
+  removed — real game packets prove the link.
+
+### Notes
+
+- Requires the matchmaking server at **v0.8.0+** (server-relayed score channel).
+- Deferred: multi-ball (needs globally-unique ball ids), solo/AI opponent,
+  ball-speed cap, a serve gate until peers connect. See `extended-mode.md`.
+
 ## [0.5.0] — 2026-05-27
 
 Stage 2 of multiplayer: `start_signaling` now establishes real **peer-to-peer

@@ -27,9 +27,9 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 
 | Component | Status |
 |---|---|
-| Server foundation | ✓ Complete (v0.7.0) — see `ServerChangeLog.md` |
+| Server foundation | ✓ Complete (v0.8.0) — see `ServerChangeLog.md` |
 | Shared crate | ✓ Complete (v0.2.0 — protocol types, player/session types) |
-| Game client | In progress (v0.5.0) — multiplayer lobby over the live server + WebRTC peer-to-peer DataChannels (mesh) behind `IPeerTransport`; gameplay (Stage 3) not started. See `GameChangeLog.md` and `docs/planning/multiplayer-client-stages.md` |
+| Game client | In progress (v0.6.0) — multiplayer lobby + WebRTC mesh behind `IPeerTransport` + a playable **Extended-mode** round (per-screen sim, ball handoff between screens, server-relayed scoring). See `GameChangeLog.md`, `docs/architecture/extended-mode.md`, and `docs/planning/multiplayer-client-stages.md` |
 | Launcher | In progress (v0.11.0) — identity (+ game handoff), multi-channel install/update, self-update, Windows firewall prompt; see `LauncherChangeLog.md` |
 
 **Build order:** Server → Game → Launcher (each depends on the previous).
@@ -43,6 +43,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Manual testing with curl, admin panel tests | [`docs/dev/testing.md`](docs/dev/testing.md) |
 | Server endpoint design and WebRTC signaling flow | [`docs/architecture/protocol.md`](docs/architecture/protocol.md) |
 | Full networking, identity, and game design | [`docs/architecture/game-architecture-summary.md`](docs/architecture/game-architecture-summary.md) |
+| Extended game mode — rules, ball handoff, scoring | [`docs/architecture/extended-mode.md`](docs/architecture/extended-mode.md) |
 | Launcher self-update and version enforcement | [`docs/launcher/launcher-update-and-version-validation.md`](docs/launcher/launcher-update-and-version-validation.md) |
 | Launcher UI layout, identity file, channel gating, state variants | [`docs/launcher/launcher-foundation.md`](docs/launcher/launcher-foundation.md) |
 | Dev branch and release channel rules | [`docs/dev/devtools.md`](docs/dev/devtools.md) |

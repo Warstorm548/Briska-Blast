@@ -235,6 +235,16 @@ When a correction packet arrives and predicted position differs from actual:
 Smooth interpolation keeps the ball visually trackable for players reacting with paddles.
 
 ### Score Validation Flow
+
+> **As shipped (game v0.6.0 / server v0.8.0):** scoring is **server-relayed but
+> not yet validated**. The client whose goal a ball enters reports the last
+> hitter over the session WebSocket (`ReportScore`); the server holds the
+> authoritative per-session tally (crediting only players currently in the room)
+> and broadcasts `ScoreUpdate` to everyone. Ball trajectories are **not** sent to
+> the server, and the trajectory check below is **not implemented** — it remains
+> the documented later hook this channel exists to enable. See
+> [`extended-mode.md`](extended-mode.md). The flow below is the eventual design.
+
 ```
 Player A hits ball toward Player B
     → Ball packet sent to Player B AND server

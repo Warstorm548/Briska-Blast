@@ -5,6 +5,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.8.0] — 2026-05-27
+
+Server-relayed score channel — the server piece of Stage 3 gameplay.
+See [`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+
+### Added
+
+- **`ClientMsg::ReportScore { scoring_player_id }` and `ServerMsg::ScoreUpdate
+  { scores }`** on the existing session WebSocket. The client whose goal a
+  ball enters reports the scorer to the server; the server holds the
+  authoritative per-session tally and broadcasts it to every member
+  (including the reporter — server is the source of truth, not the
+  reporter's local guess). Rides the already-authenticated signaling
+  socket, so no new endpoint and no new auth path.
+- **`SignalHub::record_score`** — credits a point on the per-`Room` score
+  map and returns the updated tally to broadcast. In-memory, room lifetime
+  (same stance as the existing `senders` map); Redis-backed scores remain
+  a later refinement when validation lands. Three unit tests pin the
+  contract (increment, accumulate, unknown-room → `None`).
+
+### Notes
+
+- The server currently **trusts** any session member's report and takes the
+  scorer at face value. Server-side trajectory validation ("only the
+  goal-owner may report a scorer who actually last hit the ball") is the
+  documented later hook this channel exists to enable.
+
+---
+
 ## [0.7.0] — 2026-05-26
 
 Server companions for Stage 1 of the multiplayer client — see

@@ -332,6 +332,19 @@ async fn handle_client_frame(
                 from_player, peer, reason
             );
         }
+        ClientMsg::ReportScore { scoring_player_id } => {
+            // Trusted for now: any member may report, and the reported
+            // scorer is taken at face value. Server-side trajectory
+            // validation is the documented later hook. Broadcast to
+            // everyone (including the reporter) so all clients converge on
+            // the server's authoritative tally rather than a local guess.
+            if let Some(scores) = state.signal_hub.record_score(code, &scoring_player_id).await {
+                state
+                    .signal_hub
+                    .broadcast(code, ServerMsg::ScoreUpdate { scores }, None)
+                    .await;
+            }
+        }
         ClientMsg::Leave => return false,
     }
     true

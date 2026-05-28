@@ -14,8 +14,8 @@ Pre-alpha. Components are built in dependency order — server first, then game 
 
 | Component | Status |
 |---|---|
-| Matchmaking server (Rust + Axum + Redis) | **v0.7.0** — deployed. Player registration, session host/join with 2–4 player capacity, manual host transfer, WebSocket signaling for WebRTC peer setup, admin panel, self-update system. |
-| Game client (Godot 4 + C#) | **v0.5.0** — multiplayer **lobby over the live server** (host/join, signaling-driven roster, manual promote, disconnect handling) plus **WebRTC peer-to-peer DataChannels** (full mesh, STUN) behind a swappable `IPeerTransport`. Gameplay over the transport is the next stage (see [`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md)). |
+| Matchmaking server (Rust + Axum + Redis) | **v0.8.0** — deployed. Player registration, session host/join with 2–4 player capacity, manual host transfer, WebSocket signaling for WebRTC peer setup, server-relayed Extended-mode score channel, admin panel, self-update system. |
+| Game client (Godot 4 + C#) | **v0.6.0** — multiplayer **lobby over the live server** + **WebRTC peer-to-peer DataChannels** (full mesh, STUN) behind a swappable `IPeerTransport`, plus a playable **Extended-mode** round: each player renders their own screen, the ball is handed off between screens across shared edges, and scoring is server-relayed (see [`docs/architecture/extended-mode.md`](docs/architecture/extended-mode.md), [`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md)). |
 | Launcher (Rust + Iced) | **v0.11.0** — installs and updates the game per release channel, persists identity, hands the client its identity + version on launch, self-updates, and prompts for the Windows firewall rule on first play. |
 
 Component changes are tracked in their respective changelogs: [`ServerChangeLog.md`](ServerChangeLog.md), [`GameChangeLog.md`](GameChangeLog.md), [`LauncherChangeLog.md`](LauncherChangeLog.md).

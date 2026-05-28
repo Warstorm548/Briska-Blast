@@ -9,6 +9,7 @@ obj/
 
 # IDE / editor local state
 *.csproj.user
+*.sln
 *.suo
 .vs/
 .vscode/

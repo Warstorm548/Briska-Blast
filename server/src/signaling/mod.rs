@@ -30,6 +30,11 @@ struct Room {
     /// already been re-bound to a newer connection, the old socket's
     /// cleanup must not remove the newer sender.
     senders: HashMap<String, (u64, mpsc::UnboundedSender<ServerMsg>)>,
+    /// Authoritative per-session score tally (player_id → points). Lives
+    /// for the room's lifetime; not persisted to Redis (same rationale as
+    /// the senders map above). Cleared implicitly when the room is dropped
+    /// once empty.
+    scores: HashMap<String, i64>,
 }
 
 impl SignalHub {
@@ -97,6 +102,28 @@ impl SignalHub {
                 let _ = tx.send(msg.clone());
             }
         }
+    }
+
+    /// Credit `scoring_player_id` one point in `code`'s room and return the
+    /// full updated tally to broadcast. Returns `None` if the room doesn't
+    /// exist (e.g. the session already ended) so the caller skips the
+    /// broadcast. Idempotency is the caller's concern — each accepted
+    /// `ReportScore` is one point.
+    pub async fn record_score(
+        &self,
+        code: &str,
+        scoring_player_id: &str,
+    ) -> Option<HashMap<String, i64>> {
+        let mut rooms = self.rooms.write().await;
+        let room = rooms.get_mut(code)?;
+        // Only credit players currently in the room — don't let a report mint a
+        // tally entry for an arbitrary / departed id. (Trajectory validation of
+        // *who* scored remains the later hook.)
+        if !room.senders.contains_key(scoring_player_id) {
+            return None;
+        }
+        *room.scores.entry(scoring_player_id.to_string()).or_insert(0) += 1;
+        Some(room.scores.clone())
     }
 
     /// Snapshot of player_ids currently identified in the room. Used by
@@ -243,5 +270,43 @@ mod tests {
             .await;
         assert!(delivered);
         assert!(matches!(rx_new.try_recv(), Ok(ServerMsg::Kicked { .. })));
+    }
+
+    #[tokio::test]
+    async fn record_score_increments_and_returns_the_tally() {
+        let hub = SignalHub::default();
+        let (_, _rx) = hub.join_room("ABC", "0000001").await;
+
+        let tally = hub.record_score("ABC", "0000001").await.unwrap();
+        assert_eq!(tally.get("0000001"), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn record_score_accumulates_across_players() {
+        let hub = SignalHub::default();
+        let (_, _rx1) = hub.join_room("ABC", "0000001").await;
+        let (_, _rx2) = hub.join_room("ABC", "0000002").await;
+
+        hub.record_score("ABC", "0000001").await.unwrap();
+        hub.record_score("ABC", "0000002").await.unwrap();
+        let tally = hub.record_score("ABC", "0000001").await.unwrap();
+
+        assert_eq!(tally.get("0000001"), Some(&2));
+        assert_eq!(tally.get("0000002"), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn record_score_for_non_member_returns_none() {
+        let hub = SignalHub::default();
+        let (_, _rx) = hub.join_room("ABC", "0000001").await;
+        // 0000002 never joined — its report mints no tally entry.
+        assert!(hub.record_score("ABC", "0000002").await.is_none());
+        assert!(hub.record_score("ABC", "0000001").await.unwrap().get("0000002").is_none());
+    }
+
+    #[tokio::test]
+    async fn record_score_for_unknown_room_returns_none() {
+        let hub = SignalHub::default();
+        assert!(hub.record_score("NOPE", "0000001").await.is_none());
     }
 }
