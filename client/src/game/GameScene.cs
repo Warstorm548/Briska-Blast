@@ -35,6 +35,7 @@ public partial class GameScene : Node2D
     private Ball? _serveBall;
 
     private SignalingClient? _signaling;
+    private NetGameController? _controller;
     private bool _leaving;
 
     public override void _Ready()
@@ -68,6 +69,12 @@ public partial class GameScene : Node2D
             _signaling.Closed += OnClosed;
         }
 
+        // Net glue: handoff send/receive over the transport + server-relayed
+        // score channel. Only meaningful with both a transport and a signaling
+        // socket; without them this is the defensive no-peer fallback.
+        if (ctx?.Transport != null && _signaling != null)
+            _controller = new NetGameController(_state, ctx.Transport, _signaling, BallRadius);
+
         // Only the host serves the first ball; everyone else starts empty and
         // receives a ball via handoff (Slice D) or when they're scored on.
         if (ctx?.LocalPlayerIsHost == true)
@@ -80,6 +87,8 @@ public partial class GameScene : Node2D
     {
         // Detach so the surviving socket doesn't call into a freed scene if it
         // emits another event after we leave.
+        _controller?.Dispose();
+        _controller = null;
         if (_signaling != null)
         {
             _signaling.SessionEnded -= OnSessionEnded;
@@ -154,9 +163,10 @@ public partial class GameScene : Node2D
         {
             GameSimulation.Step(_state, delta, _step);
 
-            // Slice D: serialize each handoff and Send it to its peer over the
-            // transport. For now the ball simply leaves this screen.
-            // foreach (var h in _step.Handoffs) ...
+            // Hand off any balls that left this screen to the peer across the
+            // crossed edge (directed Send, not a broadcast).
+            foreach (var handoff in _step.Handoffs)
+                _controller?.SendHandoff(handoff);
 
             foreach (var score in _step.Scores)
                 OnScore(score);
@@ -167,9 +177,11 @@ public partial class GameScene : Node2D
 
     private void OnScore(ScoreEvent e)
     {
-        // Slice D: if e.ScoringPlayerId is non-empty, report it to the server
-        // (SessionContext.Signaling.SendReportScore) so the canonical tally
-        // updates. The scored-on player (this client) always serves next.
+        // Report to the server (server-relayed scoring) — the controller drops
+        // empty scorers (self-goal / untouched). The scored-on player (this
+        // client) always serves the next ball regardless of whether a point was
+        // awarded.
+        _controller?.ReportScore(e);
         SpawnServeBall();
     }
 

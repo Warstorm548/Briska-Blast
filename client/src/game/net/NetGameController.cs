@@ -1,0 +1,126 @@
+using System;
+using System.Collections.Generic;
+using Godot;
+using BriskaBlast.Game.Net;
+using BriskaBlast.Net;
+
+namespace BriskaBlast.Game;
+
+/// <summary>
+/// Sits between the local simulation, the WebRTC mesh transport, and the
+/// session signaling socket. Takes sim events out to the network (handoffs +
+/// score reports), brings network events into the simulation (inbound balls +
+/// authoritative ScoreUpdate), and keeps the edge map honest as peers come and
+/// go. Names only <see cref="IPeerTransport"/> — never WebRTC.
+/// </summary>
+public sealed class NetGameController : IDisposable
+{
+    private readonly GameState _state;
+    private readonly IPeerTransport _transport;
+    private readonly SignalingClient _signaling;
+    private readonly float _spawnRadius;
+
+    // peerId → local edge assigned to that peer. Built from GameState.Edges at
+    // construction; an entry is removed when its peer drops (and the edge is
+    // flipped to a wall) so an inbound packet from a gone peer is dropped.
+    private readonly Dictionary<string, Edge> _peerToEdge = new();
+
+    public NetGameController(GameState state, IPeerTransport transport,
+        SignalingClient signaling, float spawnRadius)
+    {
+        _state = state;
+        _transport = transport;
+        _signaling = signaling;
+        _spawnRadius = spawnRadius;
+
+        foreach (var kv in _state.Edges)
+            if (kv.Value.Kind == EdgeKind.Portal)
+                _peerToEdge[kv.Value.PeerId] = kv.Key;
+
+        _transport.PeerData += OnPeerData;
+        _transport.PeerDisconnected += OnPeerLost;
+        _transport.PeerFailed += OnPeerLost;
+        _signaling.ScoreUpdate += OnScoreUpdate;
+    }
+
+    /// <summary>Push one sim handoff out to its peer (directed Send).</summary>
+    public void SendHandoff(HandoffEvent ev)
+    {
+        var (perp, tang) = BallTransform.ToCanonical(ev.ExitEdge, ev.Velocity);
+        var pkt = new BallHandoffPacket(
+            ev.BallId, ev.LastHitterId, perp, tang, ev.NormalizedAlong,
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        _transport.Send(ev.PeerId, GamePacket.WriteBallHandoff(pkt));
+    }
+
+    /// <summary>Report a credited score to the server (server-relayed channel).
+    /// Empty <see cref="ScoreEvent.ScoringPlayerId"/> is a self-goal or untouched
+    /// ball — no point is awarded, so nothing is sent (the local serve still
+    /// fires regardless, handled by GameScene).</summary>
+    public void ReportScore(ScoreEvent ev)
+    {
+        if (!string.IsNullOrEmpty(ev.ScoringPlayerId))
+            _signaling.SendReportScore(ev.ScoringPlayerId);
+    }
+
+    private void OnPeerData(string peerId, byte[] data)
+    {
+        if (!GamePacket.TryReadBallHandoff(data, out var pkt))
+            return;
+        if (!_peerToEdge.TryGetValue(peerId, out var entryEdge))
+            return; // peer no longer mapped (already dropped) — discard
+
+        var (pos, vel) = BallTransform.FromCanonical(
+            entryEdge, pkt.Perp, pkt.Tang, pkt.Along,
+            _state.ArenaWidth, _state.ArenaHeight, _spawnRadius);
+
+        // Fast-forward by transit time (clamped) so the ball doesn't visually
+        // lag at entry — a stale clock or replay can't fling it across the screen.
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        float transit = Mathf.Clamp((now - pkt.SentTimestampMs) / 1000f, 0f, 0.5f);
+        pos += vel * transit;
+
+        // Defence: a duplicate id is a packet replay or a future multi-ball
+        // collision. With single-ball this can't happen normally; ignore.
+        foreach (var b in _state.Balls)
+            if (b.Id == pkt.BallId)
+                return;
+
+        _state.Balls.Add(new Ball
+        {
+            Id = pkt.BallId,
+            Pos = pos,
+            Vel = vel,
+            Radius = _spawnRadius,
+            LastHitterId = pkt.LastHitterId,
+        });
+    }
+
+    private void OnPeerLost(string peerId)
+    {
+        // Flip the lost peer's portal edge to a solid wall so any future ball
+        // heading at them bounces instead of vanishing into a dead channel.
+        if (_peerToEdge.TryGetValue(peerId, out var edge))
+        {
+            _state.Edges[edge] = EdgeTarget.Wall;
+            _peerToEdge.Remove(peerId);
+        }
+    }
+
+    private void OnScoreUpdate(Dictionary<string, int> scores)
+    {
+        // Server is authoritative — overwrite, never add. A dropped/duplicated
+        // ScoreUpdate can't desync the local tally.
+        _state.Scores.Clear();
+        foreach (var (pid, pts) in scores)
+            _state.Scores[pid] = pts;
+    }
+
+    public void Dispose()
+    {
+        _transport.PeerData -= OnPeerData;
+        _transport.PeerDisconnected -= OnPeerLost;
+        _transport.PeerFailed -= OnPeerLost;
+        _signaling.ScoreUpdate -= OnScoreUpdate;
+    }
+}

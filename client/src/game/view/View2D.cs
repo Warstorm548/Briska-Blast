@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text;
 using Godot;
 
 namespace BriskaBlast.Game.View;
@@ -22,11 +23,14 @@ public partial class View2D : Node2D, IGameView
     private Sprite2D _background = null!;
     private Sprite2D _paddle = null!;
     private Texture2D _ballTex = null!;
+    private Label _scoreboard = null!;
     private readonly Dictionary<int, Sprite2D> _ballSprites = new();
 
     // Reused across frames so Render allocates nothing in the hot loop.
     private readonly HashSet<int> _seen = new();
     private readonly List<int> _gone = new();
+    private readonly List<string> _scoreOrder = new();
+    private readonly StringBuilder _scoreText = new();
 
     private GameState? _state;
 
@@ -45,6 +49,12 @@ public partial class View2D : Node2D, IGameView
         AddChild(_paddle);
 
         _ballTex = GD.Load<Texture2D>(BallTexPath);
+
+        // Minimal scoreboard, top-left. Sized large so it's visible on the
+        // 2560-wide design viewport without further theming.
+        _scoreboard = new Label { Position = new Vector2(24, 16), ZIndex = 10 };
+        _scoreboard.AddThemeFontSizeOverride("font_size", 48);
+        AddChild(_scoreboard);
     }
 
     public void Render(GameState state)
@@ -89,6 +99,22 @@ public partial class View2D : Node2D, IGameView
             _ballSprites[id].QueueFree();
             _ballSprites.Remove(id);
         }
+
+        // Scoreboard: "<pid>: N  <pid>: N  ..." sorted by player_id. Reusing the
+        // StringBuilder + sort buffer keeps Render allocation-free.
+        _scoreOrder.Clear();
+        foreach (var pid in state.Scores.Keys)
+            _scoreOrder.Add(pid);
+        _scoreOrder.Sort(string.CompareOrdinal);
+
+        _scoreText.Clear();
+        foreach (var pid in _scoreOrder)
+        {
+            if (_scoreText.Length > 0)
+                _scoreText.Append("   ");
+            _scoreText.Append(pid).Append(": ").Append(state.Scores[pid]);
+        }
+        _scoreboard.Text = _scoreText.ToString();
 
         QueueRedraw(); // refresh the edge outlines
     }
