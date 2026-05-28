@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
 use shared::types::gamemode::GameMode;
 
 /// Client → server signaling frames. JSON-tagged on `type`. Receive-only,
@@ -36,6 +38,12 @@ pub enum ClientMsg {
     /// Voluntary clean teardown. Server will treat the WS close as a
     /// normal disconnect.
     Leave,
+    /// Reports that a ball got past a player's paddle into their goal and
+    /// `scoring_player_id` (the last player to have hit the ball) should be
+    /// credited a point. Scores are server-relayed rather than P2P so the
+    /// server owns the canonical tally — a hook for later trajectory
+    /// validation. The server currently trusts any session member's report.
+    ReportScore { scoring_player_id: String },
 }
 
 /// Server → client signaling frames. JSON-tagged on `type`. Cloneable
@@ -89,4 +97,9 @@ pub enum ServerMsg {
     /// Sent to a single player when the server is removing them from the
     /// session (symmetric-NAT failure, duplicate identify, etc.).
     Kicked { reason: &'static str },
+    /// Broadcast after a `ReportScore` is accepted. Carries the full
+    /// authoritative per-session tally (player_id → points) so every client
+    /// overwrites its scoreboard to match the server rather than tracking
+    /// deltas — a dropped/duplicated frame can't desync the score.
+    ScoreUpdate { scores: HashMap<String, i64> },
 }

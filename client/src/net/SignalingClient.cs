@@ -28,6 +28,9 @@ public partial class SignalingClient : Node
     public event Action<string, int, string[]>? StartSignaling;
     public event Action<string>? SessionEnded;
     public event Action<string>? Kicked;
+    /// <summary>Authoritative per-session score tally (player_id → points)
+    /// broadcast by the server after a score report. Overwrite, don't add.</summary>
+    public event Action<Dictionary<string, int>>? ScoreUpdate;
     /// <summary>Socket closed. Carries the close code (4xxx app codes from
     /// the server, or transport codes like 1006) and the reason string.</summary>
     public event Action<int, string>? Closed;
@@ -51,6 +54,7 @@ public partial class SignalingClient : Node
     private sealed record AnswerFrame(string Type, string To, string Sdp);
     private sealed record IceFrame(string Type, string To, string Candidate, string SdpMid, int SdpMLineIndex);
     private sealed record PeerConnectionFailedFrame(string Type, string Peer, string Reason);
+    private sealed record ReportScoreFrame(string Type, string ScoringPlayerId);
 
     /// <summary>Open the WS for <paramref name="code"/> and begin identifying.</summary>
     public void Connect(string code, string playerId, string secretToken)
@@ -109,6 +113,11 @@ public partial class SignalingClient : Node
     /// could not be established (e.g. ICE exhausted). The server logs it.</summary>
     public void SendPeerConnectionFailed(string peer, string reason) =>
         SendFrame(new PeerConnectionFailedFrame("peer_connection_failed", peer, reason));
+
+    /// <summary>Report that <paramref name="scoringPlayerId"/> (the last player
+    /// to hit the ball) scored. The server tallies and broadcasts ScoreUpdate.</summary>
+    public void SendReportScore(string scoringPlayerId) =>
+        SendFrame(new ReportScoreFrame("report_score", scoringPlayerId));
 
     private void SendFrame<T>(T frame)
     {
@@ -189,6 +198,9 @@ public partial class SignalingClient : Node
                 case "kicked":
                     Kicked?.Invoke(Str(root, "reason"));
                     break;
+                case "score_update":
+                    ScoreUpdate?.Invoke(ReadIntMap(root, "scores"));
+                    break;
                 case "offer":
                     OfferReceived?.Invoke(Str(root, "from"), Str(root, "sdp"));
                     break;
@@ -218,6 +230,16 @@ public partial class SignalingClient : Node
 
     private static int IntProp(JsonElement obj, string name) =>
         obj.TryGetProperty(name, out var el) && el.TryGetInt32(out var v) ? v : 0;
+
+    private static Dictionary<string, int> ReadIntMap(JsonElement obj, string name)
+    {
+        var map = new Dictionary<string, int>();
+        if (obj.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.Object)
+            foreach (var prop in el.EnumerateObject())
+                if (prop.Value.TryGetInt32(out var v))
+                    map[prop.Name] = v;
+        return map;
+    }
 
     private static string[] ReadStrings(JsonElement obj, string name)
     {
