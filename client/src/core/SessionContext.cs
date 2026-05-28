@@ -33,6 +33,13 @@ public partial class SessionContext : Node
 
     public ServerApi Api { get; private set; } = null!;
 
+    // ---- Live networking, carried across the lobby → game scene change ----
+    // The lobby creates the signaling socket + WebRTC mesh; on start_signaling
+    // it hands them here via AdoptNet so they survive ChangeSceneToFile and the
+    // game scene keeps using the same connection. Null until adopted.
+    public SignalingClient? Signaling { get; private set; }
+    public IPeerTransport? Transport { get; private set; }
+
     public override void _Ready()
     {
         Instance = this;
@@ -149,6 +156,38 @@ public partial class SessionContext : Node
         MaxPlayers = 0;
         PlayerIds.Clear();
         HostPlayerId = "";
+    }
+
+    /// <summary>Reparent the live signaling + transport under this autoload so
+    /// they outlive the lobby scene. Called by the lobby on start_signaling,
+    /// synchronously before it changes to the game scene.</summary>
+    public void AdoptNet(SignalingClient signaling, IPeerTransport? transport)
+    {
+        Reparent(signaling);
+        if (transport is Node transportNode)
+            Reparent(transportNode);
+        Signaling = signaling;
+        Transport = transport;
+    }
+
+    private void Reparent(Node node)
+    {
+        node.GetParent()?.RemoveChild(node);
+        AddChild(node);
+    }
+
+    /// <summary>Close and free the adopted signaling + transport (game exit or
+    /// session end). No-op when nothing was adopted.</summary>
+    public void TeardownNet()
+    {
+        Transport?.Close();
+        if (Transport is Node transportNode)
+            transportNode.QueueFree();
+        Transport = null;
+
+        Signaling?.CloseConnection();
+        Signaling?.QueueFree();
+        Signaling = null;
     }
 
     /// <summary>Display name for a roster slot: the local username for self,

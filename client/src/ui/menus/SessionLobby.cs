@@ -1,6 +1,4 @@
 using Godot;
-using System.Collections.Generic;
-using System.Text;
 using BriskaBlast.Core;
 using BriskaBlast.Net;
 
@@ -9,8 +7,10 @@ namespace BriskaBlast.UI.Menus;
 /// <summary>
 /// Live lobby. Opens a signaling WebSocket on entry, drives the roster from
 /// server events (Identified / PeerJoined / PeerLeft / HostChanged), and
-/// backs the buttons with the REST endpoints. Stage 1 stops at
-/// <c>start_signaling</c> — WebRTC + gameplay are later stages.
+/// backs the buttons with the REST endpoints. On <c>start_signaling</c> it
+/// builds the WebRTC mesh, hands the live signaling + transport to
+/// <see cref="SessionContext"/> (so they survive the scene change), and enters
+/// <c>GameScene</c>.
 /// </summary>
 public partial class SessionLobby : Control
 {
@@ -19,12 +19,9 @@ public partial class SessionLobby : Control
     private Label _status = null!;
     private bool _leaving;
 
-    // Stage 2 WebRTC: the mesh transport plus the per-peer status that drives
-    // the "connected · echo OK" finish-line readout.
+    // Built on start_signaling, then handed to SessionContext (AdoptNet) so it
+    // outlives this scene. Null until then.
     private WebRtcMeshTransport? _transport;
-    private int _expectedPeers;
-    private readonly HashSet<string> _connectedPeers = new();
-    private readonly HashSet<string> _echoedPeers = new();
 
     public override void _Ready()
     {
@@ -59,8 +56,8 @@ public partial class SessionLobby : Control
         _signaling.PeerLeft += OnPeerLeft;
         _signaling.HostChanged += OnHostChanged;
         _signaling.StartSignaling += OnStartSignaling;
-        _signaling.SessionEnded += reason => LeaveToMenu($"Session ended ({reason}).");
-        _signaling.Kicked += reason => LeaveToMenu($"Removed from session ({reason}).");
+        _signaling.SessionEnded += OnSessionEnded;
+        _signaling.Kicked += OnKicked;
         _signaling.Closed += OnClosed;
 
         var ctx = SessionContext.Instance;
@@ -108,76 +105,58 @@ public partial class SessionLobby : Control
 
     private void OnStartSignaling(string gamemode, int playerCount, string[] peers)
     {
-        // start_signaling is a one-shot server transition, but guard anyway so a
-        // duplicate can't leak a second transport or inflate the peer counters.
-        if (_transport != null)
+        // One-shot transition: guard against a duplicate start_signaling and
+        // against firing while we're already leaving.
+        if (_transport != null || _leaving)
             return;
 
         GetNode<Button>("%StartSessionButton").Disabled = true;
+        ShowStatus("Starting…");
 
-        // Stage 2 endpoint: establish a WebRTC mesh to every peer and prove a
-        // DataChannel round-trip. Gameplay over this transport arrives in Stage 3.
-        _expectedPeers = peers.Length;
-        if (_expectedPeers == 0)
+        var ctx = SessionContext.Instance;
+
+        // Establish the WebRTC mesh to every peer. Negotiation rides the
+        // signaling socket and continues in the background after the transition
+        // (both nodes keep polling under the SessionContext autoload).
+        if (peers.Length > 0)
         {
-            ShowStatus("Started — no other peers to connect to.");
-            return;
+            _transport = new WebRtcMeshTransport();
+            _transport.Init(_signaling);
+            AddChild(_transport);
+            _transport.Connect(ctx.PlayerId, peers);
         }
 
-        _transport = new WebRtcMeshTransport();
-        _transport.Init(_signaling);
-        _transport.PeerConnected += OnPeerConnected;
-        _transport.PeerData += OnPeerData;
-        _transport.PeerDisconnected += OnPeerDisconnected;
-        _transport.PeerFailed += OnPeerFailed;
-        AddChild(_transport);
+        // Hand the live signaling + transport to SessionContext so they survive
+        // ChangeSceneToFile, then enter the game. Unsubscribe our own handlers
+        // first: the socket lives on, but this lobby is about to be freed.
+        UnsubscribeSignaling();
+        ctx.AdoptNet(_signaling, _transport);
+        _signaling = null!;
+        _transport = null;
+        _leaving = true; // handing off, not tearing down
 
-        _transport.Connect(SessionContext.Instance.PlayerId, peers);
-        ShowStatus($"Connecting to {_expectedPeers} peer(s)…");
+        GetTree().ChangeSceneToFile("res://src/game/GameScene.tscn");
     }
 
-    // ---- WebRTC mesh callbacks (main thread; transport polls in _Process) ----
-
-    private const string Ping = "ping:";
-    private const string Pong = "pong:";
-
-    private void OnPeerConnected(string peerId)
+    /// <summary>Detach every signaling handler this lobby installed. The socket
+    /// is being handed to SessionContext and keeps emitting; this scene must not
+    /// be called after it is freed. (The transport's own offer/answer/ice
+    /// subscriptions live on the transport node and travel with it.)</summary>
+    private void UnsubscribeSignaling()
     {
-        _connectedPeers.Add(peerId);
-        // Kick the round-trip: send a ping the peer will pong back.
-        _transport?.Send(peerId, Encoding.UTF8.GetBytes(Ping + SessionContext.Instance.PlayerId));
-        RenderTransportStatus();
+        _signaling.Identified -= OnIdentified;
+        _signaling.PeerJoined -= OnPeerJoined;
+        _signaling.PeerLeft -= OnPeerLeft;
+        _signaling.HostChanged -= OnHostChanged;
+        _signaling.StartSignaling -= OnStartSignaling;
+        _signaling.SessionEnded -= OnSessionEnded;
+        _signaling.Kicked -= OnKicked;
+        _signaling.Closed -= OnClosed;
     }
 
-    private void OnPeerData(string peerId, byte[] data)
-    {
-        var msg = Encoding.UTF8.GetString(data);
-        if (msg.StartsWith(Ping))
-            _transport?.Send(peerId, Encoding.UTF8.GetBytes(Pong + SessionContext.Instance.PlayerId));
-        else if (msg.StartsWith(Pong))
-        {
-            _echoedPeers.Add(peerId);
-            RenderTransportStatus();
-        }
-    }
+    private void OnSessionEnded(string reason) => LeaveToMenu($"Session ended ({reason}).");
 
-    private void OnPeerDisconnected(string peerId)
-    {
-        _connectedPeers.Remove(peerId);
-        _echoedPeers.Remove(peerId);
-        RenderTransportStatus();
-    }
-
-    private void OnPeerFailed(string peerId)
-    {
-        _connectedPeers.Remove(peerId);
-        _echoedPeers.Remove(peerId);
-        GD.Print($"[lobby] peer {peerId} connection failed (likely NAT without TURN).");
-        RenderTransportStatus();
-    }
-
-    private void RenderTransportStatus() =>
-        ShowStatus($"WebRTC: {_connectedPeers.Count}/{_expectedPeers} connected · {_echoedPeers.Count} echo OK");
+    private void OnKicked(string reason) => LeaveToMenu($"Removed from session ({reason}).");
 
     private void OnClosed(int code, string reason)
     {
