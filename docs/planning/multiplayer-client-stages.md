@@ -96,36 +96,51 @@ token in the WS `identify`) and TURN.
 
 ---
 
-## Stage 3 — Ball simulation + the swappable view (2D now)
+## Stage 3 — Extended-mode gameplay ✅
 
-**Goal:** an actual playable round, rendered in 2D, architected so 3D is a
-later view swap rather than a rewrite.
+**Delivers:** a playable Extended-mode round over the Stage-2 mesh, rendered in
+2D, architected so 3D is a later view swap. Full rules + the networking model
+are documented in [`../architecture/extended-mode.md`](../architecture/extended-mode.md)
+(the canonical picture is `Example Imgs/GameMode Extended.png`).
 
-**The sim-on-plane architecture (committed decision):**
+**The committed model — per-screen, not a shared arena:** each player renders
+**only their own screen**; a ball lives on **one screen at a time** and is handed
+to a peer when it crosses a shared edge.
 
 ```text
-GameState  (plain data — no Godot nodes)
-  ball:    { x, y, vx, vy }
-  paddles: [ ... ]
+GameState  (plain data — no Godot nodes; per screen, multi-ball-ready)
+  balls:   [ { id, pos, vel, lastHitter } ]
+  paddle:  bottom-anchored (this player's goal); edges: portal(peer) | wall | goal
      |
      v  (observed by)
 IGameView  <-- swappable
-  ├─ View2D : Node2D    (Stage 3 — render with Vector2)
+  ├─ View2D : Node2D    (this stage — render with Vector2)
   └─ View3D : Node3D    (later  — map the same data to Vector3, z fixed)
 
-Transport/Simulation talk to GameState, never to the view.
+GameSimulation steps GameState; NetGameController carries handoffs over
+IPeerTransport and scores over the signaling socket. Neither touches the view.
 ```
 
-- Keep authoritative ball/paddle state as plain data on an abstract 2D
-  plane. The view *observes* and draws; it never owns the truth.
-- Networking writes peer updates into `GameState`; the view reads from it.
-- Apply the sync techniques already designed in
-  [`game-architecture-summary.md`](../architecture/game-architecture-summary.md):
-  **dead reckoning** (keep simulating from last known velocity during
-  packet delay) and **reconciliation** (lerp small corrections over a few
-  frames, snap large ones).
-- Adding 3D later = implement `View3D` and map `(x, y)` → `Vector3`. The
-  simulation and networking are untouched.
+- **Bottom = your goal** (paddle above it); **top/right/left** are portals to
+  peers or trig-reflecting walls. Edge→peer map is built from the actual roster
+  at Start (2–4 players; empty slots are walls).
+- **Ball handoff:** crossing a portal = a directed `Send` to that one peer; the
+  ball re-enters their screen inward via a frame-independent (perp/tang/along)
+  transform (`BallTransform`), fast-forwarded by transit time. Because a ball is
+  only drawn on one screen, there is **no contested-ball reconciliation and no
+  continuous ball-state stream** — simpler than a shared-arena design.
+- **Scoring is server-relayed:** the scored-on client reports the last hitter;
+  the server holds the authoritative tally and broadcasts `ScoreUpdate`.
+  Self-goals don't count. (This is why the score path differs from the older
+  P2P sketch in `game-architecture-summary.md`.)
+- **Entered from the lobby Start transition** (no solo mode this stage); the
+  Stage-2 ping/pong heartbeat was removed.
+- **3D later** = implement `View3D` and map `(x, y)` → `Vector3`; simulation and
+  networking are untouched.
+
+**Deferred from Stage 3** (see `extended-mode.md`): multi-ball (needs
+globally-unique ball ids), solo/AI opponent, a ball-speed cap, and a serve gate
+until peers connect.
 
 ---
 
