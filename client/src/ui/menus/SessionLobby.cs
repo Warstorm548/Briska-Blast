@@ -59,6 +59,8 @@ public partial class SessionLobby : Control
         _signaling.SessionEnded += OnSessionEnded;
         _signaling.Kicked += OnKicked;
         _signaling.Closed += OnClosed;
+        _signaling.Reconnecting += OnReconnecting;
+        _signaling.Reconnected += OnReconnected;
 
         var ctx = SessionContext.Instance;
         _signaling.Connect(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
@@ -102,6 +104,12 @@ public partial class SessionLobby : Control
         SessionContext.Instance.HostPlayerId = playerId;
         Render();
     }
+
+    // The WS dropped but the client is re-dialing (transient blip) rather than
+    // leaving — surface it on the status line instead of bouncing to the menu.
+    private void OnReconnecting() => ShowStatus("Reconnecting…");
+
+    private void OnReconnected() => ShowStatus("");
 
     private void OnStartSignaling(string gamemode, int playerCount, string[] peers)
     {
@@ -161,6 +169,8 @@ public partial class SessionLobby : Control
         _signaling.SessionEnded -= OnSessionEnded;
         _signaling.Kicked -= OnKicked;
         _signaling.Closed -= OnClosed;
+        _signaling.Reconnecting -= OnReconnecting;
+        _signaling.Reconnected -= OnReconnected;
     }
 
     private void OnSessionEnded(string reason) => LeaveToMenu($"Session ended ({reason}).");
