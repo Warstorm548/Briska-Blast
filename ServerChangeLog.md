@@ -5,6 +5,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.0] — 2026-05-29
+
+Stage 4 of the multiplayer client (server side): **server-authoritative host
+promotion with a reconnect grace window**, plus the deferred mid-game joiner
+roster cleanup. See
+[`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+
+### Added
+
+- **`ServerMsg::HostReconnecting { player_id, grace_secs }` / `HostReconnected
+  { player_id }`** signaling frames. When a host's WebSocket drops mid-game
+  (past Waiting), the server broadcasts `HostReconnecting` and arms a 30s grace
+  window instead of leaving the session with a dead host; if the host
+  re-Identifies in time, `HostReconnected` clears it.
+- **`SignalHub` host-grace registry** — a cancellable per-`(code, host)` handle
+  (tokio `oneshot`). `arm_host_grace` / `take_host_grace` form a single-winner
+  handoff between the reconnect path and the grace timer, so promotion can never
+  double-fire against a reconnect. Three unit tests pin it.
+- **`promote_or_end_active`** — on grace expiry (or an explicit mid-game host
+  `Leave`, which promotes immediately), an atomic Lua script promotes the
+  **oldest still-connected joiner** in chronological join order and broadcasts
+  `HostChanged`, or ends the session (`SessionEnded { host_disconnect }`) if
+  fewer than two connected players remain. Guarded on the departing player still
+  being the host so a double disconnect can't promote twice.
+
+### Changed
+
+- **Host WS disconnect** (`signaling/ws.rs`) now branches on session state:
+  Waiting still ends the lobby immediately; past Waiting it promotes / arms grace.
+- **Joiner mid-game roster cleanup** (the previously deferred "Joiner WS
+  disconnect during Starting/Active" item): an **explicit** joiner `Leave` past
+  Waiting now frees the slot (`remove_joiner_on_leave`, generalised from
+  `remove_joiner_if_waiting`) and ends the session if it leaves the host alone.
+  A **transient** drop still keeps the slot for reconnect.
+
+### Notes
+
+- The 30s window is a const (`HOST_GRACE`); promoting it to runtime config is a
+  later refinement. Becomes user-visible with game client **v0.7.0+** (WS
+  reconnect + grace UI). No new dependencies.
+
+---
+
 ## [0.8.0] — 2026-05-27
 
 Server-relayed score channel — the server piece of Stage 3 gameplay.

@@ -144,22 +144,51 @@ until peers connect.
 
 ---
 
-## Stage 4 — Server-authoritative host promotion
+## Stage 4 — Server-authoritative host promotion ✅
 
-**Goal:** automatic promotion when the host is lost unexpectedly (the
-deferred half of promotion; Stage 1 only does *voluntary* handoff).
+**Delivers:** a live match now **survives losing its host**. On an unexpected
+host WebSocket drop (past Waiting) the server opens a **30s reconnect grace
+window** (`HostReconnecting`); if the host re-Identifies in time it resumes
+unchanged (`HostReconnected`), otherwise the next player in chronological join
+order is **promoted** (`HostChanged`) — or the session ends if fewer than two
+connected players remain. A deliberate mid-game host `Leave` promotes
+immediately. Shipped as server **v0.9.0** + game **v0.7.0**.
 
-**Notes:**
-- The design is in `game-architecture-summary.md` ("Host Promotion Queue"):
-  on host disconnect during an active session, promote the next player in
-  chronological join order; if only one player remains, end the session.
-- Join order is already tracked (`JoinerEntry.joined_at_ms`). The voluntary
-  transfer added in Stage 1 puts a demoted host at the back of that order.
-- Touches `server/src/signaling/ws.rs` (the disconnect path currently only
-  mutates the SignalHub past Waiting — see the "Joiner WS disconnect during
-  Starting/Active" entry in
-  [`session-multiplayer-edge-cases.md`](../architecture/session-multiplayer-edge-cases.md))
-  and adds a broadcast the client reacts to (reuse `HostChanged`).
+**How it was built:**
+- **Server** (`server/src/signaling/`): host disconnect branches on session
+  state. Waiting still tears the lobby down; past Waiting it either promotes (on
+  an explicit `Leave`) or arms a grace timer. `SignalHub` holds a cancellable
+  per-`(code, host)` grace handle (tokio `oneshot`); the reconnect path and the
+  timer race on a single-winner `take_host_grace`, so promotion can't double-fire.
+  `promote_or_end_active` is an atomic Lua script that picks the **oldest
+  still-connected joiner** (skipping ghosts whose WS is gone) and requires ≥2
+  connected players to continue.
+- **Client WS reconnect** (`client/src/net/SignalingClient.cs`): the grace window
+  is only reachable because the client now **re-dials** a dropped session WS
+  (re-sending `identify`) for ~30s instead of bailing to the menu — surfacing
+  `Reconnecting`/`Reconnected`. This delivers the deferred "WS reconnect" item
+  from [`session-multiplayer-edge-cases.md`](../architecture/session-multiplayer-edge-cases.md).
+  Only a deliberate close or an auth-level rejection (4401/4403/4404) is terminal.
+- **In-game UI** (`client/src/game/GameScene.cs`): a "Reconnecting…" /
+  "Host reconnecting…" overlay; `HostChanged` updates the local host notion;
+  Escape leaves the match deliberately. The ball keeps flowing over the
+  independent WebRTC mesh while the WS reconnects.
+- **Joiner roster cleanup** folded in: an explicit joiner `Leave` past Waiting
+  now frees the slot and ends the session if the host is left alone (the
+  previously-deferred "Joiner WS disconnect during Starting/Active" concern). A
+  transient joiner drop keeps the slot for reconnect.
+
+Join order was already tracked (`JoinerEntry.joined_at_ms`); the Stage-1
+voluntary transfer puts a demoted host at the back of that order, and promotion
+consumes the front.
+
+**Deferred from Stage 4:**
+- **30s grace is a const** (`HOST_GRACE`), not runtime config.
+- **Process-death recovery:** reconnect handles a transient WS blip (process
+  alive); re-establishing the WebRTC mesh after a full process restart mid-game
+  is out of scope — grace-expiry → promotion covers permanent loss.
+- **Host reconnect after promotion:** an ex-host who returns after being promoted
+  away is no longer in the roster, so their re-Identify is rejected.
 
 ---
 

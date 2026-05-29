@@ -27,9 +27,9 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 
 | Component | Status |
 |---|---|
-| Server foundation | ✓ Complete (v0.8.0) — see `ServerChangeLog.md` |
+| Server foundation | ✓ Complete (v0.9.0) — see `ServerChangeLog.md` |
 | Shared crate | ✓ Complete (v0.2.0 — protocol types, player/session types) |
-| Game client | In progress (v0.6.0) — multiplayer lobby + WebRTC mesh behind `IPeerTransport` + a playable **Extended-mode** round (per-screen sim, ball handoff between screens, server-relayed scoring). See `GameChangeLog.md`, `docs/architecture/extended-mode.md`, and `docs/planning/multiplayer-client-stages.md` |
+| Game client | In progress (v0.7.0) — multiplayer lobby + WebRTC mesh behind `IPeerTransport` + a playable **Extended-mode** round (per-screen sim, ball handoff between screens, server-relayed scoring) + server-authoritative host promotion with a reconnect grace window. See `GameChangeLog.md`, `docs/architecture/extended-mode.md`, and `docs/planning/multiplayer-client-stages.md` |
 | Launcher | In progress (v0.11.0) — identity (+ game handoff), multi-channel install/update, self-update, Windows firewall prompt; see `LauncherChangeLog.md` |
 
 **Build order:** Server → Game → Launcher (each depends on the previous).
@@ -52,6 +52,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Game change history | [`GameChangeLog.md`](GameChangeLog.md) |
 | Launcher change history | [`LauncherChangeLog.md`](../LauncherChangeLog.md) |
 | Deferred work and post-deployment follow-ups | [`docs/planning/roadmap.md`](docs/planning/roadmap.md) |
+| Known bugs in current builds | [`docs/planning/known-bugs.md`](docs/planning/known-bugs.md) |
 | Multiplayer client staged build order (lobby → WebRTC → gameplay) | [`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md) |
 
 ## Key Design Constraints
