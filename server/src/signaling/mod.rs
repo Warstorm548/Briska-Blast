@@ -144,16 +144,29 @@ impl SignalHub {
     }
 
     /// Arm a host-reconnect grace timer for `(code, host_id)` and return the
-    /// receiver the timer task selects on. The returned receiver resolves (with
-    /// an error) as soon as the stored sender is dropped — i.e. when
+    /// receiver the timer task selects on — or `None` if the host already has a
+    /// live socket in the room, in which case grace must **not** be armed (a
+    /// stale disconnect path, e.g. a half-open old socket cleaned up after the
+    /// host already reconnected on a new connection, would otherwise promote a
+    /// host that is actually present). The returned receiver resolves (with an
+    /// error) as soon as the stored sender is dropped — i.e. when
     /// `take_host_grace` removes the entry — so the task can stop waiting and
     /// exit the moment the host reconnects. Overwrites any existing entry for
     /// the same key (which cancels the older timer).
-    pub async fn arm_host_grace(&self, code: &str, host_id: &str) -> oneshot::Receiver<()> {
+    pub async fn arm_host_grace(&self, code: &str, host_id: &str) -> Option<oneshot::Receiver<()>> {
+        if self
+            .rooms
+            .read()
+            .await
+            .get(code)
+            .is_some_and(|r| r.senders.contains_key(host_id))
+        {
+            return None;
+        }
         let (tx, rx) = oneshot::channel();
         let mut grace = self.host_grace.write().await;
         grace.insert((code.to_string(), host_id.to_string()), tx);
-        rx
+        Some(rx)
     }
 
     /// Remove the grace entry for `(code, host_id)` and report whether one was
@@ -380,8 +393,19 @@ mod tests {
         // host reconnects. take_host_grace drops the sender, which must resolve
         // the receiver (with an error) rather than leave it pending forever.
         let hub = SignalHub::default();
-        let rx = hub.arm_host_grace("ABC", "0000001").await;
+        let rx = hub.arm_host_grace("ABC", "0000001").await.expect("armed");
         assert!(hub.take_host_grace("ABC", "0000001").await);
         assert!(rx.await.is_err());
+    }
+
+    #[tokio::test]
+    async fn arm_host_grace_skips_when_host_still_connected() {
+        // A stale disconnect path must not arm a promotion timer for a host that
+        // already has a live socket (reconnected on a new connection).
+        let hub = SignalHub::default();
+        let (_conn, _rx) = hub.join_room("ABC", "0000001").await;
+        assert!(hub.arm_host_grace("ABC", "0000001").await.is_none());
+        // Nothing was armed, so a later take finds no entry.
+        assert!(!hub.take_host_grace("ABC", "0000001").await);
     }
 }

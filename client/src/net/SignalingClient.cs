@@ -251,6 +251,16 @@ public partial class SignalingClient : Node
                 break; // still dialing
 
             case WebSocketPeer.State.Closed:
+                // A reconnect attempt rejected at the app level (auth / not in
+                // this session — e.g. an ex-host promoted away) can't succeed by
+                // retrying, so bail immediately rather than spin out the window.
+                int code = _ws.GetCloseCode();
+                if (IsTerminalClose(code))
+                {
+                    _reconnecting = false;
+                    EmitClosedOnce(code, _ws.GetCloseReason());
+                    return;
+                }
                 ulong now = Time.GetTicksMsec();
                 if (now - _reconnectStartMsec >= ReconnectWindowMsec)
                 {

@@ -219,7 +219,13 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
 /// path takes the grace entry (waking this task early); otherwise the timer
 /// fires and promotes the next player (or ends the session).
 async fn arm_host_grace(state: &AppState, code: &str, host_id: &str) {
-    let grace_rx = state.signal_hub.arm_host_grace(code, host_id).await;
+    let Some(grace_rx) = state.signal_hub.arm_host_grace(code, host_id).await else {
+        // The host already has a live socket (it reconnected on a new connection
+        // before this stale disconnect path ran) — don't arm or announce grace
+        // against a host that's actually present.
+        tracing::info!("ws: host {} already present in session {}, grace not armed", host_id, code);
+        return;
+    };
 
     state
         .signal_hub
