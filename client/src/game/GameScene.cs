@@ -38,6 +38,13 @@ public partial class GameScene : Node2D
     private NetGameController? _controller;
     private bool _leaving;
 
+    // Host-loss grace overlay (Stage 4). A client sees at most one of these at a
+    // time: it either lost its own socket (self) or sees the host's loss (host).
+    private CanvasLayer _overlayLayer = null!;
+    private Label _overlay = null!;
+    private bool _selfReconnecting;
+    private bool _hostReconnecting;
+
     public override void _Ready()
     {
         var ctx = SessionContext.Instance;
@@ -59,14 +66,23 @@ public partial class GameScene : Node2D
         _view = new View2D();
         AddChild(_view);
 
+        BuildOverlay();
+
         // Subscribe to the adopted signaling socket's lifecycle so a mid-game
-        // session end / kick / drop returns to the menu instead of stranding us.
+        // session end / kick / terminal drop returns to the menu instead of
+        // stranding us. HostChanged / *Reconnecting keep our host notion and the
+        // overlay honest as the server's host-loss grace plays out (Stage 4).
         _signaling = ctx?.Signaling;
         if (_signaling != null)
         {
             _signaling.SessionEnded += OnSessionEnded;
             _signaling.Kicked += OnKicked;
             _signaling.Closed += OnClosed;
+            _signaling.HostChanged += OnHostChangedInGame;
+            _signaling.HostReconnecting += OnHostReconnecting;
+            _signaling.HostReconnected += OnHostReconnected;
+            _signaling.Reconnecting += OnSelfReconnecting;
+            _signaling.Reconnected += OnSelfReconnected;
         }
 
         // Net glue: handoff send/receive over the transport + server-relayed
@@ -94,6 +110,11 @@ public partial class GameScene : Node2D
             _signaling.SessionEnded -= OnSessionEnded;
             _signaling.Kicked -= OnKicked;
             _signaling.Closed -= OnClosed;
+            _signaling.HostChanged -= OnHostChangedInGame;
+            _signaling.HostReconnecting -= OnHostReconnecting;
+            _signaling.HostReconnected -= OnHostReconnected;
+            _signaling.Reconnecting -= OnSelfReconnecting;
+            _signaling.Reconnected -= OnSelfReconnected;
             _signaling = null;
         }
     }
@@ -119,6 +140,76 @@ public partial class GameScene : Node2D
         GetTree().ChangeSceneToFile("res://src/ui/menus/MainMenu.tscn");
     }
 
+    private void LeaveMatch()
+    {
+        // Deliberate quit: tell the server (Leave) so peers promote immediately
+        // instead of waiting out the host-reconnect grace, then return to menu.
+        _signaling?.SendLeave();
+        LeaveToMenu("");
+    }
+
+    // ---- host-loss grace UI (Stage 4) ----
+
+    private void OnHostChangedInGame(string playerId)
+    {
+        // Promotion landed (or a voluntary transfer): keep our host notion
+        // current and clear the "host reconnecting…" overlay.
+        var ctx = SessionContext.Instance;
+        if (ctx != null)
+            ctx.HostPlayerId = playerId;
+        _hostReconnecting = false;
+        UpdateOverlay();
+    }
+
+    private void OnHostReconnecting(string playerId, int graceSecs)
+    {
+        _hostReconnecting = true;
+        UpdateOverlay();
+    }
+
+    private void OnHostReconnected(string playerId)
+    {
+        _hostReconnecting = false;
+        UpdateOverlay();
+    }
+
+    private void OnSelfReconnecting()
+    {
+        _selfReconnecting = true;
+        UpdateOverlay();
+    }
+
+    private void OnSelfReconnected()
+    {
+        _selfReconnecting = false;
+        UpdateOverlay();
+    }
+
+    private void BuildOverlay()
+    {
+        _overlayLayer = new CanvasLayer { Layer = 100 };
+        AddChild(_overlayLayer);
+        _overlay = new Label
+        {
+            Visible = false,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _overlay.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        _overlay.AddThemeFontSizeOverride("font_size", 64);
+        _overlayLayer.AddChild(_overlay);
+    }
+
+    private void UpdateOverlay()
+    {
+        string msg =
+            _selfReconnecting ? "Reconnecting…" :
+            _hostReconnecting ? "Host reconnecting…" :
+            "";
+        _overlay.Text = msg;
+        _overlay.Visible = msg.Length > 0;
+    }
+
     /// <summary>Bottom is the goal; present peers (sorted for determinism) take
     /// Top/Right/Left; any unfilled slot is a wall.</summary>
     private void BuildEdges(SessionContext? ctx)
@@ -140,6 +231,14 @@ public partial class GameScene : Node2D
     public override void _PhysicsProcess(double delta)
     {
         var dt = (float)delta;
+
+        // Escape leaves the match deliberately — sends Leave so peers promote
+        // immediately rather than waiting out the host-reconnect grace.
+        if (Input.IsActionJustPressed("ui_cancel"))
+        {
+            LeaveMatch();
+            return;
+        }
 
         // Paddle: Left/Right arrows. GetAxis returns +1 toward paddle_right.
         float dir = Input.GetAxis("paddle_left", "paddle_right");

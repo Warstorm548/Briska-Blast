@@ -9,6 +9,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.0] — 2026-05-29
+
+Stage 4 of multiplayer (client side): the game now **survives host loss** and a
+transient WebSocket drop. Pairs with the matchmaking server at **v0.9.0+**. See
+[`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+
+### Added
+
+- **WS auto-reconnect** (`src/net/SignalingClient.cs`): an unexpected socket drop
+  no longer bounces straight to the menu. The client re-dials the same session WS
+  and re-sends `identify` for ~30s (matching the server's host grace), emitting
+  `Reconnecting` / `Reconnected`; only a deliberate close or an auth-level
+  rejection (4401/4403/4404) is terminal. Handles the new `host_reconnecting` /
+  `host_reconnected` frames.
+- **Host-loss grace UI** (`src/game/GameScene.cs`): a "Reconnecting…" /
+  "Host reconnecting…" overlay tracks the grace window. The ball keeps flowing
+  over the independent WebRTC mesh while the WS reconnects.
+- **Deliberate match leave**: Escape sends `Leave` then returns to the menu, so
+  peers promote a new host immediately instead of waiting out the grace.
+
+### Changed
+
+- **`GameScene`** reacts to `HostChanged` mid-game (updates the local host
+  notion). **`SessionLobby`** surfaces reconnect status on its status line — a
+  lobby blip now reconnects rather than dropping to the menu.
+
+### Notes
+
+- Reconnect recovers a transient WS blip while the process is alive; full
+  mid-game WebRTC re-meshing after a process death is out of scope (the server's
+  grace-expiry → promotion handles permanent loss).
+- A separate display-aspect ball-position bug is tracked in
+  [`docs/planning/known-bugs.md`](docs/planning/known-bugs.md).
+
 ## [0.6.0] — 2026-05-27
 
 Stage 3 of multiplayer: a playable **Extended-mode** round over the WebRTC

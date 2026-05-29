@@ -108,6 +108,18 @@ Player B disconnects → Player C becomes host
 Player C disconnects → 1 player remains → session ends
 ```
 
+> **As shipped (server v0.9.0 / game v0.7.0):** implemented for the **host**. On
+> an unexpected host WS drop mid-game the server arms a 30s grace window and, if
+> the host doesn't return, promotes the oldest **still-connected** joiner in join
+> order — or ends the session when fewer than two connected players remain. The
+> grace is only useful because the Godot client now re-dials a dropped session WS
+> for ~30s (see [`session-multiplayer-edge-cases.md`](session-multiplayer-edge-cases.md)).
+> The "barrier on a disconnected peer's edge" is the portal→wall flip in
+> `NetGameController.OnPeerLost`. Not yet built: per-player `reconnect_timer`
+> state persisted in the session object (the grace lives in the in-memory
+> `SignalHub`, not Redis), and a non-host rejoining after their slot was freed by
+> an explicit leave.
+
 **Score Validation:**
 - Ball packets sent to both receiving player AND server
 - Server independently calculates expected trajectory
@@ -313,6 +325,14 @@ Player A disconnects
     → Confirms genuine Player A
     → Restores host status if applicable
 ```
+
+> **As shipped (server v0.9.0 / game v0.7.0):** the re-`Identify` already
+> re-validates `player_id` + `secret_token` on every WS (re)connection, and a
+> host returning within the grace window keeps its role — the pending promotion
+> timer is cancelled, so the role is never lost rather than "restored." The 30s
+> grace is enforced server-side for the host; the per-player `reconnect_timer`
+> field sketched above is not persisted (grace lives in the in-memory
+> `SignalHub`, not the Redis session).
 
 ---
 

@@ -10,8 +10,7 @@ exhibits today and whether they're considered correct. Treat the **Open
 questions** section as decisions the project has chosen to defer; each
 records the current default and what would have to change.
 
-Last reviewed: introduced alongside the WebSocket signaling work
-(server v0.5.0).
+Last reviewed: server v0.9.0 — Stage 4 host promotion + client WS reconnect.
 
 ---
 
@@ -47,11 +46,14 @@ re-run `concurrent_join.rs`.
 
 ### WS reconnect
 
-Launchers remember the session code. When a WebSocket drops (network
-blip, server restart, etc.), the launcher opens a new WS and sends
-`Identify` again. The server has no idempotency token for this —
-re-Identifying with the same `player_id` is treated as a duplicate
-identify (see below).
+**Now implemented client-side (game v0.7.0, Stage 4).** When a session WS drops
+unexpectedly, the Godot client re-dials the same `/ws/session/{code}` and
+re-sends `Identify` for ~30s before giving up (only a deliberate close or an
+auth-level 4401/4403/4404 is terminal). This is what makes the host-reconnect
+grace below reachable. The server still has no idempotency token —
+re-Identifying with the same `player_id` is treated as a duplicate identify
+(see below) — but when a *host* returns within its grace window, the reconnect
+path additionally cancels the pending promotion timer (`take_host_grace`).
 
 ### Host WS disconnect during Waiting
 
@@ -64,6 +66,19 @@ on host disconnect, the server checks the session status. If it's
 still Waiting, the Redis session key is deleted and `SessionEnded
 { reason: "host_disconnect" }` is broadcast to remaining peers. Their
 WS handlers see the broadcast and propagate it to clients.
+
+### Host WS disconnect during Starting / Active
+
+**Implemented in Stage 4 (server v0.9.0).** Past Waiting the session must survive
+host loss. On the host's WS dropping, the server broadcasts `HostReconnecting
+{ grace_secs: 30 }` and arms a 30s grace timer (`ws.rs::arm_host_grace`). If the
+host re-Identifies in time, the reconnect path cancels the timer and broadcasts
+`HostReconnected`. Otherwise `promote_or_end_active` runs: promote the oldest
+**still-connected** joiner in chronological join order (`HostChanged`), or, if
+fewer than two connected players remain, end the session (`SessionEnded
+{ reason: "host_disconnect" }`). A deliberate mid-game host `Leave` skips the
+grace and promotes immediately. The grace registry's single-winner
+`take_host_grace` guarantees promotion can't race a reconnect.
 
 ### Joiner WS disconnect during Waiting
 
@@ -89,14 +104,18 @@ there is the deferred auto-promotion concern (see below).
 
 ### Joiner WS disconnect during Starting / Active
 
-Currently the server broadcasts `PeerLeft` and removes the joiner from
-the SignalHub, but does **not** mutate `Session.joiners` in Redis.
+**Updated in Stage 4 (server v0.9.0).** The server now distinguishes the two
+cases, mirroring the Waiting semantics:
 
-This is intentional and deferred: mutating the session JSON from the WS
-disconnect path races with `/start` (which also writes the session), and
-the cleanup logic deserves its own focused commit. Until then, remaining
-peers see `PeerLeft` and can route around the loss in their WebRTC mesh,
-but a subsequent `GET /session/<code>` still lists the departed player.
+- **Explicit `Leave`:** `remove_joiner_on_leave` frees the slot in Redis (one
+  atomic Lua script, so it can't corrupt a concurrent `/start` write) and ends
+  the session if the leave empties the roster, leaving the host alone
+  (`SessionEnded { reason: "last_player_left" }`). `GET /session/<code>` is now
+  accurate after a deliberate mid-game leave.
+- **Transient drop:** the slot is **kept** for reconnect (the client re-dials —
+  see "WS reconnect"). Remaining peers see `PeerLeft` and wall off the departed
+  player's portal client-side (`NetGameController.OnPeerLost`) until they return;
+  a `GET /session/<code>` still lists them, by design, so the slot survives.
 
 ### WebRTC fails for one peer to all others (symmetric NAT)
 
