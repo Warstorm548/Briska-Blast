@@ -3,7 +3,7 @@ pub mod ws;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, oneshot, RwLock};
 
 pub use protocol::ServerMsg;
 
@@ -20,6 +20,12 @@ pub use protocol::ServerMsg;
 pub struct SignalHub {
     rooms: RwLock<HashMap<String, Room>>,
     next_conn_id: AtomicU64,
+    /// Pending host-reconnect grace timers, keyed by `(session_code,
+    /// host_player_id)`. When a host's WS drops mid-game, the disconnect path
+    /// arms a timer here; the host re-Identifying (or the timer firing) "takes"
+    /// the entry. Dropping the stored sender wakes the waiting timer task so it
+    /// exits promptly on reconnect. Ephemeral, like the rooms map.
+    host_grace: RwLock<HashMap<(String, String), oneshot::Sender<()>>>,
 }
 
 #[derive(Default)]
@@ -136,6 +142,33 @@ impl SignalHub {
             .map(|r| r.senders.keys().cloned().collect())
             .unwrap_or_default()
     }
+
+    /// Arm a host-reconnect grace timer for `(code, host_id)` and return the
+    /// receiver the timer task selects on. The returned receiver resolves (with
+    /// an error) as soon as the stored sender is dropped — i.e. when
+    /// `take_host_grace` removes the entry — so the task can stop waiting and
+    /// exit the moment the host reconnects. Overwrites any existing entry for
+    /// the same key (which cancels the older timer).
+    pub async fn arm_host_grace(&self, code: &str, host_id: &str) -> oneshot::Receiver<()> {
+        let (tx, rx) = oneshot::channel();
+        let mut grace = self.host_grace.write().await;
+        grace.insert((code.to_string(), host_id.to_string()), tx);
+        rx
+    }
+
+    /// Remove the grace entry for `(code, host_id)` and report whether one was
+    /// pending. This is the single-winner handoff between the two ways a grace
+    /// window ends: the host re-Identifying calls this to *cancel* (true → it
+    /// was still pending, so broadcast `HostReconnected`), and the timer firing
+    /// calls this to *claim* (true → it won the race, so promote). Whichever
+    /// runs first gets `true`; the loser gets `false` and does nothing, so
+    /// promotion can never double-fire against a reconnect.
+    pub async fn take_host_grace(&self, code: &str, host_id: &str) -> bool {
+        let mut grace = self.host_grace.write().await;
+        grace
+            .remove(&(code.to_string(), host_id.to_string()))
+            .is_some()
+    }
 }
 
 #[cfg(test)]
@@ -181,8 +214,14 @@ mod tests {
         let (_, mut rx_a) = hub.join_room("ABC", "0000001").await;
         let (_, mut rx_b) = hub.join_room("ABC", "0000002").await;
 
-        hub.broadcast("ABC", ServerMsg::PeerJoined { player_id: "X".into() }, None)
-            .await;
+        hub.broadcast(
+            "ABC",
+            ServerMsg::PeerJoined {
+                player_id: "X".into(),
+            },
+            None,
+        )
+        .await;
 
         assert!(matches!(rx_a.try_recv(), Ok(ServerMsg::PeerJoined { .. })));
         assert!(matches!(rx_b.try_recv(), Ok(ServerMsg::PeerJoined { .. })));
@@ -196,7 +235,9 @@ mod tests {
 
         hub.broadcast(
             "ABC",
-            ServerMsg::PeerJoined { player_id: "X".into() },
+            ServerMsg::PeerJoined {
+                player_id: "X".into(),
+            },
             Some("0000001"),
         )
         .await;
@@ -301,12 +342,46 @@ mod tests {
         let (_, _rx) = hub.join_room("ABC", "0000001").await;
         // 0000002 never joined — its report mints no tally entry.
         assert!(hub.record_score("ABC", "0000002").await.is_none());
-        assert!(hub.record_score("ABC", "0000001").await.unwrap().get("0000002").is_none());
+        assert!(hub
+            .record_score("ABC", "0000001")
+            .await
+            .unwrap()
+            .get("0000002")
+            .is_none());
     }
 
     #[tokio::test]
     async fn record_score_for_unknown_room_returns_none() {
         let hub = SignalHub::default();
         assert!(hub.record_score("NOPE", "0000001").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn arm_then_take_host_grace_returns_true_once() {
+        let hub = SignalHub::default();
+        let _rx = hub.arm_host_grace("ABC", "0000001").await;
+        // First take claims the entry; a second take finds nothing.
+        assert!(hub.take_host_grace("ABC", "0000001").await);
+        assert!(!hub.take_host_grace("ABC", "0000001").await);
+    }
+
+    #[tokio::test]
+    async fn take_host_grace_unknown_key_is_false() {
+        let hub = SignalHub::default();
+        assert!(!hub.take_host_grace("ABC", "0000001").await);
+        // A grace armed for one host is not taken by a different host id.
+        let _rx = hub.arm_host_grace("ABC", "0000001").await;
+        assert!(!hub.take_host_grace("ABC", "0000002").await);
+    }
+
+    #[tokio::test]
+    async fn taking_host_grace_wakes_the_waiting_receiver() {
+        // The timer task selects on this receiver so it can exit early when the
+        // host reconnects. take_host_grace drops the sender, which must resolve
+        // the receiver (with an error) rather than leave it pending forever.
+        let hub = SignalHub::default();
+        let rx = hub.arm_host_grace("ABC", "0000001").await;
+        assert!(hub.take_host_grace("ABC", "0000001").await);
+        assert!(rx.await.is_err());
     }
 }

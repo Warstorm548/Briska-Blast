@@ -69,10 +69,21 @@ pub enum ServerMsg {
         player_id: String,
         reason: &'static str,
     },
-    /// Broadcast when the host role moves to a different player. Currently
-    /// only fired by a voluntary `/session/:code/host` transfer; automatic
-    /// join-order promotion on host disconnect is a deferred follow-up.
+    /// Broadcast when the host role moves to a different player. Fired by a
+    /// voluntary `/session/:code/host` transfer (lobby) and by automatic
+    /// join-order promotion when a disconnected host fails to return within the
+    /// grace window (`promote_or_end_active`, see `ws.rs`).
     HostChanged { player_id: String },
+    /// Broadcast when the host's WebSocket drops mid-game (past Waiting) and the
+    /// server has armed a reconnect grace window. Peers show a "host
+    /// reconnecting…" state and keep playing; the ball still flows over the
+    /// (independent) WebRTC mesh. Resolved by either `HostReconnected` (the host
+    /// re-Identified in time) or `HostChanged` / `SessionEnded` (grace expired).
+    HostReconnecting { player_id: String, grace_secs: u64 },
+    /// Broadcast when a host that triggered `HostReconnecting` re-Identifies
+    /// within the grace window. Peers clear the "host reconnecting…" state; the
+    /// host role is unchanged.
+    HostReconnected { player_id: String },
     /// Broadcast when the host calls /start. Clients begin WebRTC negotiation
     /// on receipt. `peers` is the authoritative roster at start time.
     StartSignaling {
