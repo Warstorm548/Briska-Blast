@@ -69,6 +69,13 @@ pub enum ServerMsg {
         player_id: String,
         reason: &'static str,
     },
+    /// Broadcast when a non-host player's WebSocket drops mid-game (past
+    /// Waiting). Peers show a "a player is reconnecting…" overlay for
+    /// `grace_secs`; their slot is held for a longer rejoin window. Resolved by
+    /// either `PeerJoined` (they re-Identified and rejoin — the mesh re-meshes)
+    /// or `PeerLeft { reason: "reconnect_timeout" }` (the window elapsed). The
+    /// host's equivalent is `HostReconnecting` (which also drives promotion).
+    PeerReconnecting { player_id: String, grace_secs: u64 },
     /// Broadcast when the host role moves to a different player. Fired by a
     /// voluntary `/session/:code/host` transfer (lobby) and by automatic
     /// join-order promotion when a disconnected host fails to return within the

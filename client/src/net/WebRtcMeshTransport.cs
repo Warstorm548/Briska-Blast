@@ -80,6 +80,32 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
         }
     }
 
+    public void ResyncPeer(string peerId)
+    {
+        if (peerId == _selfId)
+            return;
+
+        // Drop any stale link (a dead WebRTC connection from before the peer
+        // dropped) so negotiation restarts cleanly.
+        if (_peers.TryGetValue(peerId, out var old))
+        {
+            old.Channel?.Close();
+            old.Pc.Close();
+            _peers.Remove(peerId);
+        }
+
+        var link = NewLink(peerId);
+        _peers[peerId] = link;
+
+        // Same deterministic-offerer rule as Connect: the smaller id offers and
+        // owns the data channel; the other answers when the offer arrives.
+        if (string.CompareOrdinal(_selfId, peerId) < 0)
+        {
+            link.Channel = link.Pc.CreateDataChannel("data");
+            link.Pc.CreateOffer();
+        }
+    }
+
     public void Send(string peerId, byte[] data)
     {
         if (_peers.TryGetValue(peerId, out var link) &&

@@ -20,12 +20,25 @@ pub use protocol::ServerMsg;
 pub struct SignalHub {
     rooms: RwLock<HashMap<String, Room>>,
     next_conn_id: AtomicU64,
-    /// Pending host-reconnect grace timers, keyed by `(session_code,
-    /// host_player_id)`. When a host's WS drops mid-game, the disconnect path
-    /// arms a timer here; the host re-Identifying (or the timer firing) "takes"
-    /// the entry. Dropping the stored sender wakes the waiting timer task so it
-    /// exits promptly on reconnect. Ephemeral, like the rooms map.
-    host_grace: RwLock<HashMap<(String, String), oneshot::Sender<()>>>,
+    /// Pending grace timers, keyed by `(session_code, player_id, kind)`. When a
+    /// player's WS drops mid-game, the disconnect path arms a timer here; the
+    /// player re-Identifying (or the timer firing) "takes" the entry. Dropping
+    /// the stored sender wakes the waiting timer task so it exits promptly on
+    /// reconnect. Two independent kinds can be pending for the same player at
+    /// once — a dropped host has both a 30s `Promotion` timer and a 2-min
+    /// `Reconnect` slot-hold — so neither cancels the other. Ephemeral, like the
+    /// rooms map.
+    grace: RwLock<HashMap<(String, String, GraceKind), oneshot::Sender<()>>>,
+}
+
+/// Which grace window an entry represents (see [`SignalHub::grace`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GraceKind {
+    /// Host-only: the 30s deadline before the next player is promoted to host.
+    Promotion,
+    /// Any dropped player: the longer slot-hold during which they may rejoin
+    /// before their session slot is freed.
+    Reconnect,
 }
 
 #[derive(Default)]
@@ -143,43 +156,48 @@ impl SignalHub {
             .unwrap_or_default()
     }
 
-    /// Arm a host-reconnect grace timer for `(code, host_id)` and return the
-    /// receiver the timer task selects on — or `None` if the host already has a
-    /// live socket in the room, in which case grace must **not** be armed (a
+    /// Arm a grace timer of `kind` for `(code, player_id)` and return the
+    /// receiver the timer task selects on — or `None` if the player already has
+    /// a live socket in the room, in which case grace must **not** be armed (a
     /// stale disconnect path, e.g. a half-open old socket cleaned up after the
-    /// host already reconnected on a new connection, would otherwise promote a
-    /// host that is actually present). The returned receiver resolves (with an
-    /// error) as soon as the stored sender is dropped — i.e. when
-    /// `take_host_grace` removes the entry — so the task can stop waiting and
-    /// exit the moment the host reconnects. Overwrites any existing entry for
+    /// player already reconnected on a new connection, would otherwise act
+    /// against a player that is actually present). The returned receiver
+    /// resolves (with an error) as soon as the stored sender is dropped — i.e.
+    /// when `take_grace` removes the entry — so the task can stop waiting and
+    /// exit the moment the player reconnects. Overwrites any existing entry for
     /// the same key (which cancels the older timer).
-    pub async fn arm_host_grace(&self, code: &str, host_id: &str) -> Option<oneshot::Receiver<()>> {
+    pub async fn arm_grace(
+        &self,
+        code: &str,
+        player_id: &str,
+        kind: GraceKind,
+    ) -> Option<oneshot::Receiver<()>> {
         if self
             .rooms
             .read()
             .await
             .get(code)
-            .is_some_and(|r| r.senders.contains_key(host_id))
+            .is_some_and(|r| r.senders.contains_key(player_id))
         {
             return None;
         }
         let (tx, rx) = oneshot::channel();
-        let mut grace = self.host_grace.write().await;
-        grace.insert((code.to_string(), host_id.to_string()), tx);
+        let mut grace = self.grace.write().await;
+        grace.insert((code.to_string(), player_id.to_string(), kind), tx);
         Some(rx)
     }
 
-    /// Remove the grace entry for `(code, host_id)` and report whether one was
-    /// pending. This is the single-winner handoff between the two ways a grace
-    /// window ends: the host re-Identifying calls this to *cancel* (true → it
-    /// was still pending, so broadcast `HostReconnected`), and the timer firing
-    /// calls this to *claim* (true → it won the race, so promote). Whichever
-    /// runs first gets `true`; the loser gets `false` and does nothing, so
-    /// promotion can never double-fire against a reconnect.
-    pub async fn take_host_grace(&self, code: &str, host_id: &str) -> bool {
-        let mut grace = self.host_grace.write().await;
+    /// Remove the `kind` grace entry for `(code, player_id)` and report whether
+    /// one was pending. This is the single-winner handoff between the two ways a
+    /// grace window ends: the player re-Identifying calls this to *cancel* (true
+    /// → it was still pending), and the timer firing calls this to *claim* (true
+    /// → it won the race, so act). Whichever runs first gets `true`; the loser
+    /// gets `false` and does nothing, so a timer can never double-fire against a
+    /// reconnect. The two kinds are independent — taking one leaves the other.
+    pub async fn take_grace(&self, code: &str, player_id: &str, kind: GraceKind) -> bool {
+        let mut grace = self.grace.write().await;
         grace
-            .remove(&(code.to_string(), host_id.to_string()))
+            .remove(&(code.to_string(), player_id.to_string(), kind))
             .is_some()
     }
 }
@@ -370,42 +388,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn arm_then_take_host_grace_returns_true_once() {
+    async fn arm_then_take_grace_returns_true_once() {
         let hub = SignalHub::default();
-        let _rx = hub.arm_host_grace("ABC", "0000001").await;
+        let _rx = hub.arm_grace("ABC", "0000001", GraceKind::Promotion).await;
         // First take claims the entry; a second take finds nothing.
-        assert!(hub.take_host_grace("ABC", "0000001").await);
-        assert!(!hub.take_host_grace("ABC", "0000001").await);
+        assert!(hub.take_grace("ABC", "0000001", GraceKind::Promotion).await);
+        assert!(!hub.take_grace("ABC", "0000001", GraceKind::Promotion).await);
     }
 
     #[tokio::test]
-    async fn take_host_grace_unknown_key_is_false() {
+    async fn take_grace_unknown_key_is_false() {
         let hub = SignalHub::default();
-        assert!(!hub.take_host_grace("ABC", "0000001").await);
-        // A grace armed for one host is not taken by a different host id.
-        let _rx = hub.arm_host_grace("ABC", "0000001").await;
-        assert!(!hub.take_host_grace("ABC", "0000002").await);
+        assert!(!hub.take_grace("ABC", "0000001", GraceKind::Promotion).await);
+        // A grace armed for one player is not taken by a different player id.
+        let _rx = hub.arm_grace("ABC", "0000001", GraceKind::Promotion).await;
+        assert!(!hub.take_grace("ABC", "0000002", GraceKind::Promotion).await);
     }
 
     #[tokio::test]
-    async fn taking_host_grace_wakes_the_waiting_receiver() {
+    async fn the_two_grace_kinds_are_independent() {
+        // A dropped host has both a Promotion and a Reconnect timer pending for
+        // the same key; taking one must leave the other intact.
+        let hub = SignalHub::default();
+        let _p = hub.arm_grace("ABC", "0000001", GraceKind::Promotion).await;
+        let _r = hub.arm_grace("ABC", "0000001", GraceKind::Reconnect).await;
+        assert!(hub.take_grace("ABC", "0000001", GraceKind::Promotion).await);
+        // Reconnect is untouched by taking Promotion.
+        assert!(hub.take_grace("ABC", "0000001", GraceKind::Reconnect).await);
+    }
+
+    #[tokio::test]
+    async fn taking_grace_wakes_the_waiting_receiver() {
         // The timer task selects on this receiver so it can exit early when the
-        // host reconnects. take_host_grace drops the sender, which must resolve
-        // the receiver (with an error) rather than leave it pending forever.
+        // player reconnects. take_grace drops the sender, which must resolve the
+        // receiver (with an error) rather than leave it pending forever.
         let hub = SignalHub::default();
-        let rx = hub.arm_host_grace("ABC", "0000001").await.expect("armed");
-        assert!(hub.take_host_grace("ABC", "0000001").await);
+        let rx = hub
+            .arm_grace("ABC", "0000001", GraceKind::Reconnect)
+            .await
+            .expect("armed");
+        assert!(hub.take_grace("ABC", "0000001", GraceKind::Reconnect).await);
         assert!(rx.await.is_err());
     }
 
     #[tokio::test]
-    async fn arm_host_grace_skips_when_host_still_connected() {
-        // A stale disconnect path must not arm a promotion timer for a host that
-        // already has a live socket (reconnected on a new connection).
+    async fn arm_grace_skips_when_player_still_connected() {
+        // A stale disconnect path must not arm a timer for a player that already
+        // has a live socket (reconnected on a new connection).
         let hub = SignalHub::default();
         let (_conn, _rx) = hub.join_room("ABC", "0000001").await;
-        assert!(hub.arm_host_grace("ABC", "0000001").await.is_none());
+        assert!(hub
+            .arm_grace("ABC", "0000001", GraceKind::Promotion)
+            .await
+            .is_none());
         // Nothing was armed, so a later take finds no entry.
-        assert!(!hub.take_host_grace("ABC", "0000001").await);
+        assert!(!hub.take_grace("ABC", "0000001", GraceKind::Promotion).await);
     }
 }

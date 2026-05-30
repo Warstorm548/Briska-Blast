@@ -50,12 +50,18 @@ public partial class GameScene : Node2D
     private NetGameController? _controller;
     private bool _leaving;
 
-    // Host-loss grace overlay (Stage 4). A client sees at most one of these at a
-    // time: it either lost its own socket (self) or sees the host's loss (host).
+    // Reconnect grace overlay. A client shows at most one message at a time:
+    // its own socket dropped (self), the host's (host), or a peer's (peer).
     private CanvasLayer _overlayLayer = null!;
     private Label _overlay = null!;
     private bool _selfReconnecting;
     private bool _hostReconnecting;
+    private bool _peerReconnecting;
+    private ulong _peerReconnectHideMsec;
+
+    // Always-visible session code so players can reshare it with a friend who
+    // dropped and needs to re-enter it to rejoin the match.
+    private Label _codeLabel = null!;
 
     public override void _Ready()
     {
@@ -99,6 +105,7 @@ public partial class GameScene : Node2D
             _signaling.HostChanged += OnHostChangedInGame;
             _signaling.HostReconnecting += OnHostReconnecting;
             _signaling.HostReconnected += OnHostReconnected;
+            _signaling.PeerReconnecting += OnPeerReconnecting;
             _signaling.Reconnecting += OnSelfReconnecting;
             _signaling.Reconnected += OnSelfReconnected;
         }
@@ -109,9 +116,14 @@ public partial class GameScene : Node2D
         if (ctx?.Transport != null && _signaling != null)
             _controller = new NetGameController(_state, ctx.Transport, _signaling, _ballRadius);
 
-        // Only the host serves the first ball; everyone else starts empty and
-        // receives a ball via handoff (Slice D) or when they're scored on.
-        if (ctx?.LocalPlayerIsHost == true)
+        // On a fresh start the host serves the first ball; everyone else starts
+        // empty and receives a ball via handoff or when they're scored on. On a
+        // REjoin the ball is already in play elsewhere, so a returning host must
+        // NOT spawn a second one — consume the flag either way.
+        bool isRejoin = ctx?.RejoinInProgress == true;
+        if (ctx != null)
+            ctx.RejoinInProgress = false;
+        if (ctx?.LocalPlayerIsHost == true && !isRejoin)
             SpawnServeBall();
 
         _view.Render(_state);
@@ -131,6 +143,7 @@ public partial class GameScene : Node2D
             _signaling.HostChanged -= OnHostChangedInGame;
             _signaling.HostReconnecting -= OnHostReconnecting;
             _signaling.HostReconnected -= OnHostReconnected;
+            _signaling.PeerReconnecting -= OnPeerReconnecting;
             _signaling.Reconnecting -= OnSelfReconnecting;
             _signaling.Reconnected -= OnSelfReconnected;
             _signaling = null;
@@ -191,6 +204,17 @@ public partial class GameScene : Node2D
         UpdateOverlay();
     }
 
+    private void OnPeerReconnecting(string playerId, int graceSecs)
+    {
+        // A non-host peer dropped mid-game. Show a brief hint; their slot is held
+        // longer (for a manual rejoin), but the overlay only flags the window —
+        // auto-hide after graceSecs (checked in _PhysicsProcess), or sooner if
+        // the mesh heals. The ball keeps flowing over the rest of the mesh.
+        _peerReconnecting = true;
+        _peerReconnectHideMsec = Time.GetTicksMsec() + (ulong)Mathf.Max(graceSecs, 0) * 1000UL;
+        UpdateOverlay();
+    }
+
     private void OnSelfReconnecting()
     {
         _selfReconnecting = true;
@@ -216,6 +240,15 @@ public partial class GameScene : Node2D
         _overlay.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         _overlay.AddThemeFontSizeOverride("font_size", 64);
         _overlayLayer.AddChild(_overlay);
+
+        // Session code, top-left, so a player can read it back to a dropped
+        // friend who needs to re-enter it on the Join screen to rejoin.
+        var code = SessionContext.Instance?.SessionCode ?? "";
+        _codeLabel = new Label { Text = $"Code: {code}" };
+        _codeLabel.SetAnchorsPreset(Control.LayoutPreset.TopLeft);
+        _codeLabel.Position = new Vector2(16, 12);
+        _codeLabel.AddThemeFontSizeOverride("font_size", 24);
+        _overlayLayer.AddChild(_codeLabel);
     }
 
     private void UpdateOverlay()
@@ -223,6 +256,7 @@ public partial class GameScene : Node2D
         string msg =
             _selfReconnecting ? "Reconnecting…" :
             _hostReconnecting ? "Host reconnecting…" :
+            _peerReconnecting ? "A player is reconnecting…" :
             "";
         _overlay.Text = msg;
         _overlay.Visible = msg.Length > 0;
@@ -249,6 +283,13 @@ public partial class GameScene : Node2D
     public override void _PhysicsProcess(double delta)
     {
         var dt = (float)delta;
+
+        // Auto-hide the "a player is reconnecting…" hint once its window elapses.
+        if (_peerReconnecting && Time.GetTicksMsec() >= _peerReconnectHideMsec)
+        {
+            _peerReconnecting = false;
+            UpdateOverlay();
+        }
 
         // Escape leaves the match deliberately — sends Leave so peers promote
         // immediately rather than waiting out the host-reconnect grace.

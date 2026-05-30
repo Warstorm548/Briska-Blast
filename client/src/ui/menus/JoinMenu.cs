@@ -11,6 +11,11 @@ public partial class JoinMenu : Control
     private Button _joinButton = null!;
     private Label _status = null!;
 
+    // Live nodes built during a rejoin-into-match attempt (process-death
+    // recovery). Handed to SessionContext on success, torn down on failure.
+    private SignalingClient? _rejoinSignaling;
+    private WebRtcMeshTransport? _rejoinTransport;
+
     public override void _Ready()
     {
         _codeInput = GetNode<LineEdit>("%CodeInput");
@@ -57,17 +62,123 @@ public partial class JoinMenu : Control
             return;
         }
 
+        // The session is already live. If we're still a member (we dropped and
+        // are rejoining within our window), the WS will let us back in; if not,
+        // it rejects us and we surface a friendly message. Either way this is the
+        // process-death rejoin path, not a fresh join.
+        if (result.ErrorCode == "session_already_active")
+        {
+            BeginRejoin(code);
+            return;
+        }
+
         // Map the server's error codes to friendlier text.
         var message = result.ErrorCode switch
         {
             "not_found" => "No session with that code.",
             "session_full" => "That session is full.",
-            "session_already_active" => "That session has already started.",
             "cannot_join_own_session" => "You're already hosting that session.",
             "already_joined" => "You've already joined that session.",
             _ => $"Could not join: {result.ErrorCode}",
         };
         SetBusy(false, message);
+    }
+
+    // ---- rejoin a live match (process-death recovery) ----
+
+    private async void BeginRejoin(string code)
+    {
+        SetBusy(true, "Rejoining match…");
+        // Need the gamemode + player count to seed SessionContext; the
+        // authoritative roster/host come from the WS Identified frame.
+        var info = await SessionContext.Instance.Api.GetSessionAsync(code);
+        Callable.From(() => OnRejoinInfo(info, code)).CallDeferred();
+    }
+
+    private void OnRejoinInfo(ApiResult<SessionPollResponse> info, string code)
+    {
+        if (!info.Ok || info.Value is not { } s)
+        {
+            SetBusy(false, info.ErrorCode == "not_found"
+                ? "That match no longer exists."
+                : "Could not rejoin the match.");
+            return;
+        }
+
+        var ctx = SessionContext.Instance;
+        ctx.StartRejoinSession(code, s.Gamemode, s.PlayerCount);
+
+        _rejoinSignaling = new SignalingClient();
+        AddChild(_rejoinSignaling);
+        _rejoinTransport = new WebRtcMeshTransport();
+        _rejoinTransport.Init(_rejoinSignaling);
+        AddChild(_rejoinTransport);
+
+        _rejoinSignaling.Identified += OnRejoinIdentified;
+        _rejoinSignaling.Closed += OnRejoinClosed;
+        _rejoinSignaling.Connect(code, ctx.PlayerId, ctx.SecretToken);
+    }
+
+    private void OnRejoinIdentified(string hostId, string[] peers, bool isHost)
+    {
+        var ctx = SessionContext.Instance;
+        ctx.HostPlayerId = hostId;
+        ctx.PlayerIds.Clear();
+        if (!string.IsNullOrEmpty(hostId))
+            ctx.PlayerIds.Add(hostId);
+        if (ctx.PlayerId != hostId)
+            ctx.PlayerIds.Add(ctx.PlayerId);
+        foreach (var p in peers)
+            if (p != hostId && p != ctx.PlayerId && !ctx.PlayerIds.Contains(p))
+                ctx.PlayerIds.Add(p);
+
+        // Re-establish the mesh to every current peer, then hand the live net to
+        // SessionContext (survives the scene change) and enter the game.
+        _rejoinTransport!.Connect(ctx.PlayerId, peers);
+
+        _rejoinSignaling!.Identified -= OnRejoinIdentified;
+        _rejoinSignaling.Closed -= OnRejoinClosed;
+        ctx.AdoptNet(_rejoinSignaling, _rejoinTransport);
+        _rejoinSignaling = null;
+        _rejoinTransport = null;
+
+        if (GetTree().ChangeSceneToFile("res://src/game/GameScene.tscn") != Error.Ok)
+        {
+            GD.PushError("[join] failed to enter GameScene on rejoin — returning to menu.");
+            ctx.TeardownNet();
+            ctx.ClearSession();
+            GetTree().ChangeSceneToFile("res://src/ui/menus/MainMenu.tscn");
+        }
+    }
+
+    private void OnRejoinClosed(int closeCode, string reason)
+    {
+        TeardownRejoinAttempt();
+        SessionContext.Instance.ClearSession();
+        SetBusy(false, closeCode switch
+        {
+            4403 => "You're not part of that match.",
+            4404 => "That match no longer exists.",
+            _ => "Could not rejoin the match.",
+        });
+    }
+
+    private void TeardownRejoinAttempt()
+    {
+        if (_rejoinSignaling != null)
+        {
+            _rejoinSignaling.Identified -= OnRejoinIdentified;
+            _rejoinSignaling.Closed -= OnRejoinClosed;
+            _rejoinSignaling.CloseConnection();
+            _rejoinSignaling.QueueFree();
+            _rejoinSignaling = null;
+        }
+        if (_rejoinTransport != null)
+        {
+            _rejoinTransport.Close();
+            _rejoinTransport.QueueFree();
+            _rejoinTransport = null;
+        }
     }
 
     private void SetBusy(bool busy, string message)
