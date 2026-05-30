@@ -25,6 +25,11 @@ public sealed class NetGameController : IDisposable
     // flipped to a wall) so an inbound packet from a gone peer is dropped.
     private readonly Dictionary<string, Edge> _peerToEdge = new();
 
+    // peerId → its ORIGINAL local edge, captured once and never pruned. Lets a
+    // rejoining peer's walled edge be restored to the same portal it held before
+    // it dropped (OnPeerLost removes the live mapping above, losing it otherwise).
+    private readonly Dictionary<string, Edge> _peerHomeEdge = new();
+
     public NetGameController(GameState state, IPeerTransport transport,
         SignalingClient signaling, float spawnRadius)
     {
@@ -35,12 +40,16 @@ public sealed class NetGameController : IDisposable
 
         foreach (var kv in _state.Edges)
             if (kv.Value.Kind == EdgeKind.Portal)
+            {
                 _peerToEdge[kv.Value.PeerId] = kv.Key;
+                _peerHomeEdge[kv.Value.PeerId] = kv.Key;
+            }
 
         _transport.PeerData += OnPeerData;
         _transport.PeerDisconnected += OnPeerLost;
         _transport.PeerFailed += OnPeerLost;
         _signaling.ScoreUpdate += OnScoreUpdate;
+        _signaling.PeerJoined += OnPeerRejoined;
     }
 
     /// <summary>Push one sim handoff out to its peer (directed Send).</summary>
@@ -125,6 +134,23 @@ public sealed class NetGameController : IDisposable
         }
     }
 
+    /// <summary>A peer (re)identified in the session. If it's one of our home
+    /// peers whose link we'd walled off (it dropped mid-game and is rejoining),
+    /// restore its portal edge and re-negotiate just that connection. Ignored
+    /// when the peer is still live (a process-alive WS blip — its mesh link
+    /// never died, so it stays in <see cref="_peerToEdge"/>) or isn't ours.</summary>
+    private void OnPeerRejoined(string peerId)
+    {
+        if (!_peerHomeEdge.TryGetValue(peerId, out var edge))
+            return; // not one of this screen's portal peers
+        if (_peerToEdge.ContainsKey(peerId))
+            return; // link never lost — nothing to heal
+
+        _state.Edges[edge] = EdgeTarget.Portal(peerId);
+        _peerToEdge[peerId] = edge;
+        _transport.ResyncPeer(peerId);
+    }
+
     private void OnScoreUpdate(Dictionary<string, int> scores)
     {
         // Server is authoritative — overwrite, never add. A dropped/duplicated
@@ -140,5 +166,6 @@ public sealed class NetGameController : IDisposable
         _transport.PeerDisconnected -= OnPeerLost;
         _transport.PeerFailed -= OnPeerLost;
         _signaling.ScoreUpdate -= OnScoreUpdate;
+        _signaling.PeerJoined -= OnPeerRejoined;
     }
 }

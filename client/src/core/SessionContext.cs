@@ -33,6 +33,12 @@ public partial class SessionContext : Node
 
     public ServerApi Api { get; private set; } = null!;
 
+    /// <summary>True while we're rejoining a match already in progress (entered
+    /// from the Join screen, not the lobby Start). <see cref="Game.GameScene"/>
+    /// reads this in <c>_Ready</c> to skip the host's first serve — the ball is
+    /// already in play elsewhere — then clears it.</summary>
+    public bool RejoinInProgress { get; set; }
+
     // ---- Live networking, carried across the lobby → game scene change ----
     // The lobby creates the signaling socket + WebRTC mesh; on start_signaling
     // it hands them here via AdoptNet so they survive ChangeSceneToFile and the
@@ -149,6 +155,19 @@ public partial class SessionContext : Node
         HostPlayerId = "";
     }
 
+    /// <summary>Set up local state for rejoining a live match by code (process-
+    /// death recovery). The roster and host arrive authoritatively in the WS
+    /// <c>Identified</c> frame, so they start empty here.</summary>
+    public void StartRejoinSession(string code, string mode, int maxPlayers)
+    {
+        SessionCode = code;
+        GameMode = mode;
+        MaxPlayers = maxPlayers;
+        PlayerIds.Clear();
+        HostPlayerId = "";
+        RejoinInProgress = true;
+    }
+
     public void ClearSession()
     {
         SessionCode = "";
@@ -156,6 +175,7 @@ public partial class SessionContext : Node
         MaxPlayers = 0;
         PlayerIds.Clear();
         HostPlayerId = "";
+        RejoinInProgress = false;
     }
 
     /// <summary>Reparent the live signaling + transport under this autoload so

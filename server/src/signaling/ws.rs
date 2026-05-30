@@ -5,6 +5,7 @@ use axum::{
     },
     response::IntoResponse,
 };
+use chrono::Utc;
 use deadpool_redis::redis::AsyncCommands;
 use std::borrow::Cow;
 use std::net::SocketAddr;
@@ -12,9 +13,13 @@ use std::time::Duration;
 
 use crate::{
     api::{validate_player, Session},
-    signaling::protocol::{ClientMsg, ServerMsg},
+    signaling::{
+        protocol::{ClientMsg, ServerMsg},
+        GraceKind,
+    },
     state::AppState,
 };
+use shared::types::session::SessionStatus;
 
 // App-defined close codes in the WebSocket 4xxx range. Chosen to mirror
 // the HTTP semantics a launcher developer already knows from REST.
@@ -31,9 +36,17 @@ const IDENTIFY_DEADLINE: Duration = Duration::from_secs(5);
 
 /// How long a mid-game host has to re-Identify after their WebSocket drops
 /// before the server promotes the next player in join order (or ends the
-/// session). Broadcast to peers in `HostReconnecting` so their UI can count it
-/// down. Const for now; promoting it to runtime config is a later refinement.
-const HOST_GRACE: Duration = Duration::from_secs(30);
+/// session). Also the duration peers show a "reconnecting…" overlay (broadcast
+/// in `HostReconnecting` / `PeerReconnecting`). Const for now; promoting it to
+/// runtime config is a later refinement.
+const PROMOTION_GRACE: Duration = Duration::from_secs(30);
+
+/// How long ANY dropped mid-game player's session slot is held so they can
+/// rejoin by re-entering the code, before it is freed permanently. Longer than
+/// `PROMOTION_GRACE` so a full process relaunch + manual code entry can make it
+/// back. A promoted-away ex-host is demoted into `joiners` (kept, not removed)
+/// and keeps the remainder of this window, rejoining as a non-host.
+const RECONNECT_GRACE: Duration = Duration::from_secs(120);
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -92,11 +105,26 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
         player_id, code, is_host
     );
 
-    // If the host is re-Identifying inside the reconnect grace window, cancel
-    // the pending promotion timer (take_host_grace wins the race against the
-    // timer firing) and tell peers the host is back so they clear the
-    // "host reconnecting…" state. No-op for a joiner or when no grace is armed.
-    if is_host && state.signal_hub.take_host_grace(&code, &player_id).await {
+    // Back from a mid-game drop: cancel the slot-hold timer so it doesn't free
+    // our slot now that we're present — host or joiner alike. No-op when none
+    // is armed (a fresh first identify, or already reconnected).
+    state
+        .signal_hub
+        .take_grace(&code, &player_id, GraceKind::Reconnect)
+        .await;
+
+    // A host that returns *before* promotion also cancels the promotion timer
+    // (take_grace wins the race against the timer firing) and tells peers it's
+    // back so they clear the "host reconnecting…" state. After promotion the
+    // ex-host re-Identifies as a normal joiner (is_host == false, the Promotion
+    // entry already claimed by the timer), so this is skipped and they simply
+    // re-mesh via the PeerJoined broadcast above.
+    if is_host
+        && state
+            .signal_hub
+            .take_grace(&code, &player_id, GraceKind::Promotion)
+            .await
+    {
         state
             .signal_hub
             .broadcast(
@@ -167,59 +195,99 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
     // socket that re-bound this player_id (duplicate identify) isn't
     // evicted by our late cleanup.
     state.signal_hub.leave_room(&code, &player_id, conn_id).await;
-    state
-        .signal_hub
-        .broadcast(
-            &code,
-            ServerMsg::PeerLeft {
-                player_id: player_id.clone(),
-                reason: if explicit_leave { "leave" } else { "disconnect" },
-            },
-            None,
-        )
-        .await;
 
     if is_host {
+        // The host always announces departure (peers update their roster /
+        // overlay); past Waiting it also arms grace or promotes.
+        broadcast_peer_left(&state, &code, &player_id, explicit_leave).await;
+
         // Waiting: tear the lobby down (joiners can't start without a host).
         // Past Waiting (a live match): the session must survive host loss.
         match end_session_if_waiting(&state, &code).await {
             Ok(HostDisconnectStage::EndedWaiting) | Ok(HostDisconnectStage::SessionGone) => {}
             Ok(HostDisconnectStage::Active) => {
                 if explicit_leave {
-                    // Deliberate mid-game quit: promote now, don't make peers
-                    // wait out the grace window for a host that isn't coming back.
-                    if let Err(e) = promote_or_end_active(&state, &code, &player_id).await {
+                    // Deliberate mid-game quit: promote now and DROP the ex-host
+                    // (keep=false) — they left, they're not coming back.
+                    if let Err(e) =
+                        promote_demote_or_end_active(&state, &code, &player_id, false).await
+                    {
                         tracing::warn!("ws: host-leave promotion failed for {}: {}", code, e);
                     }
                 } else {
-                    // Transient drop: give the host HOST_GRACE to re-Identify
-                    // before promoting. The timer task and the reconnect path
-                    // race on take_host_grace; exactly one wins.
-                    arm_host_grace(&state, &code, &player_id).await;
+                    // Transient drop: arm the 30s promotion timer AND the 2-min
+                    // reconnect slot-hold. If promotion fires, the ex-host is
+                    // demoted into joiners (kept) so they keep the rest of their
+                    // window and rejoin as a non-host.
+                    arm_host_disconnect_grace(&state, &code, &player_id).await;
                 }
             }
             Err(e) => tracing::warn!("ws: host-disconnect cleanup failed for {}: {}", code, e),
         }
     } else if explicit_leave {
-        // A joiner deliberately left. Free their Redis slot so the roster stays
-        // honest: in Waiting this keeps lobby capacity / `/start` correct; past
-        // Waiting it keeps GET /session accurate and ends the session if the
-        // host is now alone. A transient socket drop keeps the slot for
-        // reconnect (peers wall the portal client-side in the meantime).
+        // A joiner deliberately left. Announce, then free their Redis slot so the
+        // roster stays honest: in Waiting this keeps lobby capacity / `/start`
+        // correct; past Waiting it keeps GET /session accurate and ends the
+        // session if the host is now alone.
+        broadcast_peer_left(&state, &code, &player_id, true).await;
         if let Err(e) = remove_joiner_on_leave(&state, &code, &player_id).await {
             tracing::warn!("ws: joiner-leave cleanup failed for {} in {}: {}", player_id, code, e);
         }
+    } else if session_status_is_active(&state, &code).await {
+        // Joiner transient drop mid-game: hold the slot for a rejoin window and
+        // show peers a "reconnecting…" overlay. The final PeerLeft is deferred
+        // to the slot-hold timeout (or superseded by PeerJoined on rejoin) —
+        // do NOT announce a leave now.
+        arm_joiner_disconnect_grace(&state, &code, &player_id).await;
+    } else {
+        // Joiner transient drop in Waiting (or the session is already gone):
+        // legacy behavior — announce, keep the slot for an in-lobby reconnect.
+        broadcast_peer_left(&state, &code, &player_id, false).await;
     }
 
     tracing::info!("ws: player {} disconnected from session {}", player_id, code);
 }
 
-/// Arm the host-reconnect grace window: tell peers, register the cancel handle,
-/// and spawn a detached timer. If the host re-Identifies in time, the reconnect
-/// path takes the grace entry (waking this task early); otherwise the timer
-/// fires and promotes the next player (or ends the session).
-async fn arm_host_grace(state: &AppState, code: &str, host_id: &str) {
-    let Some(grace_rx) = state.signal_hub.arm_host_grace(code, host_id).await else {
+/// Broadcast a `PeerLeft` with the right reason for a deliberate vs transient
+/// departure (the common shape used across the cleanup branches).
+async fn broadcast_peer_left(state: &AppState, code: &str, player_id: &str, explicit_leave: bool) {
+    state
+        .signal_hub
+        .broadcast(
+            code,
+            ServerMsg::PeerLeft {
+                player_id: player_id.to_string(),
+                reason: if explicit_leave { "leave" } else { "disconnect" },
+            },
+            None,
+        )
+        .await;
+}
+
+/// Read-only: is `code` a live match (past Waiting)? A missing / undecodable
+/// session, or one that's `Ended`, counts as not active.
+async fn session_status_is_active(state: &AppState, code: &str) -> bool {
+    let Ok(mut conn) = state.redis.get().await else {
+        return false;
+    };
+    let raw: Option<String> = conn.get(format!("session:{}", code)).await.unwrap_or(None);
+    let Some(raw) = raw else {
+        return false;
+    };
+    matches!(
+        serde_json::from_str::<Session>(&raw).map(|s| s.status),
+        Ok(SessionStatus::Starting) | Ok(SessionStatus::Active)
+    )
+}
+
+/// Arm a dropped mid-game host's grace: a 30s `Promotion` timer (promote the
+/// next player, demoting this host into joiners so they keep their window) AND
+/// the shared 2-min `Reconnect` slot-hold (below). Announces `HostReconnecting`
+/// so peers show the overlay. The reconnect path takes whichever entry applies,
+/// waking the relevant timer task early.
+async fn arm_host_disconnect_grace(state: &AppState, code: &str, host_id: &str) {
+    let Some(promo_rx) = state.signal_hub.arm_grace(code, host_id, GraceKind::Promotion).await
+    else {
         // The host already has a live socket (it reconnected on a new connection
         // before this stale disconnect path ran) — don't arm or announce grace
         // against a host that's actually present.
@@ -233,35 +301,108 @@ async fn arm_host_grace(state: &AppState, code: &str, host_id: &str) {
             code,
             ServerMsg::HostReconnecting {
                 player_id: host_id.to_string(),
-                grace_secs: HOST_GRACE.as_secs(),
+                grace_secs: PROMOTION_GRACE.as_secs(),
             },
             None,
         )
         .await;
-    tracing::info!("ws: host {} dropped from active session {} — {}s grace armed",
-        host_id, code, HOST_GRACE.as_secs());
+    tracing::info!("ws: host {} dropped from active session {} — {}s promotion grace, {}s rejoin hold",
+        host_id, code, PROMOTION_GRACE.as_secs(), RECONNECT_GRACE.as_secs());
+
+    // Promotion timer: at PROMOTION_GRACE, claim the entry (single-winner vs the
+    // host reconnecting) and promote the next player, keeping the ex-host as a
+    // demoted joiner so they can still rejoin within the reconnect hold.
+    {
+        let state = state.clone();
+        let code = code.to_string();
+        let host_id = host_id.to_string();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = tokio::time::sleep(PROMOTION_GRACE) => {
+                    if state.signal_hub.take_grace(&code, &host_id, GraceKind::Promotion).await {
+                        if let Err(e) = promote_demote_or_end_active(&state, &code, &host_id, true).await {
+                            tracing::warn!("ws: host-grace promotion failed for {}: {}", code, e);
+                        }
+                    }
+                }
+                _ = promo_rx => { /* host re-Identified before promotion */ }
+            }
+        });
+    }
+
+    // Reconnect slot-hold for the (possibly demoted) ex-host.
+    arm_reconnect_slot_hold(state, code, host_id.to_string()).await;
+}
+
+/// Arm a dropped mid-game joiner's reconnect window: announce `PeerReconnecting`
+/// (peers show the overlay) and start the shared 2-min slot-hold. No promotion
+/// timer — joiners aren't host candidates.
+async fn arm_joiner_disconnect_grace(state: &AppState, code: &str, player_id: &str) {
+    // Arm the hold + spawn the timer; only announce the overlay when a hold was
+    // actually armed (false ⇒ the joiner already reconnected on a new socket).
+    if arm_reconnect_slot_hold(state, code, player_id.to_string()).await {
+        state
+            .signal_hub
+            .broadcast(
+                code,
+                ServerMsg::PeerReconnecting {
+                    player_id: player_id.to_string(),
+                    grace_secs: PROMOTION_GRACE.as_secs(),
+                },
+                None,
+            )
+            .await;
+        tracing::info!("ws: joiner {} dropped from active session {} — {}s rejoin hold",
+            player_id, code, RECONNECT_GRACE.as_secs());
+    }
+}
+
+/// Arm (if not already) the 2-min `Reconnect` slot-hold for `player_id` and spawn
+/// the timer that frees their slot when it elapses. Returns `true` if a hold is
+/// now pending (false if the player already has a live socket, so nothing to
+/// hold). Shared by the host and joiner disconnect paths.
+async fn arm_reconnect_slot_hold(state: &AppState, code: &str, player_id: String) -> bool {
+    let Some(recon_rx) = state
+        .signal_hub
+        .arm_grace(code, &player_id, GraceKind::Reconnect)
+        .await
+    else {
+        return false;
+    };
 
     let state = state.clone();
     let code = code.to_string();
-    let host_id = host_id.to_string();
     tokio::spawn(async move {
         tokio::select! {
-            _ = tokio::time::sleep(HOST_GRACE) => {
-                // Claim the grace entry. If the host reconnected in the same
-                // instant, take_host_grace already returned it to them and this
-                // returns false — so promotion never races a reconnect.
-                if state.signal_hub.take_host_grace(&code, &host_id).await {
-                    if let Err(e) = promote_or_end_active(&state, &code, &host_id).await {
-                        tracing::warn!("ws: host-grace promotion failed for {}: {}", code, e);
-                    }
+            _ = tokio::time::sleep(RECONNECT_GRACE) => {
+                // Window elapsed: claim it (single-winner vs a late reconnect)
+                // and free the slot for good.
+                if state.signal_hub.take_grace(&code, &player_id, GraceKind::Reconnect).await {
+                    free_member_after_timeout(&state, &code, &player_id).await;
                 }
             }
-            _ = grace_rx => {
-                // The host re-Identified: the reconnect path took the grace
-                // entry and broadcast HostReconnected. Nothing to do.
-            }
+            _ = recon_rx => { /* player rejoined within the window */ }
         }
     });
+    true
+}
+
+/// A held slot's rejoin window elapsed: tell peers the player is gone for good
+/// and free their Redis slot (reusing the explicit-leave removal, which also
+/// ends the session if this leaves the host alone).
+async fn free_member_after_timeout(state: &AppState, code: &str, player_id: &str) {
+    state
+        .signal_hub
+        .broadcast(
+            code,
+            ServerMsg::PeerLeft { player_id: player_id.to_string(), reason: "reconnect_timeout" },
+            None,
+        )
+        .await;
+    if let Err(e) = remove_joiner_on_leave(state, code, player_id).await {
+        tracing::warn!("ws: reconnect-timeout cleanup failed for {} in {}: {}", player_id, code, e);
+    }
+    tracing::info!("ws: player {} rejoin window elapsed in session {} — slot freed", player_id, code);
 }
 
 /// Reads the first frame, validates the token, confirms membership.
@@ -518,19 +659,26 @@ return cjson.encode({result = 'deleted'})
 /// "1 player remains → session ends"). Atomic single Lua script, guarded on the
 /// departing player still being the host so a double disconnect can't promote
 /// twice.
-async fn promote_or_end_active(
+///
+/// When `keep_ex_host` is true (a transient host drop), the departing host is
+/// **demoted into `joiners`** at the back of the join order so they remain a
+/// member and can rejoin as a non-host within their reconnect window. When false
+/// (a deliberate host `Leave`), they're dropped. In the promoted branch
+/// `joiners` is always non-empty (promotion needs ≥2 connected joiners, so ≥1
+/// remains after removing the promoted one), so the empty-table re-encode quirk
+/// can't arise.
+async fn promote_demote_or_end_active(
     state: &AppState,
     code: &str,
     departing_host: &str,
+    keep_ex_host: bool,
 ) -> Result<(), String> {
-    // lua-cjson encodes an empty Lua table as `{}` (a JSON object); the gsub
-    // forces `"joiners":[]` back so the Rust `Vec<JoinerEntry>` still decodes
-    // (see remove_joiner_on_leave for the full safety argument).
-    //
     // KEYS[1] = session key
     // ARGV[1] = departing host player_id (guard)
     // ARGV[2] = JSON array of currently-connected player_ids
     // ARGV[3] = session TTL seconds
+    // ARGV[4] = now in ms (joined_at_ms for the demoted ex-host)
+    // ARGV[5] = "1" to demote-and-keep the ex-host, "0" to drop them
     const PROMOTE_OR_END_SCRIPT: &str = r#"
 local raw = redis.call('GET', KEYS[1])
 if not raw then
@@ -561,11 +709,11 @@ if connected_count >= 2 then
   local new_host = session.joiners[promote_idx].player_id
   table.remove(session.joiners, promote_idx)
   session.host_player_id = new_host
-  local encoded = cjson.encode(session)
-  if #session.joiners == 0 then
-    encoded = string.gsub(encoded, '"joiners":{}', '"joiners":[]')
+  if ARGV[5] == '1' then
+    -- Demote the ex-host to the back of the join order (kept for reconnect).
+    table.insert(session.joiners, {player_id = ARGV[1], joined_at_ms = tonumber(ARGV[4])})
   end
-  redis.call('SET', KEYS[1], encoded, 'EX', tonumber(ARGV[3]))
+  redis.call('SET', KEYS[1], cjson.encode(session), 'EX', tonumber(ARGV[3]))
   return cjson.encode({result = 'promoted', new_host = new_host})
 else
   redis.call('DEL', KEYS[1])
@@ -595,6 +743,7 @@ end
         .collect();
     let connected_json = serde_json::to_string(&connected).map_err(|e| e.to_string())?;
 
+    let now_ms = Utc::now().timestamp_millis().max(0) as u64;
     let mut conn = state.redis.get().await.map_err(|e| e.to_string())?;
     let script = deadpool_redis::redis::Script::new(PROMOTE_OR_END_SCRIPT);
     let raw: String = script
@@ -602,6 +751,8 @@ end
         .arg(departing_host)
         .arg(connected_json)
         .arg(state.config.session_ttl_secs)
+        .arg(now_ms)
+        .arg(if keep_ex_host { "1" } else { "0" })
         .invoke_async(&mut *conn)
         .await
         .map_err(|e| e.to_string())?;
@@ -626,7 +777,7 @@ end
         // Already handled by another path (concurrent promotion, the session
         // was torn down elsewhere, or it was never active). No broadcast.
         PromoteOutcome::Gone | PromoteOutcome::NotActive | PromoteOutcome::NotHost => {
-            tracing::debug!("ws: promote_or_end_active for {} was a no-op", code);
+            tracing::debug!("ws: promote_demote_or_end_active for {} was a no-op", code);
         }
     }
     Ok(())

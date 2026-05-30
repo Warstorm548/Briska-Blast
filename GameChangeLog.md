@@ -9,6 +9,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.8.0] — 2026-05-30
+
+Stage 5 (client side): **process-death recovery** — a player who crashed/quit
+mid-match can rejoin the live match by re-entering the session code, and the
+WebRTC mesh re-establishes so balls flow again. Pairs with the matchmaking server
+at **v0.10.0+**. See
+[`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+
+### Added
+
+- **Rejoin a live match** (`src/ui/menus/JoinMenu.cs`, `src/core/SessionContext.cs`):
+  entering the code of a session you belong to that's already started no longer
+  errors — the Join screen re-opens the signaling WS (the server re-admits a
+  still-held member), rebuilds the mesh, and drops you straight back into
+  `GameScene`. `Closed 4403/4404` surfaces a friendly "you're not part of that
+  match" / "no longer exists".
+- **Single-peer re-mesh** (`IPeerTransport.ResyncPeer`, `WebRtcMeshTransport`):
+  tears down a stale link and re-negotiates just that connection (deterministic
+  offerer unchanged), without disturbing the rest of the mesh.
+- **Edge healing on rejoin** (`src/game/net/NetGameController.cs`): a returning
+  peer's walled-off portal is restored and `ResyncPeer`'d. A new
+  `PeerReconnecting` signaling frame drives a "a player is reconnecting…" overlay
+  (`src/game/GameScene.cs`); the in-game session **code is shown** so players can
+  reshare it with the dropped friend.
+
+### Changed
+
+- **No double-serve on rejoin** (`GameScene`): a rejoining host skips the
+  first-ball serve (the ball is already in play elsewhere).
+
+### Notes
+
+- Recovers any dropped player within the server's reconnect window (server
+  v0.10.0): joiners, and a host who is demoted-but-kept after promotion (rejoins
+  as a non-host). If the single ball died with the crashed process, the rejoined
+  match has no ball until the planned ball-loss watchdog lands.
+
 ## [0.7.1] — 2026-05-29
 
 ### Fixed

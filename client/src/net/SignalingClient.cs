@@ -14,9 +14,9 @@ namespace BriskaBlast.Net;
 ///
 /// Sends <c>identify</c> on open and <c>leave</c> on request, and surfaces the
 /// lifecycle frames: Identified / PeerJoined / PeerLeft / HostChanged /
-/// HostReconnecting / HostReconnected / StartSignaling / SessionEnded / Kicked /
-/// Closed, plus ScoreUpdate and the WebRTC relays (offer/answer/ice_candidate)
-/// the transport consumes.
+/// HostReconnecting / HostReconnected / PeerReconnecting / StartSignaling /
+/// SessionEnded / Kicked / Closed, plus ScoreUpdate and the WebRTC relays
+/// (offer/answer/ice_candidate) the transport consumes.
 ///
 /// On an <em>unexpected</em> drop it does not give up: it re-dials the same
 /// session WS (re-sending <c>identify</c>) for a short window — surfacing
@@ -55,6 +55,11 @@ public partial class SignalingClient : Node
     /// <summary>A dropped host returned within the grace window; the host role
     /// is unchanged.</summary>
     public event Action<string>? HostReconnected;
+    /// <summary>A non-host peer dropped mid-game and the server armed a reconnect
+    /// window. Carries (playerId, graceSecs) so peers can show a
+    /// "reconnecting…" overlay. Resolved by <see cref="PeerJoined"/> (they
+    /// rejoined) or <see cref="PeerLeft"/> (the window elapsed).</summary>
+    public event Action<string, int>? PeerReconnecting;
 
     // WebRTC negotiation relays (server attests `from`). The transport layer
     // subscribes to these and feeds them into the matching peer connection.
@@ -334,6 +339,9 @@ public partial class SignalingClient : Node
                     break;
                 case "host_reconnected":
                     HostReconnected?.Invoke(Str(root, "player_id"));
+                    break;
+                case "peer_reconnecting":
+                    PeerReconnecting?.Invoke(Str(root, "player_id"), IntProp(root, "grace_secs"));
                     break;
                 case "start_signaling":
                     StartSignaling?.Invoke(

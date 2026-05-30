@@ -183,12 +183,53 @@ voluntary transfer puts a demoted host at the back of that order, and promotion
 consumes the front.
 
 **Deferred from Stage 4:**
-- **30s grace is a const** (`HOST_GRACE`), not runtime config.
-- **Process-death recovery:** reconnect handles a transient WS blip (process
-  alive); re-establishing the WebRTC mesh after a full process restart mid-game
-  is out of scope — grace-expiry → promotion covers permanent loss.
-- **Host reconnect after promotion:** an ex-host who returns after being promoted
-  away is no longer in the roster, so their re-Identify is rejected.
+- **Grace windows are constants** (`PROMOTION_GRACE` / `RECONNECT_GRACE`), not
+  runtime config.
+- ~~Process-death recovery~~ — **delivered in Stage 5.**
+- ~~Host reconnect after promotion~~ — **delivered in Stage 5** (promotion now
+  demotes the ex-host instead of removing them; they rejoin as a non-host).
+
+---
+
+## Stage 5 — Process-death recovery + uniform reconnect window ✅
+
+**Delivers:** a player whose game **process fully dies** mid-match (not just a
+transient WS blip) can get back into the **same live match** by **manually
+re-entering the session code**; the WebRTC mesh re-establishes so balls flow
+again. Shipped as server **v0.10.0** + game **v0.8.0**.
+
+**The model — one window for everyone, measured from the drop:**
+- Any dropped mid-game player gets the **same reconnect window** (`RECONNECT_GRACE`,
+  120s): peers see a 30s "reconnecting…" overlay (`HostReconnecting` for the host,
+  the new `PeerReconnecting` for a joiner), the Redis slot is held for the full
+  window, then **freed permanently** (`PeerLeft { reconnect_timeout }`).
+- The **only** host difference: a 30s **promotion** sub-timer inside that window.
+  At 30s with no return, the oldest connected joiner is promoted (`HostChanged`)
+  and the **ex-host is demoted into `joiners` (kept, not removed)** — so they keep
+  the rest of their window and rejoin **as a non-host**.
+
+**How it was built:**
+- **Server** (`signaling/`): the grace registry gains a `GraceKind`
+  (`Promotion` / `Reconnect`); `arm_grace`/`take_grace(kind)` generalise the
+  Stage-4 host-grace single-winner. A transient mid-game drop arms the reconnect
+  slot-hold (+ overlay); the host additionally arms the promotion timer.
+  `promote_demote_or_end_active` appends the ex-host to `joiners` on a transient
+  drop (`keep_ex_host`). Re-Identify takes the relevant grace(s).
+- **Client rejoin** (`ui/menus/JoinMenu.cs`, `core/SessionContext.cs`): entering
+  an already-started session's code that you belong to re-opens the WS, rebuilds
+  the mesh, and enters `GameScene` (mirrors the lobby's start transition);
+  `4403/4404` → friendly rejection.
+- **Client re-mesh** (`net/IPeerTransport.ResyncPeer`, `net/WebRtcMeshTransport`,
+  `game/net/NetGameController`): a returning peer's walled-off portal is healed
+  and just that one connection re-negotiated. A small in-game **session-code
+  label** lets players reshare the code.
+
+**Deferred from Stage 5:**
+- **Ball-loss recovery:** if the single ball died with the crashed process, the
+  rejoined match has no ball until a watchdog re-serves it. Design: the holder
+  broadcasts a `BallAlive` heartbeat over the mesh; after a gap the lowest-id
+  connected player serves one. Fast-follow.
+- **Grace windows as runtime config** (still constants).
 
 ---
 

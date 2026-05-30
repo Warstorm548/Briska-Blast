@@ -5,6 +5,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.0] — 2026-05-30
+
+Stage 5 (server side): a **uniform reconnect window** so any player who drops
+mid-game — including a process death — can rejoin the live match by re-entering
+the code, plus **demote-don't-remove** host promotion. Pairs with game **v0.8.0+**.
+See [`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+
+### Added
+
+- **`ServerMsg::PeerReconnecting { player_id, grace_secs }`** — broadcast when a
+  **non-host** player's WS drops mid-game so peers show a "reconnecting…" overlay
+  (the host's equivalent is `HostReconnecting`). Resolved by `PeerJoined` (they
+  rejoined — the mesh re-meshes) or `PeerLeft { reason: "reconnect_timeout" }`.
+- **Two grace kinds** (`signaling/mod.rs`): the grace registry is now keyed
+  `(code, player_id, GraceKind)` with `Promotion` (host-only, 30s) and
+  `Reconnect` (everyone, the slot-hold). `arm_host_grace`/`take_host_grace` are
+  generalised to `arm_grace`/`take_grace(kind)`; the two kinds are independent so
+  a dropped host can have both pending. Single-winner semantics unchanged.
+- **`RECONNECT_GRACE` (120s) slot-hold** for ANY dropped mid-game player: the
+  slot is held so they can rejoin by re-entering the code, then freed permanently
+  (`PeerLeft { reconnect_timeout }`, reusing `remove_joiner_on_leave`). Measured
+  from the drop, uniform for host and joiner.
+
+### Changed
+
+- **Host promotion demotes instead of removing** (`promote_demote_or_end_active`):
+  on a transient host drop, when the 30s promotion timer fires the ex-host is
+  **appended to `joiners`** (back of join order) rather than dropped — so they
+  keep the remainder of their reconnect window and rejoin as a **non-host**. A
+  deliberate host `Leave` still drops them (`keep_ex_host = false`). This
+  supersedes the old "ex-host can never return" behavior.
+- **Mid-game transient joiner drop** now arms the reconnect slot-hold + shows the
+  overlay instead of keeping the slot until session TTL; the immediate `PeerLeft`
+  is deferred to the slot-hold timeout (or superseded by `PeerJoined` on rejoin).
+- **Re-Identify** cancels the reconnecting player's slot-hold (`take_grace`,
+  host or joiner); a host returning *before* promotion also cancels the promotion
+  timer and broadcasts `HostReconnected`.
+
+### Notes
+
+- `PROMOTION_GRACE` (30s, renamed from `HOST_GRACE`) and `RECONNECT_GRACE` (120s)
+  are constants; runtime config is a later refinement.
+- A <2-connected host loss still **ends** the session (a lone survivor can't play
+  out the window).
+
 ## [0.9.0] — 2026-05-29
 
 Stage 4 of the multiplayer client (server side): **server-authoritative host

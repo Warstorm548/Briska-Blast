@@ -127,3 +127,8 @@ Work intentionally deferred until after the initial production deployment of the
 - **Why deferred**: Stage 7 takes the simpler exe-only path because the saves layout itself is still in flux — saves currently live colocated under the install dir for Stage 1 testing convenience, but the roadmap also tracks moving them to a platform-standard data dir for stable. Verifying the colocated layout would be wasted work if the dir moves.
 - **Trigger to start**: Saves layout stabilises (after the platform-standard data dir migration) OR the keep-saves-on-uninstall flow accumulates real users whose backups end up orphaned.
 - **Related**: `Saves dir relocation` (above) — both items land together once saves move out of the install dir.
+
+### Game reserve fuction
+
+Ball-loss watchdog — if the single ball died with the crashed process, the rejoined match has no ball until a watchdog re-serves it. Designed in the plan: ball holder broadcasts a BallAlive heartbeat; lowest-id connected player serves after a gap. Fast-follow.
+Grace windows remain consts (runtime config later).

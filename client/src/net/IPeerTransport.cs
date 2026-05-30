@@ -23,6 +23,11 @@ public interface IPeerTransport
 
     /// <summary>Begin connecting this player to every other peer in the session.</summary>
     void Connect(string selfId, IReadOnlyList<string> peerIds);
+    /// <summary>Tear down any stale link to <paramref name="peerId"/> and
+    /// re-negotiate from scratch. Used when a peer that dropped mid-game (its
+    /// link died) rejoins, so both sides rebuild that one connection without
+    /// disturbing the rest of the mesh.</summary>
+    void ResyncPeer(string peerId);
     void Send(string peerId, byte[] data);
     void Broadcast(byte[] data);
     void Close();
