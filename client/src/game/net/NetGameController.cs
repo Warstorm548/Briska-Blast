@@ -47,8 +47,14 @@ public sealed class NetGameController : IDisposable
     public void SendHandoff(HandoffEvent ev)
     {
         var (perp, tang) = BallTransform.ToCanonical(ev.ExitEdge, ev.Velocity);
+        // Speed crosses the wire as a fraction of arena HEIGHT per second so it
+        // means the same on a differently-sized peer screen. Dividing BOTH
+        // components by the same reference (height) keeps tang/perp — the entry
+        // angle — invariant across aspect ratios; the receiver multiplies back by
+        // ITS own height. ArenaHeight comes from the viewport so it's > 0.
+        float invH = 1f / _state.ArenaHeight;
         var pkt = new BallHandoffPacket(
-            ev.BallId, ev.LastHitterId, perp, tang, ev.NormalizedAlong,
+            ev.BallId, ev.LastHitterId, perp * invH, tang * invH, ev.NormalizedAlong,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         _transport.Send(ev.PeerId, GamePacket.WriteBallHandoff(pkt));
     }
@@ -77,8 +83,13 @@ public sealed class NetGameController : IDisposable
             return;
         float along = Mathf.Clamp(pkt.Along, 0f, 1f);
 
+        // Perp/Tang arrived as a fraction of arena HEIGHT per second; scale by
+        // THIS client's height to recover pixels/second in our own frame, so the
+        // ball enters at the same relative pace/angle regardless of the sender's
+        // screen size. The transit fast-forward below is then in our pixels too.
+        float h = _state.ArenaHeight;
         var (pos, vel) = BallTransform.FromCanonical(
-            entryEdge, pkt.Perp, pkt.Tang, along,
+            entryEdge, pkt.Perp * h, pkt.Tang * h, along,
             _state.ArenaWidth, _state.ArenaHeight, _spawnRadius);
 
         // Fast-forward by transit time (clamped) so the ball doesn't visually

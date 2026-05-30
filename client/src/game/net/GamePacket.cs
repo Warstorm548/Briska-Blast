@@ -20,9 +20,12 @@ public readonly struct BallHandoffPacket
 {
     public readonly int BallId;
     public readonly string LastHitterId;
-    /// <summary>Outward-perpendicular speed at the exit edge (≥ 0).</summary>
+    /// <summary>Outward-perpendicular speed at the exit edge (≥ 0), as a fraction
+    /// of the sender's arena HEIGHT per second. The receiver multiplies by its own
+    /// arena height, so entry pace/angle is independent of either screen's size.</summary>
     public readonly float Perp;
-    /// <summary>Tangential speed along the exit edge (signed).</summary>
+    /// <summary>Tangential speed along the exit edge (signed), as a fraction of the
+    /// sender's arena HEIGHT per second (see <see cref="Perp"/>).</summary>
     public readonly float Tang;
     /// <summary>Position along the exit edge in [0, 1].</summary>
     public readonly float Along;

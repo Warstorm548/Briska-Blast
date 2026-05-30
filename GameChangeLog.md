@@ -9,6 +9,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.1] — 2026-05-29
+
+### Fixed
+
+- **Ball entered at the wrong height on non-16:9 displays** (the
+  [`known-bugs.md`](docs/planning/known-bugs.md) display-aspect bug). Each client
+  still sizes its arena from its own `GetViewportRect()`, but everything that
+  crosses the wire or was hard-coded in pixels is now **relative to the arena**, so
+  it means the same on any screen size or aspect ratio:
+  - **Handoff speeds + the transit fast-forward** (`src/game/net/NetGameController.cs`,
+    `src/game/net/GamePacket.cs`): the canonical `Perp`/`Tang` now travel as a
+    fraction of arena **height** per second — divided by height on send, multiplied
+    by the receiver's height on receive. Normalizing both components by the same
+    reference dimension preserves the entry **angle** across aspect ratios.
+    `BallTransform` stays unit-agnostic.
+  - **Object sizes/speeds** (`src/game/GameScene.cs`): `PaddleSpeed`, `ServeSpeed`,
+    `GoalGap`, `PaddleHeight`, `BallRadius` are now fractions of arena height and
+    `PaddleWidth` a fraction of arena width, resolved from each client's own arena
+    (values reproduce the original 2560×1440 feel).
+
 ## [0.7.0] — 2026-05-29
 
 Stage 4 of multiplayer (client side): the game now **survives host loss** and a

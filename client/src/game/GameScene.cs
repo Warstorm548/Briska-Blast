@@ -16,13 +16,25 @@ namespace BriskaBlast.Game;
 /// </summary>
 public partial class GameScene : Node2D
 {
-    // Tuning placeholders — gameplay feel (speeds, sizes, gap) is adjusted later.
-    private const float PaddleSpeed = 1400f;
-    private const float ServeSpeed = 900f;
-    private const float GoalGap = 120f;
-    private const float PaddleWidth = 240f;
-    private const float PaddleHeight = 36f;
-    private const float BallRadius = 24f;
+    // Tuning placeholders, expressed RELATIVE to the arena so each quantity means
+    // the same thing on any screen size or aspect ratio (clients run different
+    // arena dimensions on non-16:9 displays — see docs/planning/known-bugs.md).
+    // Speeds, the goal gap, the paddle height and the ball radius are fractions of
+    // arena HEIGHT; the paddle width is a fraction of arena WIDTH. The fractions
+    // reproduce the original feel at the 2560×1440 design size and are resolved to
+    // pixels in _Ready from THIS client's own arena.
+    private const float PaddleSpeedHFrac = 1400f / 1440f; // arena heights / second
+    private const float ServeSpeedHFrac = 900f / 1440f;   // arena heights / second
+    private const float GoalGapHFrac = 120f / 1440f;
+    private const float PaddleWidthWFrac = 240f / 2560f;
+    private const float PaddleHeightHFrac = 36f / 1440f;
+    private const float BallRadiusHFrac = 24f / 1440f;
+
+    // Pixel values resolved from this client's arena in _Ready (the ones used
+    // after construction; one-shot locals cover the rest).
+    private float _paddleSpeed;
+    private float _serveSpeed;
+    private float _ballRadius;
 
     // Peers fill these edges (bottom is always the local goal).
     private static readonly Edge[] PortalSlots = { Edge.Top, Edge.Right, Edge.Left };
@@ -50,16 +62,22 @@ public partial class GameScene : Node2D
         var ctx = SessionContext.Instance;
         var arena = GetViewportRect().Size;
 
+        // Resolve the relative tuning to this arena's pixels (height-relative,
+        // except the paddle width which is width-relative).
+        _paddleSpeed = PaddleSpeedHFrac * arena.Y;
+        _serveSpeed = ServeSpeedHFrac * arena.Y;
+        _ballRadius = BallRadiusHFrac * arena.Y;
+
         _state = new GameState
         {
             ArenaWidth = arena.X,
             ArenaHeight = arena.Y,
             LocalPlayerId = ctx?.PlayerId ?? "",
         };
-        _state.Paddle.Width = PaddleWidth;
-        _state.Paddle.Height = PaddleHeight;
+        _state.Paddle.Width = PaddleWidthWFrac * arena.X;
+        _state.Paddle.Height = PaddleHeightHFrac * arena.Y;
         _state.Paddle.CenterX = arena.X * 0.5f;
-        _state.Paddle.Y = arena.Y - GoalGap;
+        _state.Paddle.Y = arena.Y - GoalGapHFrac * arena.Y;
 
         BuildEdges(ctx);
 
@@ -89,7 +107,7 @@ public partial class GameScene : Node2D
         // score channel. Only meaningful with both a transport and a signaling
         // socket; without them this is the defensive no-peer fallback.
         if (ctx?.Transport != null && _signaling != null)
-            _controller = new NetGameController(_state, ctx.Transport, _signaling, BallRadius);
+            _controller = new NetGameController(_state, ctx.Transport, _signaling, _ballRadius);
 
         // Only the host serves the first ball; everyone else starts empty and
         // receives a ball via handoff (Slice D) or when they're scored on.
@@ -245,7 +263,7 @@ public partial class GameScene : Node2D
         var paddle = _state.Paddle;
         float half = paddle.Width * 0.5f;
         paddle.CenterX = Mathf.Clamp(
-            paddle.CenterX + dir * PaddleSpeed * dt, half, _state.ArenaWidth - half);
+            paddle.CenterX + dir * _paddleSpeed * dt, half, _state.ArenaWidth - half);
 
         if (_awaitingServe && _serveBall != null)
         {
@@ -253,7 +271,7 @@ public partial class GameScene : Node2D
             _serveBall.Pos = new Vector2(paddle.CenterX, paddle.Y - _serveBall.Radius);
             if (Input.IsActionJustPressed("serve"))
             {
-                _serveBall.Vel = new Vector2(0, -ServeSpeed);
+                _serveBall.Vel = new Vector2(0, -_serveSpeed);
                 _awaitingServe = false;
                 _serveBall = null;
             }
@@ -290,8 +308,8 @@ public partial class GameScene : Node2D
         _serveBall = new Ball
         {
             Id = _state.NextBallId(),
-            Radius = BallRadius,
-            Pos = new Vector2(_state.Paddle.CenterX, _state.Paddle.Y - BallRadius),
+            Radius = _ballRadius,
+            Pos = new Vector2(_state.Paddle.CenterX, _state.Paddle.Y - _ballRadius),
         };
         _state.Balls.Add(_serveBall);
         _awaitingServe = true;
