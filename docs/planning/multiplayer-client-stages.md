@@ -183,7 +183,7 @@ voluntary transfer puts a demoted host at the back of that order, and promotion
 consumes the front.
 
 **Deferred from Stage 4:**
-- **Grace windows are consts** (`PROMOTION_GRACE` / `RECONNECT_GRACE`), not
+- **Grace windows are constants** (`PROMOTION_GRACE` / `RECONNECT_GRACE`), not
   runtime config.
 - ~~Process-death recovery~~ — **delivered in Stage 5.**
 - ~~Host reconnect after promotion~~ — **delivered in Stage 5** (promotion now
@@ -229,7 +229,7 @@ again. Shipped as server **v0.10.0** + game **v0.8.0**.
   rejoined match has no ball until a watchdog re-serves it. Design: the holder
   broadcasts a `BallAlive` heartbeat over the mesh; after a gap the lowest-id
   connected player serves one. Fast-follow.
-- **Grace windows as runtime config** (still consts).
+- **Grace windows as runtime config** (still constants).
 
 ---
 

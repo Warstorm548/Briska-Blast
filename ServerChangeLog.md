@@ -46,7 +46,7 @@ See [`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-cli
 ### Notes
 
 - `PROMOTION_GRACE` (30s, renamed from `HOST_GRACE`) and `RECONNECT_GRACE` (120s)
-  are consts; runtime config is a later refinement.
+  are constants; runtime config is a later refinement.
 - A <2-connected host loss still **ends** the session (a lone survivor can't play
   out the window).
 
