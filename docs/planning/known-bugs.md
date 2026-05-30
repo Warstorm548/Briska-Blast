@@ -10,7 +10,15 @@ status.
 
 ## Ball appears partway down the screen on non-16:9 displays
 
-- **Status:** open — needs on-device reproduction to confirm the exact mechanism.
+- **Status:** ✅ resolved 2026-05-29 (game v0.7.1). Fixed with **percentage/relative
+  coordinates** rather than the fixed-design-size direction floated below: each
+  client keeps its own `GetViewportRect()` arena, but every wire quantity and
+  hard-coded size is now relative to it — handoff speeds + the transit fast-forward
+  cross the wire as a fraction of arena **height** per second (both components by
+  the same reference, so the entry angle survives any aspect ratio), and object
+  sizes/speeds in `GameScene` are fractions of the arena. Awaiting on-device
+  confirmation on two different-aspect displays.
+- **Status (original):** open — needs on-device reproduction to confirm the exact mechanism.
 - **Affects:** game v0.6.0+ (Extended-mode round). Reported with **2 players**
   connected.
 - **Symptom (as reported):** the player whose native display is **not** 2560×1440
