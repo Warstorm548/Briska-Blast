@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.8.1] — 2026-05-30
+
+Patch: session lobby layout fix only — no behavior or networking changes.
+
+### Fixed
+- **Session lobby** — the host's "Return to Game Setup Screen" button no longer
+  gets pushed to the bottom of the left panel (next to Cancel Session). It now
+  sits directly below the game settings details, where it belongs. Pure scene
+  reorder in `SessionLobby.tscn` (the expanding spacer now sits below the button
+  instead of above it); button styling and behavior are unchanged.
+
 ## [0.8.0] — 2026-05-30
 
 Stage 5 (client side): **process-death recovery** — a player who crashed/quit
