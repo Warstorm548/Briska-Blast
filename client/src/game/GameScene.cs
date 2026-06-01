@@ -3,6 +3,7 @@ using Godot;
 using BriskaBlast.Core;
 using BriskaBlast.Game.View;
 using BriskaBlast.Net;
+using BriskaBlast.UI.Menus;
 
 namespace BriskaBlast.Game;
 
@@ -49,6 +50,11 @@ public partial class GameScene : Node2D
     private SignalingClient? _signaling;
     private NetGameController? _controller;
     private bool _leaving;
+
+    // Esc-bound pause menu (the design mockup). Null while closed; while open the
+    // match stays live underneath but local paddle/serve input is suspended.
+    private PauseMenu? _pauseMenu;
+    private bool _paused;
 
     // Reconnect grace overlay. A client shows at most one message at a time:
     // its own socket dropped (self), the host's (host), or a peer's (peer).
@@ -171,12 +177,63 @@ public partial class GameScene : Node2D
         GetTree().ChangeSceneToFile("res://src/ui/menus/MainMenu.tscn");
     }
 
-    private void LeaveMatch()
+    // ---- Esc pause menu ----
+
+    private void TogglePauseMenu()
     {
-        // Deliberate quit: tell the server (Leave) so peers promote immediately
-        // instead of waiting out the host-reconnect grace, then return to menu.
-        _signaling?.SendLeave();
-        LeaveToMenu("");
+        if (_pauseMenu != null)
+            ClosePauseMenu();
+        else
+            OpenPauseMenu();
+    }
+
+    private void OpenPauseMenu()
+    {
+        // Mid-leave the scene is on its way out — don't pop a menu over it.
+        if (_leaving || _pauseMenu != null)
+            return;
+        _pauseMenu = GD.Load<PackedScene>("res://src/ui/menus/PauseMenu.tscn")
+            .Instantiate<PauseMenu>();
+        _pauseMenu.ReturnRequested += ClosePauseMenu;
+        _pauseMenu.ExitToMenuRequested += OnExitToMenu;
+        _pauseMenu.QuitRequested += OnQuitGame;
+        AddChild(_pauseMenu);
+        _paused = true;
+    }
+
+    // "Return to Session": just dismiss the overlay and resume play.
+    private void ClosePauseMenu()
+    {
+        if (_pauseMenu == null)
+            return;
+        _pauseMenu.ReturnRequested -= ClosePauseMenu;
+        _pauseMenu.ExitToMenuRequested -= OnExitToMenu;
+        _pauseMenu.QuitRequested -= OnQuitGame;
+        _pauseMenu.QueueFree();
+        _pauseMenu = null;
+        _paused = false;
+    }
+
+    // "Exit to main menu": leave WITHOUT an explicit `leave` frame, so the server
+    // treats us as a transient drop — holding our slot for the 2-min reconnect
+    // window and, if we were host, running the 30s promotion grace, exactly as if
+    // we'd dropped. LeaveToMenu's TeardownNet does the clean WS close that arms
+    // that path (contrast a deliberate Leave, which would promote immediately).
+    private void OnExitToMenu() => LeaveToMenu("");
+
+    // "Quit Game": same transient-drop teardown (peers keep our slot and run the
+    // grace timers), then fully close the app. Even if the clean close doesn't
+    // flush before exit, the dropped socket is still a non-`leave` disconnect, so
+    // the server arms the same grace.
+    private void OnQuitGame()
+    {
+        if (_leaving)
+            return;
+        _leaving = true;
+        var ctx = SessionContext.Instance;
+        ctx?.TeardownNet();
+        ctx?.ClearSession();
+        GetTree().Quit();
     }
 
     // ---- host-loss grace UI (Stage 4) ----
@@ -291,26 +348,27 @@ public partial class GameScene : Node2D
             UpdateOverlay();
         }
 
-        // Escape leaves the match deliberately — sends Leave so peers promote
-        // immediately rather than waiting out the host-reconnect grace.
+        // Escape toggles the in-match pause menu (open ⇄ Return to Session).
         if (Input.IsActionJustPressed("ui_cancel"))
-        {
-            LeaveMatch();
-            return;
-        }
+            TogglePauseMenu();
 
         // Paddle: Left/Right arrows. GetAxis returns +1 toward paddle_right.
-        float dir = Input.GetAxis("paddle_left", "paddle_right");
+        // Suspended while the pause menu is open — the match stays live underneath
+        // (a P2P round can't truly pause for everyone) but we stop driving input.
         var paddle = _state.Paddle;
-        float half = paddle.Width * 0.5f;
-        paddle.CenterX = Mathf.Clamp(
-            paddle.CenterX + dir * _paddleSpeed * dt, half, _state.ArenaWidth - half);
+        if (!_paused)
+        {
+            float dir = Input.GetAxis("paddle_left", "paddle_right");
+            float half = paddle.Width * 0.5f;
+            paddle.CenterX = Mathf.Clamp(
+                paddle.CenterX + dir * _paddleSpeed * dt, half, _state.ArenaWidth - half);
+        }
 
         if (_awaitingServe && _serveBall != null)
         {
             // Rest the un-served ball on the paddle until the player serves it.
             _serveBall.Pos = new Vector2(paddle.CenterX, paddle.Y - _serveBall.Radius);
-            if (Input.IsActionJustPressed("serve"))
+            if (!_paused && Input.IsActionJustPressed("serve"))
             {
                 _serveBall.Vel = new Vector2(0, -_serveSpeed);
                 _awaitingServe = false;
