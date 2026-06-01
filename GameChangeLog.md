@@ -9,6 +9,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.0] — 2026-05-31
+
+Feature: an **Esc-bound pause menu** for an active multiplayer match. Client-side
+only — it reuses the existing server-side reconnect grace, so no server change.
+
+### Added
+- **In-match pause menu** (`src/ui/menus/PauseMenu.tscn` + `PauseMenu.cs`): Esc
+  during a live round opens an overlay (styled with `MenuTheme.tres`, matching the
+  main menu) showing the **session code** and three actions — **Return to
+  Session**, **Exit to main menu**, and **Quit Game**. Esc again, or Return to
+  Session, dismisses it. While it's open the match stays live underneath (a P2P
+  round can't truly pause) but local paddle/serve input is suspended.
+
+### Changed
+- **Esc no longer instantly leaves the match.** Previously Esc sent an explicit
+  `leave` (peers promoted immediately); it now opens the pause menu instead. Both
+  **Exit to main menu** and **Quit Game** leave *without* a `leave` frame, so the
+  server treats them as a transient drop: the slot is held for the 2-min reconnect
+  window and, for a host, the 30s promotion grace runs — i.e. the leaver gets the
+  same return window a dropped player does. Quit Game then closes the app. Reuses
+  the server's `RECONNECT_GRACE` (120s) / `PROMOTION_GRACE` (30s) unchanged.
+- Host-vs-joiner menu variants are intentionally deferred (not in this release).
+
 ## [0.8.1] — 2026-05-30
 
 Patch: session lobby layout fix only — no behavior or networking changes.
