@@ -5,6 +5,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.11.0] — 2026-06-02
+
+A **time-sync probe** so clients can pin their clocks to the server. The session
+WebSocket (already open for scoring) gains a stateless request/reply pair; the
+server answers with its wall-clock time. Clients use this to stamp ball handoffs
+in a shared time frame, fixing the drift where, after a while, one player saw the
+ball enter partway down the screen (two unsynchronized PC clocks). Pairs with
+game **v0.10.0+**. See [`docs/architecture/extended-mode.md`](docs/architecture/extended-mode.md).
+
+### Added
+
+- **`ClientMsg::TimeSync { client_send_ms }` / `ServerMsg::TimeSync { client_send_ms, server_ms }`**
+  (`signaling/protocol.rs`) — a clock-sync probe. The server echoes the client's
+  own send time and adds `Utc::now().timestamp_millis()`, staying stateless; the
+  client derives `offset = server_ms − (send + recv)/2`. Handled in
+  `signaling/ws.rs` via the existing per-connection `signal_hub.send_to`. Trusted
+  and unauthenticated beyond session membership, like the other relays — the hook
+  for later server-side trajectory validation now has a shared time base.
+
+---
+
 ## [0.10.0] — 2026-05-30
 
 Stage 5 (server side): a **uniform reconnect window** so any player who drops
