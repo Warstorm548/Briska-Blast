@@ -64,7 +64,7 @@ public sealed class NetGameController : IDisposable
         float invH = 1f / _state.ArenaHeight;
         var pkt = new BallHandoffPacket(
             ev.BallId, ev.LastHitterId, perp * invH, tang * invH, ev.NormalizedAlong,
-            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            _signaling.ServerNowMs());
         _transport.Send(ev.PeerId, GamePacket.WriteBallHandoff(pkt));
     }
 
@@ -101,10 +101,15 @@ public sealed class NetGameController : IDisposable
             entryEdge, pkt.Perp * h, pkt.Tang * h, along,
             _state.ArenaWidth, _state.ArenaHeight, _spawnRadius);
 
-        // Fast-forward by transit time (clamped) so the ball doesn't visually
-        // lag at entry — a stale clock or replay can't fling it across the screen.
-        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        float transit = Mathf.Clamp((now - pkt.SentTimestampMs) / 1000f, 0f, 0.5f);
+        // Fast-forward by transit time so the ball doesn't visually lag at entry.
+        // Both ends timestamp in the server-synced frame (ServerClock), so this
+        // measures real network delay — not the gap between two machines' wall
+        // clocks, which used to drift apart and fling the ball partway down the
+        // screen. Until our clock has a sample, skip the correction and enter
+        // cleanly at the edge; the clamp is a safety net against a bad sample.
+        float transit = _signaling.ClockSynced
+            ? Mathf.Clamp((_signaling.ServerNowMs() - pkt.SentTimestampMs) / 1000f, 0f, 0.5f)
+            : 0f;
         pos += vel * transit;
 
         // Defence: a duplicate id is a packet replay or a future multi-ball

@@ -44,3 +44,28 @@ status.
   unaffected — only the simulation should stop reading the per-machine viewport.
   Confirm with two clients on different-aspect displays before and after.
 - **Workaround:** run both clients at a 16:9 resolution/window until fixed.
+
+---
+
+## Ball appears partway down the screen after several minutes (clock drift)
+
+- **Status:** ✅ resolved 2026-06-02 (game v0.10.0 + server v0.11.0). The handoff
+  now timestamps in a **server-synced time frame** (`client/src/net/ServerClock.cs`
+  fed by a `time_sync` probe in `SignalingClient`) instead of each machine's wall
+  clock, so the transit fast-forward measures real network delay and the
+  per-machine skew cancels. Awaiting on-device confirmation over a >5-minute
+  session.
+- **Affects:** game v0.6.0–v0.9.x. Reported with **2 players**, only after the
+  match had run **at least ~5 minutes** — distinct from the non-16:9 bug above,
+  which is present from the very first handoff.
+- **Symptom (as reported):** after a while, **one** player's screen shows the ball
+  entering roughly **halfway down** from the top portal instead of cleanly at the
+  edge; the other player's screen looks fine.
+- **Cause:** the fast-forward in `NetGameController.OnPeerData` computed transit as
+  `receiverWallClock − senderWallClock`, each from its own `DateTimeOffset.UtcNow`.
+  That difference is `realTransit + clockSkew`; as two unsynchronized PC clocks
+  drift apart (or one is stepped by NTP/sleep), the skew grows until every handoff
+  fast-forwards toward the 0.5 s clamp — and only the player whose clock runs ahead
+  sees it, hence "one screen." Ball speed is constant and `View2D` is
+  allocation-free, so neither a speed-up nor frame drops were involved.
+- **Fix:** server-anchored clock sync (option 3b) — see the game v0.10.0 changelog.

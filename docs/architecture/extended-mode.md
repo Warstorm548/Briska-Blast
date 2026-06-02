@@ -63,8 +63,13 @@ coordinate frame. The handoff carries a **frame-independent canonical form** —
 the speed perpendicular to the crossed edge, the speed tangential to it, and the
 position along it `[0,1]` — which the receiver maps onto its own entry edge with
 the perpendicular component now pointing inward (speed is preserved). The packet
-also carries a send timestamp; the receiver **fast-forwards** the ball by the
-transit time so it doesn't visually lag at entry. Because a ball is only ever
+also carries a send timestamp **in a server-synced time frame** (each client
+estimates its offset to the server clock via a `time_sync` probe on the session
+WebSocket — `client/src/net/ServerClock.cs`); the receiver **fast-forwards** the
+ball by the transit time so it doesn't visually lag at entry. Stamping both ends
+in the shared frame keeps that transit free of the two machines' wall-clock skew
+(which otherwise drifts apart and, after a while, drops the ball partway down the
+receiver's screen). Because a ball is only ever
 drawn on one screen, there is **no continuous ball-state stream and no
 reconciliation** — the only timing artifact is the handoff gap.
 

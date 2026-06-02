@@ -126,12 +126,12 @@ pub async fn check_for_update(
         .collect();
     candidates.sort_by(|a, b| b.0.cmp(&a.0));
 
-    for (version, tag) in candidates {
+    // candidates is sorted descending, so the first is the maximum version; if
+    // it isn't newer than current, none are.
+    if let Some((version, tag)) = candidates.into_iter().next() {
         if version > current {
             return Ok(CheckOutcome::Update(tag));
         }
-        // First candidate is the maximum; if it's not newer, none will be.
-        break;
     }
 
     Ok(CheckOutcome::NoUpdate)

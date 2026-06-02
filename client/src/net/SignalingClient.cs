@@ -86,6 +86,15 @@ public partial class SignalingClient : Node
     private const ulong ReconnectWindowMsec = 30_000; // ~ the server's host grace
     private const ulong RetryIntervalMsec = 2_000;
 
+    // Server clock sync. Periodically probes the server over this same WS so ball
+    // handoffs can be stamped in a shared time frame (see ServerClock). The first
+    // probe rides the open socket right after identify; thereafter every
+    // SyncIntervalMsec, and immediately again after a reconnect (the local clock
+    // may have stepped while we were away).
+    private const ulong SyncIntervalMsec = 12_000;
+    private readonly ServerClock _clock = new();
+    private ulong _nextSyncMsec;
+
     private sealed record IdentifyFrame(string Type, string PlayerId, string SecretToken);
     private sealed record LeaveFrame(string Type);
     private sealed record OfferFrame(string Type, string To, string Sdp);
@@ -93,6 +102,7 @@ public partial class SignalingClient : Node
     private sealed record IceFrame(string Type, string To, string Candidate, string SdpMid, int SdpMLineIndex);
     private sealed record PeerConnectionFailedFrame(string Type, string Peer, string Reason);
     private sealed record ReportScoreFrame(string Type, string ScoringPlayerId);
+    private sealed record TimeSyncFrame(string Type, long ClientSendMs);
 
     /// <summary>Open the WS for <paramref name="code"/> and begin identifying.</summary>
     public void Connect(string code, string playerId, string secretToken)
@@ -164,6 +174,17 @@ public partial class SignalingClient : Node
     public void SendReportScore(string scoringPlayerId) =>
         SendFrame(new ReportScoreFrame("report_score", scoringPlayerId));
 
+    /// <summary>Current time in the server-synced frame (ms). Both ends of a ball
+    /// handoff stamp/compare with this so cross-machine wall-clock skew cancels
+    /// and the transit fast-forward reflects only real network delay. Only
+    /// meaningful once <see cref="ClockSynced"/> is true.</summary>
+    public long ServerNowMs() => _clock.NowMs((long)Time.GetTicksMsec());
+
+    /// <summary>Whether the server clock offset has at least one sample. Callers
+    /// (the handoff fast-forward) should skip time-based correction until this is
+    /// true rather than trust an unsynced, machine-local reading.</summary>
+    public bool ClockSynced => _clock.Synced;
+
     private void SendFrame<T>(T frame)
     {
         if (_ws.GetReadyState() == WebSocketPeer.State.Open)
@@ -197,6 +218,7 @@ public partial class SignalingClient : Node
         {
             case WebSocketPeer.State.Open:
                 SendIdentifyOnce();
+                MaybeSendTimeSync();
                 DrainPackets();
                 break;
 
@@ -213,6 +235,20 @@ public partial class SignalingClient : Node
         _ws.SendText(JsonSerializer.Serialize(
             new IdentifyFrame("identify", _playerId, _secretToken), Json.Options));
         _identifySent = true;
+    }
+
+    /// <summary>Send a clock-sync probe when one is due. The server only accepts
+    /// frames after identify, so gate on that. T1 is captured right before the
+    /// send so the round-trip estimate stays tight.</summary>
+    private void MaybeSendTimeSync()
+    {
+        if (!_identifySent)
+            return;
+        ulong now = Time.GetTicksMsec();
+        if (now < _nextSyncMsec)
+            return;
+        _nextSyncMsec = now + SyncIntervalMsec;
+        SendFrame(new TimeSyncFrame("time_sync", (long)now));
     }
 
     private void DrainPackets()
@@ -246,6 +282,7 @@ public partial class SignalingClient : Node
             case WebSocketPeer.State.Open:
                 // Back up: re-identify on the fresh socket and resume.
                 SendIdentifyOnce();
+                _nextSyncMsec = 0; // re-sync now: the clock may have stepped while away
                 _reconnecting = false;
                 GD.Print("[signaling] reconnected.");
                 Reconnected?.Invoke();
@@ -358,6 +395,13 @@ public partial class SignalingClient : Node
                 case "score_update":
                     ScoreUpdate?.Invoke(ReadIntMap(root, "scores"));
                     break;
+                case "time_sync":
+                    // T4 = now; fold this round-trip into the server-clock offset.
+                    _clock.AddSample(
+                        LongProp(root, "client_send_ms"),
+                        LongProp(root, "server_ms"),
+                        (long)Time.GetTicksMsec());
+                    break;
                 case "offer":
                     OfferReceived?.Invoke(Str(root, "from"), Str(root, "sdp"));
                     break;
@@ -387,6 +431,9 @@ public partial class SignalingClient : Node
 
     private static int IntProp(JsonElement obj, string name) =>
         obj.TryGetProperty(name, out var el) && el.TryGetInt32(out var v) ? v : 0;
+
+    private static long LongProp(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var el) && el.TryGetInt64(out var v) ? v : 0;
 
     private static Dictionary<string, int> ReadIntMap(JsonElement obj, string name)
     {

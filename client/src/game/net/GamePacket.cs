@@ -29,9 +29,11 @@ public readonly struct BallHandoffPacket
     public readonly float Tang;
     /// <summary>Position along the exit edge in [0, 1].</summary>
     public readonly float Along;
-    /// <summary>Wall-clock ms when the sender emitted this — the receiver
-    /// fast-forwards the entering ball by <c>now − this</c> so the visual gap
-    /// across the network is hidden.</summary>
+    /// <summary>Server-synced time (ms) when the sender emitted this — see
+    /// <c>ServerClock</c>. The receiver fast-forwards the entering ball by
+    /// <c>now − this</c> in that same shared frame, so the gap reflects real
+    /// network transit rather than the offset between two machines' wall
+    /// clocks.</summary>
     public readonly long SentTimestampMs;
 
     public BallHandoffPacket(int ballId, string lastHitterId,

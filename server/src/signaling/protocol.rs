@@ -44,6 +44,11 @@ pub enum ClientMsg {
     /// server owns the canonical tally — a hook for later trajectory
     /// validation. The server currently trusts any session member's report.
     ReportScore { scoring_player_id: String },
+    /// Clock-sync probe. `client_send_ms` is the client's own monotonic send
+    /// time, echoed back unchanged in the `TimeSync` reply so the client can
+    /// compute round-trip delay and its offset to the server clock without the
+    /// server tracking any per-connection state. See `ServerClock` (client).
+    TimeSync { client_send_ms: i64 },
 }
 
 /// Server → client signaling frames. JSON-tagged on `type`. Cloneable
@@ -120,4 +125,10 @@ pub enum ServerMsg {
     /// overwrites its scoreboard to match the server rather than tracking
     /// deltas — a dropped/duplicated frame can't desync the score.
     ScoreUpdate { scores: HashMap<String, i64> },
+    /// Reply to a `TimeSync` probe. Echoes the client's `client_send_ms` and
+    /// carries the server's wall-clock time at reply (`server_ms`). The client
+    /// estimates `offset = server_ms − (client_send_ms + recv_ms) / 2` so all
+    /// peers can stamp ball handoffs in a shared (server) time frame, making the
+    /// transit fast-forward immune to per-machine wall-clock skew.
+    TimeSync { client_send_ms: i64, server_ms: i64 },
 }

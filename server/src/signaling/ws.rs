@@ -571,6 +571,23 @@ async fn handle_client_frame(
                     .await;
             }
         }
+        ClientMsg::TimeSync { client_send_ms } => {
+            // Reply on this same connection with the server's clock. The client
+            // echoes its own send time so we stay stateless; it derives the
+            // offset (see `ServerClock`). `Utc::now()` is the shared reference
+            // every peer syncs to so handoff timestamps are comparable.
+            state
+                .signal_hub
+                .send_to(
+                    code,
+                    from_player,
+                    ServerMsg::TimeSync {
+                        client_send_ms,
+                        server_ms: Utc::now().timestamp_millis(),
+                    },
+                )
+                .await;
+        }
         ClientMsg::Leave => return false,
     }
     true

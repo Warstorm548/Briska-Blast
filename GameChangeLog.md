@@ -9,6 +9,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.0] — 2026-06-02
+
+Fix: a **server-synced clock** for ball handoffs. Previously the handoff
+fast-forward (which nudges an entering ball inward by its transit time) measured
+that transit as the difference of two machines' wall clocks. As those clocks
+drifted apart over a session, the gap grew until the ball entered partway down
+one player's screen — the "after ~5 minutes, ball appears halfway down" bug.
+Both ends now stamp the handoff in a shared server-time frame, so the skew
+cancels. Requires server **v0.11.0+**.
+
+### Added
+- **`ServerClock`** (`src/net/ServerClock.cs`): pure SNTP-style offset estimator.
+  Given a probe's send/receive times (monotonic `Time.GetTicksMsec`) and the
+  server's reply time, it tracks `offset = server − local`, RTT-gating noisy
+  samples and smoothing with an EMA. `NowMs(localTicks)` returns server-frame
+  time; `Synced` reports whether an estimate exists yet.
+- **Clock-sync probe in `SignalingClient`**: a small `time_sync` round-trip over
+  the existing session WS — first right after identify, then every ~12s, and
+  immediately again after a reconnect (the clock may have stepped). Exposes
+  `ServerNowMs()` / `ClockSynced`.
+
+### Changed
+- **`NetGameController` handoff stamps/compares with `ServerNowMs()`** instead of
+  `DateTimeOffset.UtcNow`. Until the clock has a sample, the receiver skips the
+  fast-forward and the ball enters cleanly at the edge; the 0.5s clamp remains a
+  safety net. The `BallHandoffPacket.SentTimestampMs` wire field is unchanged
+  (still `int64`) — only its meaning (now server-frame ms) is.
+
 ## [0.9.0] — 2026-05-31
 
 Feature: an **Esc-bound pause menu** for an active multiplayer match. Client-side
