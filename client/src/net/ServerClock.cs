@@ -58,7 +58,10 @@ public sealed class ServerClock
 
         // Midpoint of send/receive is our best guess for "local time when the
         // server stamped serverMs"; the offset carries us from local → server.
-        long sampleOffset = serverMs - (t1Ticks + t4Ticks) / 2;
+        // Written as t1 + rtt/2 (rtt is already non-negative here) rather than
+        // (t1 + t4)/2 so the intermediate sum can't overflow.
+        long midpoint = t1Ticks + rtt / 2;
+        long sampleOffset = serverMs - midpoint;
 
         if (!_synced)
         {
