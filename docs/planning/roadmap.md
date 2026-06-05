@@ -9,6 +9,13 @@ For *how* an item should be built, follow the link to its spec doc.
 
 Work intentionally deferred until after the initial production deployment of the server (v0.4.1).
 
+### Bulk user deletion in the admin Users tab
+
+- **What**: Multi-select / "delete all matching" on the Users tab, on top of the per-row delete shipped in server v0.12.0. Would batch the same `delete_user` work (wipe keys + `ZADD player:freelist`) across many ids in one confirm.
+- **Why deferred**: Single-operator, small player set today — per-row delete is enough to prune stale accounts. Bulk delete needs a selection UI, a wider blast-radius confirm, and care around partial failures, for a workflow that isn't pressing yet.
+- **Trigger to start**: Player count grows enough that pruning one row at a time is tedious, OR a spam/abuse cleanup needs to remove many ids at once.
+- **Related**: the per-row handler (`server/src/admin/users.rs::delete_user`) and reuse pool (`player:freelist`) are already the seam — bulk is a loop over the existing primitive.
+
 ### Pocket ID admin SSO
 
 - **What**: Replace the bcrypt password login at `/admin/login` with Pocket ID OIDC (passkey-based SSO).

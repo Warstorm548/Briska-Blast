@@ -5,6 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.12.0] — 2026-06-05
+
+Identity **self-heal** when a channel's server-side id is deleted. Pairs with
+server **v0.12.0**, which adds admin user-deletion + id reuse — a deleted player's
+stored creds stop validating, and the launcher now recovers cleanly instead of
+silently dropping the action.
+
+### Changed
+
+- **401 → re-register on username change** (`server_api.rs`, `app.rs`).
+  `update_username` now distinguishes HTTP `401` from other failures via a new
+  `ServerApiError { Unauthorized, Other }`. On `Unauthorized`, the
+  `UpdateUsernameDone` handler re-dispatches `/register` for that channel: the
+  server rejects the stale creds, issues a fresh id (recycled from the pool), and
+  the existing `RegisterDone(Ok)` path persists it and re-applies the username —
+  one round-trip fully heals the channel. (Boot-time re-register already covered
+  the next-launch case; this closes the live-session gap.)
+
+---
+
 ## [0.11.0] — 2026-05-26
 
 Extends the game handoff so the launched client can authenticate to the

@@ -13,7 +13,7 @@ use crate::{
     error::{AppError, Result},
     state::AppState,
 };
-use super::{client_ip, hash_token};
+use super::{client_ip, hash_token, FREELIST_KEY, PLAYER_COUNTER_KEY};
 
 /// Cap username at 32 chars to match the launcher UI input; trimmed of
 /// surrounding whitespace before storage so the admin Users tab sees
@@ -62,12 +62,9 @@ pub async fn register(
     let (player_id, secret_token) = match reused {
         Some(pair) => pair,
         None => {
-            let counter: u64 = conn
-                .incr("player:counter", 1u64)
-                .await
-                .map_err(|e| AppError::Internal(e.to_string()))?;
+            let number = allocate_player_number(&mut conn).await?;
 
-            let pid = PlayerId::from_counter(counter).to_string();
+            let pid = PlayerId::from_counter(number).to_string();
             let token_bytes: [u8; 32] = rand::thread_rng().gen();
             let token = hex::encode(token_bytes);
             let hash = hash_token(&token);
@@ -100,4 +97,71 @@ pub async fn register(
         username,
         dev_flag,
     }))
+}
+
+/// Choose the next player-id number: reuse the **lowest** freed id from the
+/// pool (`ZPOPMIN player:freelist`) if one is waiting, otherwise advance the
+/// monotonic counter. `ZPOPMIN` removes the entry as it reads it and is atomic,
+/// so two concurrent registrations can never be handed the same recycled
+/// number. The counter is only touched when the pool is empty, so issued-id
+/// totals still trend upward as deleted numbers get refilled lowest-first.
+async fn allocate_player_number(conn: &mut deadpool_redis::Connection) -> Result<u64> {
+    let popped: Vec<(String, f64)> = conn
+        .zpopmin(FREELIST_KEY, 1)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    if let Some(number) = freed_number_from_pop(&popped) {
+        return Ok(number);
+    }
+    // Either the pool was empty or (defensively) held a malformed member that
+    // we just consumed — fall through to a fresh high-water number rather than
+    // failing the registration.
+    if !popped.is_empty() {
+        tracing::warn!(?popped, "discarding malformed freelist entry");
+    }
+
+    let counter: u64 = conn
+        .incr(PLAYER_COUNTER_KEY, 1u64)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(counter)
+}
+
+/// Extract the reusable id number from a `ZPOPMIN` reply, accepting it only
+/// when the popped member is a well-formed counter value. Pure + sync so the
+/// pool-vs-counter decision is unit-testable without a live Redis.
+fn freed_number_from_pop(popped: &[(String, f64)]) -> Option<u64> {
+    popped
+        .first()
+        .and_then(|(member, _score)| member.parse::<u64>().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::freed_number_from_pop;
+
+    #[test]
+    fn empty_pop_yields_no_reuse() {
+        // Empty pool → caller advances the counter instead.
+        assert_eq!(freed_number_from_pop(&[]), None);
+    }
+
+    #[test]
+    fn well_formed_pop_is_reused() {
+        assert_eq!(freed_number_from_pop(&[("5".to_string(), 5.0)]), Some(5));
+        // Tolerates a zero-padded member just in case one was ever stored that
+        // way; parse() strips the leading zeros.
+        assert_eq!(
+            freed_number_from_pop(&[("000000042".to_string(), 42.0)]),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn malformed_pop_falls_through() {
+        // A non-numeric member is ignored so a corrupt pool entry can't crash
+        // or poison a registration.
+        assert_eq!(freed_number_from_pop(&[("not-a-number".to_string(), 1.0)]), None);
+    }
 }

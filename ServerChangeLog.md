@@ -5,6 +5,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.12.0] — 2026-06-05
+
+Admin **user deletion** with **id-number reuse**. Operators can remove a stale
+player from the admin Users tab; the freed id number returns to a pool and is
+reissued — lowest-first, with a fresh secret — to the next new registration,
+while the counter stays monotonic so issued-id totals still climb. Pairs with
+launcher **v0.12.0** (401 self-heal for a deleted-but-active identity).
+
+### Added
+
+- **`POST /admin/users/delete`** (`admin/users.rs`, wired in `main.rs`) — wipes a
+  player's `token_hash` / `username` / `dev_flag` keys and `ZADD`s the freed id
+  number into the new `player:freelist` sorted set. Session-guarded and
+  existence-checked like the dev-flag handler; the recycle step is best-effort so
+  a pool hiccup never fails the delete. The Users-tab UI gates it behind a
+  click-blocking confirm modal (`admin/templates.rs`) with Cancel/Delete.
+- **Id reuse pool** (`api/register.rs`, `api/mod.rs`) — `/register` now allocates a
+  fresh number via `allocate_player_number`: `ZPOPMIN player:freelist` (lowest
+  freed id) when the pool is non-empty, else `INCR player:counter`. `player:counter`
+  is never decremented. Key names centralised as `FREELIST_KEY` / `PLAYER_COUNTER_KEY`.
+
+---
+
 ## [0.11.0] — 2026-06-02
 
 A **time-sync probe** so clients can pin their clocks to the server. The session
