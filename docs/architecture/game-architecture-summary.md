@@ -290,7 +290,7 @@ Game launches for first time
 ```
 
 ### Two-Part Identity (Hotel Analogy)
-- **Player ID** `0000001` → room number, short, readable, sequential
+- **Player ID** `0000001` → room number, short, readable, sequential — and **recyclable**: like a hotel room, once a guest checks out (an admin deletes the user) the number can be reassigned to a new guest with a new key card. See *ID Reuse & Admin Deletion* below.
 - **Secret Token** `k9mX2$nP8qL...` → key card, long, random, impossible to guess
 
 Both together prove identity. Neither alone is sufficient.
@@ -314,6 +314,12 @@ Player 100,000,000      → 000000001 (9 digits, adds another digit)
 - New identity generated
 - Previous data is lost (accepted tradeoff — no cloud saves planned)
 - Future: Steam/Epic store integration would replace this with their auth system
+
+### ID Reuse & Admin Deletion
+- An operator can delete a stale player from the admin **Users tab** (`POST /admin/users/delete`). This wipes that player's id number, secret token, and username.
+- The freed **number** returns to a reuse pool (`player:freelist`). The next brand-new registration takes the **lowest** freed number first (with a fresh secret); when the pool is empty the counter keeps climbing as before, so totals still trend upward.
+- A reissued id belongs to a *new* person and has a new secret — the old key card no longer opens the room.
+- **Recovery for a deleted-but-active player:** their stored creds stop validating, so the next authenticated call returns `401`. The launcher heals this automatically — it re-registers (on its next launch, or immediately on a `401` from a username change) and is handed a fresh id from the pool. Release game clients never self-register; they recover by being relaunched through the launcher.
 
 ### Reconnection Validation Flow
 ```

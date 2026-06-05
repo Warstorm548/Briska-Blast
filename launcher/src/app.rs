@@ -102,7 +102,7 @@ pub enum Message {
     },
     UpdateUsernameDone {
         channel: Channel,
-        result: Result<(), String>,
+        result: Result<(), server_api::ServerApiError>,
     },
     WelcomeDraftChanged(String),
     ConfirmWelcomeUsername,
@@ -624,11 +624,28 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 }
             }
         }
-        Message::UpdateUsernameDone { channel, result } => {
-            if let Err(e) = result {
+        Message::UpdateUsernameDone { channel, result } => match result {
+            Ok(()) => {}
+            Err(server_api::ServerApiError::Unauthorized) => {
+                // The server no longer recognises this identity — it was deleted
+                // (and possibly its id recycled to someone else) via the admin
+                // panel. Re-register this channel: /register rejects the stale
+                // creds and issues fresh ones (a recycled id from the pool), and
+                // the RegisterDone(Ok) handler persists them and re-applies the
+                // username. One round-trip fully heals the channel.
+                tracing::warn!(
+                    channel = %channel,
+                    "update_username unauthorized — re-registering identity"
+                );
+                let req = register_request_for(state, channel);
+                return Task::perform(server_api::register(channel, req), move |result| {
+                    Message::RegisterDone { channel, result }
+                });
+            }
+            Err(e) => {
                 tracing::warn!(error = %e, channel = %channel, "update_username failed");
             }
-        }
+        },
         Message::WelcomeDraftChanged(s) => state.welcome_draft = s,
         Message::ConfirmWelcomeUsername => {
             let trimmed = state.welcome_draft.trim().to_string();

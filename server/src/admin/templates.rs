@@ -84,6 +84,13 @@ input[type=datetime-local] { background: #0d1117; border: 1px solid #30363d; bor
 .user-table th { color: #8b949e; font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; }
 .user-table td.empty { color: #6e7681; text-align: center; padding: 18px 6px; }
 .mono { font-family: ui-monospace, SFMono-Regular, monospace; }
+.btn-danger { background: #da3633; border-color: #b5243d; color: #fff; }
+.btn-danger:hover { background: #f85149; }
+.btn-trash { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 1rem; line-height: 1; padding: 4px 8px; border-radius: 6px; }
+.btn-trash:hover { color: #f85149; background: #2d1117; }
+.modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(1,4,9,0.7); z-index: 1000; align-items: center; justify-content: center; padding: 24px 16px; }
+.modal-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 24px; width: 100%; max-width: 380px; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin: 18px 0 0; }
 ";
 
 fn nav_html(active: &str) -> String {
@@ -128,7 +135,7 @@ pub fn users_page(
     let count = users.len();
 
     let rows_html = if users.is_empty() {
-        r#"<tr><td colspan="3" class="empty">No users match.</td></tr>"#.to_string()
+        r#"<tr><td colspan="4" class="empty">No users match.</td></tr>"#.to_string()
     } else {
         users
             .iter()
@@ -136,8 +143,13 @@ pub fn users_page(
                 let chk = if u.dev_flag { " checked" } else { "" };
                 let id_e = escape(&u.id);
                 let name_e = escape(&u.username);
+                // Trash button is type="button" so it never submits the
+                // surrounding dev-flag form; it only opens the confirm modal.
+                // id/username ride along as escaped data-attributes and are
+                // read via dataset (never interpolated into a JS string), so a
+                // hostile username can't break out of the markup. &#128465; = 🗑.
                 format!(
-                    r#"<tr><td class="mono">{id_e}</td><td>{name_e}</td><td><input type="checkbox" name="dev_{id_e}"{chk}></td></tr>"#
+                    r#"<tr><td class="mono">{id_e}</td><td>{name_e}</td><td><input type="checkbox" name="dev_{id_e}"{chk}></td><td><button type="button" class="btn-trash" data-id="{id_e}" data-username="{name_e}" onclick="askDelete(this)" title="Delete user" aria-label="Delete user">&#128465;</button></td></tr>"#
                 )
             })
             .collect::<String>()
@@ -180,7 +192,7 @@ pub fn users_page(
       <form method="POST" action="/admin/users/dev-flag">
         <input type="hidden" name="known_ids" value="{known_ids_attr}">
         <table class="user-table">
-          <thead><tr><th>ID</th><th>Username</th><th>Dev</th></tr></thead>
+          <thead><tr><th>ID</th><th>Username</th><th>Dev</th><th>Delete</th></tr></thead>
           <tbody>{rows_html}</tbody>
         </table>
         <button type="submit" class="btn btn-primary" style="margin-top:14px">Confirm changes</button>
@@ -188,6 +200,40 @@ pub fn users_page(
     </div>
   </div>
 </div>
+
+<!-- Delete-confirm modal. Lives OUTSIDE the dev-flag form (nested forms are
+     invalid HTML) and is position:fixed, so the full-viewport backdrop covers
+     and blocks the page until Cancel or Delete is chosen. -->
+<div id="del-backdrop" class="modal-backdrop">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="del-title">
+    <p class="section-title" id="del-title">Delete user?</p>
+    <p class="section-sub mono" id="del-msg"></p>
+    <p class="section-sub">Frees the ID number for reuse and removes its secret + username. This cannot be undone.</p>
+    <form method="POST" action="/admin/users/delete" class="modal-actions">
+      <input type="hidden" name="id" id="del-id">
+      <button type="button" class="btn btn-sm" onclick="closeDelete()">Cancel</button>
+      <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+    </form>
+  </div>
+</div>
+<script>
+  function askDelete(btn) {{
+    var id = btn.dataset.id, name = btn.dataset.username;
+    document.getElementById('del-id').value = id;
+    // textContent (not innerHTML) so the username renders literally.
+    document.getElementById('del-msg').textContent = id + ' (' + name + ')';
+    document.getElementById('del-backdrop').style.display = 'flex';
+  }}
+  function closeDelete() {{
+    // Cancel: hide the modal and clear the target id. Nothing is submitted, so
+    // no deletion happens — only the Delete button POSTs.
+    document.getElementById('del-backdrop').style.display = 'none';
+    document.getElementById('del-id').value = '';
+  }}
+  document.addEventListener('keydown', function (e) {{
+    if (e.key === 'Escape') closeDelete();
+  }});
+</script>
 </body>
 </html>
 "#

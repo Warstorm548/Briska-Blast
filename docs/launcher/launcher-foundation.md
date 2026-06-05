@@ -67,7 +67,7 @@ One local JSON file owned by the launcher, stored in the platform's standard use
 ### Rules
 
 - **Username** is a single shared field used as the display name on **every** channel. The "Change Name" affordance updates this one value. In-game peers see the same name regardless of which channel hosts the session.
-- **Player IDs are per-channel**, sequential per server, canonical width 7 digits (e.g. `0000007`). A channel's entry is **absent** until that channel's server successfully issues an ID — see §3.
+- **Player IDs are per-channel**, sequential per server (canonical width 9 digits, minimum — e.g. `000000007`; older 7-digit ids are accepted unchanged). A channel's entry is **absent** until that channel's server successfully issues an ID — see §3. IDs are **not permanent**: a server can recycle a freed number to a new player after an admin deletes a user, so an id is unique-at-a-time only.
 - **Secret tokens are per-channel** and never leave the file. They're used by the game's auth handshake, not displayed in the launcher UI. (Reaffirms `launcher-update-and-version-validation.md:139-167`.)
 - The file is **launcher-owned**. The game receives `username` + the active channel's `player_id` (and secret) as startup parameters from the launcher, not from the server.
 - On uninstall, prompt the user: *"Keep player data for future reinstall?"* (`launcher-update-and-version-validation.md:38-46`).
@@ -82,6 +82,7 @@ On the very first launcher launch (not first game launch), the launcher reaches 
 
 - **Per-server failure mode:** if a server is unreachable, that channel's entry **remains absent**. The other channels complete normally.
 - **Retry semantics:** the launcher attempts issuance **once per launcher launch**. There is no infinite retry loop, no in-app retry button. Recovery for a previously-failed channel is: close the launcher and reopen it — the next launch retries the absent channels.
+- **Deleted-identity recovery:** every launch re-`/register`s each channel with its stored creds. If those creds were deleted server-side (admin removed the user, possibly recycling the id), the server rejects them and issues a fresh id from the reuse pool, which the launcher persists transparently. The launcher also reacts to a live `401` from `/me/username` (username change) by re-registering that channel immediately rather than dropping the rename.
 
 ### Dev channel visibility
 

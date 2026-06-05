@@ -25,7 +25,7 @@ Once WebRTC peer connections are established, the server is **not** in the game-
 
 | Endpoint | Method | Auth | Purpose |
 |---|---|---|---|
-| `/register` | POST | none | First-contact: issue `player_id` + `secret_token` |
+| `/register` | POST | none | First-contact or recovery: issue `player_id` + `secret_token`. Reuses prior creds when valid; otherwise allocates a fresh id (see ID allocation below) |
 | `/host` | POST | token | Host requests a session with a `gamemode` + `player_count`; receives a session code |
 | `/join` | POST | token | Joiner submits the code; receives the gamemode, capacity, and current roster |
 | `/session/{code}` | GET | none | Poll session status, capacity, and joiner roster |
@@ -33,7 +33,9 @@ Once WebRTC peer connections are established, the server is **not** in the game-
 | `/session/{code}/start` | POST | token (host) | Transition lobby Waiting → Starting and trigger signaling |
 | `/session/{code}/host` | POST | token (host) | Voluntarily hand the host role to a listed joiner (Waiting only); broadcasts `HostChanged` |
 
-All authenticated POSTs carry `player_id` + `secret_token` in the JSON body. Token validation: SHA-256 of the supplied token compared against `player:<id>:token_hash` in Redis.
+All authenticated POSTs carry `player_id` + `secret_token` in the JSON body. Token validation: SHA-256 of the supplied token compared against `player:<id>:token_hash` in Redis. A request whose creds no longer match a stored hash gets `401 unauthorized`; the launcher self-heals by re-registering (see below).
+
+**ID allocation & reuse.** `/register` first tries to reuse the caller's `prior_player_id` + `prior_secret_token` when they still validate. Otherwise it allocates a fresh number: it pops the **lowest** entry from the `player:freelist` sorted set (`ZPOPMIN`) if the pool is non-empty, else increments the monotonic `player:counter` (`INCR`). `player:counter` is never decremented, so issued-id totals keep climbing even as numbers are recycled. A number re-enters the pool only when an admin deletes that user via **`POST /admin/users/delete`** (admin listener), which wipes the player's `token_hash` / `username` / `dev_flag` keys and `ZADD`s the freed number back. The reissued id always carries a brand-new secret. A still-active player whose id was deleted gets `401` on their next authenticated call and is re-registered by the launcher onto a fresh id.
 
 `/host`, `/join`, `/session/{code}/start`, and `/session/{code}/host` are version-gated — see [Version Enforcement](#version-enforcement) below. `/ws/session/{code}` is not — clients are already gated by the REST step they used to learn the code.
 

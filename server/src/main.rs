@@ -98,6 +98,7 @@ async fn main() {
         .route("/admin/update/rollback", post(admin::dashboard::rollback_update))
         .route("/admin/users", get(admin::users::users_page))
         .route("/admin/users/dev-flag", post(admin::users::save_dev_flags))
+        .route("/admin/users/delete", post(admin::users::delete_user))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

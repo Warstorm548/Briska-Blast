@@ -50,6 +50,17 @@ impl Session {
     }
 }
 
+/// Monotonic high-water counter for issued player ids. Only ever `INCR`'d —
+/// never decremented — so the dashboard's "players registered" figure keeps
+/// climbing even as ids are deleted and recycled.
+pub(crate) const PLAYER_COUNTER_KEY: &str = "player:counter";
+
+/// Sorted-set pool of freed player-id numbers (member == score == the numeric
+/// counter value). Admin user-deletion pushes the freed number here; `/register`
+/// pops the **lowest** one (`ZPOPMIN`) before falling back to the counter, so
+/// deleted id numbers are reissued lowest-first to the next new player.
+pub(crate) const FREELIST_KEY: &str = "player:freelist";
+
 pub(crate) fn hash_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
