@@ -184,12 +184,18 @@ pub async fn delete_user(
 
     // Re-check existence against the canonical "this id exists" key — the form
     // id is user-supplied, and the player may already be gone (double submit).
-    let exists: bool = conn
-        .exists(format!("player:{}:token_hash", id))
+    // Match explicitly so a Redis fault is reported as such, not masked as a
+    // missing user (this is a destructive action).
+    match conn
+        .exists::<_, bool>(format!("player:{}:token_hash", id))
         .await
-        .unwrap_or(false);
-    if !exists {
-        return Redirect::to("/admin/users?err=No+such+user").into_response();
+    {
+        Ok(true) => {}
+        Ok(false) => return Redirect::to("/admin/users?err=No+such+user").into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, id = %id, "redis exists check failed");
+            return Redirect::to("/admin/users?err=Redis+error").into_response();
+        }
     }
 
     // Wipe the complete per-player key set: secret token, username, dev-flag.
