@@ -87,6 +87,7 @@ async fn main() {
         .route("/admin/login", post(admin::auth::login))
         .route("/admin/logout", post(admin::auth::logout))
         .route("/admin/dashboard", get(admin::dashboard::dashboard))
+        .route("/admin/stats", get(admin::stats::stats))
         .route("/admin/update/launcher-version", post(admin::dashboard::update_launcher_version))
         .route("/admin/update/game-version", post(admin::dashboard::update_game_version))
         .route("/admin/update/password", post(admin::dashboard::update_password))
