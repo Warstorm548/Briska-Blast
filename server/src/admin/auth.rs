@@ -1,6 +1,6 @@
 use axum::{
     extract::{Form, State},
-    http::{HeaderMap, HeaderValue},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
 };
 use deadpool_redis::redis::AsyncCommands;
@@ -8,7 +8,7 @@ use rand::Rng;
 use std::net::IpAddr;
 
 use crate::state::AppState;
-use super::{clear_cookie, require_session, set_cookie, templates, LoginForm};
+use super::{clear_cookie, require_session, set_cookie, templates, LoginForm, ADMIN_SESSION_TTL_SECS};
 
 fn request_ip(headers: &HeaderMap) -> IpAddr {
     headers
@@ -69,7 +69,11 @@ pub async fn login(
     let token = hex::encode(token_bytes);
 
     let _: () = conn
-        .set_ex(format!("admin:session:{}", token), "1", 86400u64)
+        .set_ex(
+            format!("admin:session:{}", token),
+            "1",
+            ADMIN_SESSION_TTL_SECS,
+        )
         .await
         .unwrap_or(());
 
@@ -79,6 +83,18 @@ pub async fn login(
         HeaderValue::from_str(&set_cookie(&token)).unwrap(),
     );
     response
+}
+
+/// Activity heartbeat from the admin panel JS. `require_session` already slides
+/// the session TTL forward when it validates, so this only has to report whether
+/// the session is still alive: 204 keeps the client quiet, 401 tells it to
+/// redirect to the login page.
+pub async fn keepalive(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if require_session(&headers, &state.redis).await.is_some() {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        StatusCode::UNAUTHORIZED.into_response()
+    }
 }
 
 pub async fn logout(

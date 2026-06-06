@@ -86,6 +86,7 @@ async fn main() {
         .route("/admin", get(admin::auth::login_page))
         .route("/admin/login", post(admin::auth::login))
         .route("/admin/logout", post(admin::auth::logout))
+        .route("/admin/keepalive", post(admin::auth::keepalive))
         .route("/admin/dashboard", get(admin::dashboard::dashboard))
         .route("/admin/stats", get(admin::stats::stats))
         .route("/admin/update/launcher-version", post(admin::dashboard::update_launcher_version))

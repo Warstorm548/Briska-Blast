@@ -131,6 +131,13 @@ fn nav_html(active: &str) -> String {
     // delete-confirm modal already uses. Burger + drawer are hidden ≥768px via
     // CSS. Links are real <a> navigations; the drawer's duplicate links stay
     // visibility:hidden (out of tab/AT order) until the drawer is opened.
+    //
+    // The idle-timeout warning modal + timer are appended here (rather than per
+    // page) so they ride on every authenticated page but never the login screen,
+    // which has no nav. The warn/logout seconds come from the shared server
+    // constants so the client countdown can't drift from the Redis session TTL.
+    let warn = super::ADMIN_IDLE_WARN_SECS;
+    let logout = super::ADMIN_IDLE_LOGOUT_SECS;
     format!(
         r#"<nav>
   <button type="button" class="nav-burger" aria-label="Open menu" aria-controls="nav-drawer" aria-expanded="false" onclick="bbToggleNav(this)">&#9776;</button>
@@ -157,6 +164,65 @@ fn nav_html(active: &str) -> String {
 function bbToggleNav(btn){{var nav=btn.closest('nav');var open=nav.classList.toggle('drawer-open');btn.setAttribute('aria-expanded',open?'true':'false');}}
 function bbCloseNav(){{var nav=document.querySelector('nav.drawer-open');if(!nav)return;nav.classList.remove('drawer-open');var b=nav.querySelector('.nav-burger');if(b)b.setAttribute('aria-expanded','false');}}
 document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCloseNav();}});
+</script>
+<div id="idle-backdrop" class="modal-backdrop">
+  <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="idle-title" aria-describedby="idle-desc">
+    <p class="section-title" id="idle-title">Still there?</p>
+    <p class="section-sub" id="idle-desc">You'll be signed out in <span id="idle-count">30</span> seconds due to inactivity.</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary btn-sm" id="idle-stay" onclick="bbStayLoggedIn()">Keep me logged in</button>
+    </div>
+  </div>
+</div>
+<script>
+(function(){{
+  // Idle-session timeout. The server's Redis TTL is the real security boundary;
+  // this is the UX layer: warn at {warn}s idle, force-logout at {logout}s. Wall-clock
+  // comparison on a 1s tick (not chained timeouts) so a slept/backgrounded tab is
+  // correctly treated as idle the moment it wakes.
+  var WARN_MS = {warn} * 1000, LOGOUT_MS = {logout} * 1000, PING_MS = 60000;
+  var last = Date.now(), lastPing = Date.now(), warned = false, loggingOut = false;
+  var backdrop = document.getElementById('idle-backdrop');
+  var countEl = document.getElementById('idle-count');
+  function ping(){{
+    lastPing = Date.now();
+    fetch('/admin/keepalive', {{ method: 'POST' }}).then(function(r){{
+      if (r.status === 401) window.location.href = '/admin';
+    }}).catch(function(){{}});
+  }}
+  function hideWarn(){{ if (warned) {{ warned = false; backdrop.style.display = 'none'; }} }}
+  function onActivity(){{
+    last = Date.now();
+    hideWarn();
+    // Throttled so active use refreshes the server TTL without spamming it.
+    if (Date.now() - lastPing > PING_MS) ping();
+  }}
+  // "Keep me logged in" is just an explicit activity signal (always pings here,
+  // since by definition no activity has happened for the last several minutes).
+  window.bbStayLoggedIn = onActivity;
+  ['mousedown','keydown','scroll','touchstart','click'].forEach(function(ev){{
+    document.addEventListener(ev, onActivity, {{ passive: true, capture: true }});
+  }});
+  setInterval(function(){{
+    var idle = Date.now() - last;
+    if (idle >= LOGOUT_MS) {{
+      if (loggingOut) return;            // navigation in flight — don't double-fire
+      loggingOut = true;
+      fetch('/admin/logout', {{ method: 'POST' }}).catch(function(){{}}).finally(function(){{
+        window.location.href = '/admin';
+      }});
+      return;
+    }}
+    if (idle >= WARN_MS) {{
+      if (!warned) {{
+        warned = true;
+        backdrop.style.display = 'flex';
+        if (document.getElementById('idle-stay')) document.getElementById('idle-stay').focus();
+      }}
+      countEl.textContent = Math.ceil((LOGOUT_MS - idle) / 1000);
+    }}
+  }}, 1000);
+}})();
 </script>"#
     )
 }
