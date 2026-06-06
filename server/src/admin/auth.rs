@@ -68,14 +68,21 @@ pub async fn login(
     let token_bytes: [u8; 32] = rand::thread_rng().gen();
     let token = hex::encode(token_bytes);
 
-    let _: () = conn
-        .set_ex(
+    if conn
+        .set_ex::<_, _, ()>(
             format!("admin:session:{}", token),
             "1",
             ADMIN_SESSION_TTL_SECS,
         )
         .await
-        .unwrap_or(());
+        .is_err()
+    {
+        // Fail closed: a session that wasn't persisted would "log in" the admin
+        // only to bounce them at the next request (require_session would find no
+        // key). Don't set the cookie or redirect — surface the fault instead,
+        // mirroring the redis.get() failure handling above.
+        return Html(templates::login_page(Some("Server error. Try again."))).into_response();
+    }
 
     let mut response = Redirect::to("/admin/dashboard").into_response();
     response.headers_mut().insert(

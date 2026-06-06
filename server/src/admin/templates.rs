@@ -180,8 +180,15 @@ document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCloseNav(
   // this is the UX layer: warn at {warn}s idle, force-logout at {logout}s. Wall-clock
   // comparison on a 1s tick (not chained timeouts) so a slept/backgrounded tab is
   // correctly treated as idle the moment it wakes.
+  //
+  // Activity is shared across admin tabs via a localStorage timestamp: effective
+  // idle is measured from the most recent activity in ANY tab, so a backgrounded
+  // idle tab can't force-logout a tab the user is actively using. ping/lastPing
+  // stay per-tab.
   var WARN_MS = {warn} * 1000, LOGOUT_MS = {logout} * 1000, PING_MS = 60000;
-  var last = Date.now(), lastPing = Date.now(), warned = false, loggingOut = false;
+  var SHARED_KEY = 'bb_admin_last_activity';
+  var last = Date.now(), lastPing = Date.now(), lastShared = 0;
+  var warned = false, loggingOut = false;
   var backdrop = document.getElementById('idle-backdrop');
   var countEl = document.getElementById('idle-count');
   function ping(){{
@@ -192,10 +199,16 @@ document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCloseNav(
   }}
   function hideWarn(){{ if (warned) {{ warned = false; backdrop.style.display = 'none'; }} }}
   function onActivity(){{
-    last = Date.now();
+    var now = Date.now();
+    if (now > last) last = now;
     hideWarn();
+    // Broadcast to other tabs (throttled — scroll fires rapidly).
+    if (now - lastShared > 1000) {{
+      lastShared = now;
+      try {{ localStorage.setItem(SHARED_KEY, String(now)); }} catch (e) {{}}
+    }}
     // Throttled so active use refreshes the server TTL without spamming it.
-    if (Date.now() - lastPing > PING_MS) ping();
+    if (now - lastPing > PING_MS) ping();
   }}
   // "Keep me logged in" is just an explicit activity signal (always pings here,
   // since by definition no activity has happened for the last several minutes).
@@ -203,8 +216,18 @@ document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCloseNav(
   ['mousedown','keydown','scroll','touchstart','click'].forEach(function(ev){{
     document.addEventListener(ev, onActivity, {{ passive: true, capture: true }});
   }});
+  // Activity in another tab arrives here in real time; adopt its timestamp.
+  window.addEventListener('storage', function(e){{
+    if (e.key === SHARED_KEY && e.newValue) {{
+      var ts = parseInt(e.newValue, 10) || 0;
+      if (ts > last) last = ts;
+    }}
+  }});
   setInterval(function(){{
-    var idle = Date.now() - last;
+    // Effective idle = time since the most recent activity in ANY admin tab.
+    var shared = 0;
+    try {{ shared = parseInt(localStorage.getItem(SHARED_KEY), 10) || 0; }} catch (e) {{}}
+    var idle = Date.now() - Math.max(last, shared);
     if (idle >= LOGOUT_MS) {{
       if (loggingOut) return;            // navigation in flight — don't double-fire
       loggingOut = true;
@@ -220,6 +243,8 @@ document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCloseNav(
         if (document.getElementById('idle-stay')) document.getElementById('idle-stay').focus();
       }}
       countEl.textContent = Math.ceil((LOGOUT_MS - idle) / 1000);
+    }} else {{
+      hideWarn();                        // another tab's activity un-idled us
     }}
   }}, 1000);
 }})();
