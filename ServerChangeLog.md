@@ -5,6 +5,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.14.0] — 2026-06-06
+
+**Admin panel idle session timeout.** The admin session now auto-expires after a
+short period of inactivity instead of living for 24 hours. The server-side Redis
+TTL is the security boundary; the panel shows a friendly warning modal as the UX
+layer. Inactivity is any browser/device with no clicks, taps, key presses, or
+scrolling — each of those slides the window forward.
+
+### Added
+
+- **`POST /admin/keepalive`** (`admin/auth.rs`, wired in `main.rs`) — session-guarded
+  activity heartbeat the panel JS calls (throttled) on user activity. Returns `204`
+  when the session is alive, `401` when it has expired so the client redirects to login.
+- **Idle-timeout warning modal + timer** (`admin/templates.rs` `nav_html`) — rendered on
+  every authenticated page (not the login screen). At **5:00** idle a warning modal
+  ("Still there? You'll be signed out in 30 seconds…") with a **Keep me logged in**
+  button appears with a live countdown; at **5:30** the client POSTs `/admin/logout`
+  and redirects to login. The modal reuses the existing delete-confirm modal styling
+  and uses `role="alertdialog"` + focus management. Activity (click/tap/key/scroll)
+  resets the timer and dismisses the modal.
+- **Idle policy constants** (`admin/mod.rs`) — `ADMIN_IDLE_WARN_SECS` (300),
+  `ADMIN_IDLE_LOGOUT_SECS` (330), `ADMIN_SESSION_TTL_SECS` (420). The warn/logout
+  values are injected into the panel JS so the client countdown can't drift from the
+  server TTL.
+
+### Changed
+
+- **`require_session`** (`admin/mod.rs`) now validates with `EXPIRE` instead of `EXISTS`,
+  so every authenticated request both checks the session and slides its idle TTL forward
+  in one round-trip.
+- **Admin session TTL** (`admin/auth.rs` login) reduced from a fixed **24 hours** to the
+  **420s idle backstop**. A live browser is logged out at exactly 5:30 (client-driven);
+  the 420s Redis TTL is the hard ceiling for a tab where JS isn't running (crashed/slept),
+  sized as logout + keepalive throttle + margin so a last-second "Keep me logged in" is
+  never wrongly rejected.
+
+---
+
 ## [0.13.0] — 2026-06-06
 
 **Responsive admin panel** + a new **Stats tab**. The admin site now uses the full
