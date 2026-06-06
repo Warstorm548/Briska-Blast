@@ -5,6 +5,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.13.0] — 2026-06-06
+
+**Responsive admin panel** + a new **Stats tab**. The admin site now uses the full
+width of a desktop screen instead of a narrow centre column, collapses its top tabs
+into a hamburger-drawer below 768px (phones *and* narrow desktop windows), and gains a
+dedicated Stats page for server statistics. No data model or endpoint behaviour changes
+— this is presentation plus one new read-only page.
+
+### Added
+
+- **`GET /admin/stats`** (`admin/stats.rs`, registered in `admin/mod.rs` + wired in
+  `main.rs`) — session-guarded statistics page. Reuses the dashboard's counters
+  (`player:counter` + `KEYS session:*`) to show live Active Sessions / Total Players,
+  plus greyed "coming soon" placeholder cards (Uptime, Peak Players, Sessions Today,
+  Avg Latency) scaffolded for future metrics. New `templates::stats_page`.
+- **Stats** entry added to the admin navigation (`admin/templates.rs` `nav_html`),
+  alongside Dashboard and Users.
+
+### Changed
+
+- **Responsive admin layout** (`admin/templates.rs` `CSS`) — `.page` widened from a
+  fixed 560px column to `min(92vw, 1280px)` so the card fills the rectangle on desktop
+  (top/bottom padding preserved). A `@media (max-width: 768px)` block hides the inline
+  top tabs and shows a ☰ hamburger that opens a left slide-out drawer holding the same
+  links + Logout. The drawer is toggled by an accessible `<button>`
+  (`aria-controls`/`aria-expanded`) with a small inline script (Escape closes it);
+  links are real `<a>` navigations. `nav_html` builds the link list once and reuses it
+  in both the top bar and the drawer so they can't drift.
+
+---
+
 ## [0.12.0] — 2026-06-05
 
 Admin **user deletion** with **id-number reuse**. Operators can remove a stale

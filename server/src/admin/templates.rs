@@ -31,7 +31,7 @@ fn escape(s: &str) -> String {
 const CSS: &str = "
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: system-ui, -apple-system, sans-serif; background: #0d1117; color: #c9d1d9; min-height: 100vh; padding: 24px 16px; }
-.page { max-width: 560px; margin: 0 auto; }
+.page { width: min(92vw, 1280px); margin: 0 auto; }
 .brand { color: #e94560; font-size: 1.1rem; font-weight: 700; letter-spacing: 0.5px; }
 .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 28px; }
 nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0; padding-bottom: 18px; border-bottom: 1px solid #30363d; }
@@ -55,6 +55,7 @@ input:focus { border-color: #388bfd; }
 .stat-box { flex: 1; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 14px; text-align: center; }
 .stat-num { font-size: 1.8rem; font-weight: 700; color: #e94560; line-height: 1; }
 .stat-lbl { font-size: 0.72rem; color: #6e7681; margin-top: 4px; }
+.stat-box-muted { opacity: 0.5; }
 .msg-ok  { background: #0f2912; border: 1px solid #238636; border-radius: 6px; color: #3fb950; padding: 9px 13px; font-size: 0.83rem; margin-bottom: 14px; }
 .msg-err { background: #2d1117; border: 1px solid #da3633; border-radius: 6px; color: #f85149; padding: 9px 13px; font-size: 0.83rem; margin-bottom: 14px; }
 .warn    { background: #2d2308; border: 1px solid #d29922; border-radius: 6px; color: #e3b341; padding: 9px 13px; font-size: 0.82rem; margin-bottom: 14px; }
@@ -91,22 +92,72 @@ input[type=datetime-local] { background: #0d1117; border: 1px solid #30363d; bor
 .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(1,4,9,0.7); z-index: 1000; align-items: center; justify-content: center; padding: 24px 16px; }
 .modal-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 24px; width: 100%; max-width: 380px; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin: 18px 0 0; }
+/* responsive nav: inline tabs on desktop, hamburger + left drawer below 768px */
+.nav-links { display: flex; gap: 18px; align-items: center; }
+.nav-burger { display: none; cursor: pointer; font-size: 1.4rem; line-height: 1; color: #c9d1d9; background: none; border: none; padding: 2px 8px; }
+.nav-backdrop { display: none; position: fixed; inset: 0; background: rgba(1,4,9,0.6); z-index: 90; }
+.nav-drawer { position: fixed; top: 0; left: 0; height: 100vh; width: 240px; background: #161b22; border-right: 1px solid #30363d; padding: 20px 16px; z-index: 100; transform: translateX(-100%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; display: flex; flex-direction: column; gap: 4px; }
+.nav-drawer .nav-link { display: block; padding: 10px 8px; border-bottom: 1px solid #21262d; border-left: 2px solid transparent; }
+.nav-drawer .nav-link-active { border-left-color: #e94560; border-bottom-color: #21262d; }
+.drawer-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.drawer-close { cursor: pointer; font-size: 1.1rem; color: #8b949e; background: none; border: none; padding: 2px 6px; line-height: 1; }
+.drawer-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #8b949e; }
+.drawer-logout { margin-top: 14px; padding-top: 14px; border-top: 1px solid #30363d; }
+nav.drawer-open .nav-drawer { transform: translateX(0); visibility: visible; transition: transform .2s ease; }
+nav.drawer-open .nav-backdrop { display: block; }
+@media (max-width: 768px) {
+  .page { width: 100%; }
+  .card { padding: 20px 16px; }
+  nav { justify-content: flex-start; gap: 14px; }
+  .nav-links, .nav-logout { display: none; }
+  .nav-burger { display: inline-block; }
+}
 ";
 
 fn nav_html(active: &str) -> String {
     let dash_active = if active == "dashboard" { " nav-link-active" } else { "" };
     let users_active = if active == "users" { " nav-link-active" } else { "" };
+    let stats_active = if active == "stats" { " nav-link-active" } else { "" };
+    // Built once and reused in both the desktop top bar (.nav-links) and the
+    // mobile drawer (.nav-drawer) so the two link lists can never drift apart.
+    let links = format!(
+        r#"<a href="/admin/dashboard" class="nav-link{dash_active}">Dashboard</a>
+    <a href="/admin/users" class="nav-link{users_active}">Users</a>
+    <a href="/admin/stats" class="nav-link{stats_active}">Stats</a>"#
+    );
+    // A real <button> toggles the mobile drawer (with aria-controls /
+    // aria-expanded) so keyboard and AT users can open it; a small inline script
+    // flips the `drawer-open` class and Escape closes it — mirroring the JS the
+    // delete-confirm modal already uses. Burger + drawer are hidden ≥768px via
+    // CSS. Links are real <a> navigations; the drawer's duplicate links stay
+    // visibility:hidden (out of tab/AT order) until the drawer is opened.
     format!(
         r#"<nav>
+  <button type="button" class="nav-burger" aria-label="Open menu" aria-controls="nav-drawer" aria-expanded="false" onclick="bbToggleNav(this)">&#9776;</button>
   <div class="nav-left">
     <span class="brand">Briska Blast Admin</span>
-    <a href="/admin/dashboard" class="nav-link{dash_active}">Dashboard</a>
-    <a href="/admin/users" class="nav-link{users_active}">Users</a>
+    <span class="nav-links">{links}</span>
   </div>
-  <form method="POST" action="/admin/logout" style="margin:0">
+  <form class="nav-logout" method="POST" action="/admin/logout" style="margin:0">
     <button type="submit" class="btn btn-sm">Logout</button>
   </form>
-</nav>"#
+  <div class="nav-backdrop" onclick="bbCloseNav()"></div>
+  <aside class="nav-drawer" id="nav-drawer">
+    <div class="drawer-head">
+      <button type="button" class="drawer-close" aria-label="Close menu" onclick="bbCloseNav()">&#10005;</button>
+      <span class="drawer-title">Menu</span>
+    </div>
+    {links}
+    <form class="drawer-logout" method="POST" action="/admin/logout" style="margin:0">
+      <button type="submit" class="btn btn-sm" style="width:100%">Logout</button>
+    </form>
+  </aside>
+</nav>
+<script>
+function bbToggleNav(btn){{var nav=btn.closest('nav');var open=nav.classList.toggle('drawer-open');btn.setAttribute('aria-expanded',open?'true':'false');}}
+function bbCloseNav(){{var nav=document.querySelector('nav.drawer-open');if(!nav)return;nav.classList.remove('drawer-open');var b=nav.querySelector('.nav-burger');if(b)b.setAttribute('aria-expanded','false');}}
+document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCloseNav();}});
+</script>"#
     )
 }
 
@@ -237,6 +288,68 @@ pub fn users_page(
 </body>
 </html>
 "#
+    )
+}
+
+pub fn stats_page(session_count: usize, player_count: u64) -> String {
+    let nav = nav_html("stats");
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Briska Blast — Admin Stats</title>
+  <style>{CSS}</style>
+</head>
+<body>
+<div class="page">
+  <div class="card">
+    {nav}
+    <div style="height:14px"></div>
+
+    <div class="section">
+      <p class="section-title">Server Stats</p>
+      <div class="stats" style="margin-top:12px">
+        <div class="stat-box">
+          <div class="stat-num">{session_count}</div>
+          <div class="stat-lbl">Active Sessions</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-num">{player_count}</div>
+          <div class="stat-lbl">Total Players</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <p class="section-title">Coming Soon</p>
+      <p class="section-sub">More server statistics will land here over time.</p>
+      <div class="stats" style="margin-top:12px;flex-wrap:wrap">
+        <div class="stat-box stat-box-muted" style="min-width:140px">
+          <div class="stat-num">&mdash;</div>
+          <div class="stat-lbl">Uptime</div>
+        </div>
+        <div class="stat-box stat-box-muted" style="min-width:140px">
+          <div class="stat-num">&mdash;</div>
+          <div class="stat-lbl">Peak Players</div>
+        </div>
+        <div class="stat-box stat-box-muted" style="min-width:140px">
+          <div class="stat-num">&mdash;</div>
+          <div class="stat-lbl">Sessions Today</div>
+        </div>
+        <div class="stat-box stat-box-muted" style="min-width:140px">
+          <div class="stat-num">&mdash;</div>
+          <div class="stat-lbl">Avg Latency</div>
+        </div>
+      </div>
+      <p class="note">No data yet — placeholders for upcoming metrics.</p>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>"#
     )
 }
 
