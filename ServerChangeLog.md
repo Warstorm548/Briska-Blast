@@ -29,9 +29,10 @@ dedicated Stats page for server statistics. No data model or endpoint behaviour 
   fixed 560px column to `min(92vw, 1280px)` so the card fills the rectangle on desktop
   (top/bottom padding preserved). A `@media (max-width: 768px)` block hides the inline
   top tabs and shows a ☰ hamburger that opens a left slide-out drawer holding the same
-  links + Logout. The drawer is a pure-CSS checkbox hack (no JS); links are real `<a>`
-  navigations so the drawer resets on each page load. `nav_html` builds the link list
-  once and reuses it in both the top bar and the drawer so they can't drift.
+  links + Logout. The drawer is toggled by an accessible `<button>`
+  (`aria-controls`/`aria-expanded`) with a small inline script (Escape closes it);
+  links are real `<a>` navigations. `nav_html` builds the link list once and reuses it
+  in both the top bar and the drawer so they can't drift.
 
 ---
 

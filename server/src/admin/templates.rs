@@ -94,18 +94,17 @@ input[type=datetime-local] { background: #0d1117; border: 1px solid #30363d; bor
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin: 18px 0 0; }
 /* responsive nav: inline tabs on desktop, hamburger + left drawer below 768px */
 .nav-links { display: flex; gap: 18px; align-items: center; }
-.nav-cb { display: none; }
-.nav-burger { display: none; cursor: pointer; font-size: 1.4rem; line-height: 1; color: #c9d1d9; padding: 2px 8px; user-select: none; }
+.nav-burger { display: none; cursor: pointer; font-size: 1.4rem; line-height: 1; color: #c9d1d9; background: none; border: none; padding: 2px 8px; }
 .nav-backdrop { display: none; position: fixed; inset: 0; background: rgba(1,4,9,0.6); z-index: 90; }
-.nav-drawer { position: fixed; top: 0; left: 0; height: 100vh; width: 240px; background: #161b22; border-right: 1px solid #30363d; padding: 20px 16px; z-index: 100; transform: translateX(-100%); transition: transform .2s ease; display: flex; flex-direction: column; gap: 4px; }
+.nav-drawer { position: fixed; top: 0; left: 0; height: 100vh; width: 240px; background: #161b22; border-right: 1px solid #30363d; padding: 20px 16px; z-index: 100; transform: translateX(-100%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; display: flex; flex-direction: column; gap: 4px; }
 .nav-drawer .nav-link { display: block; padding: 10px 8px; border-bottom: 1px solid #21262d; border-left: 2px solid transparent; }
 .nav-drawer .nav-link-active { border-left-color: #e94560; border-bottom-color: #21262d; }
 .drawer-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-.drawer-close { cursor: pointer; font-size: 1.1rem; color: #8b949e; padding: 2px 6px; line-height: 1; }
+.drawer-close { cursor: pointer; font-size: 1.1rem; color: #8b949e; background: none; border: none; padding: 2px 6px; line-height: 1; }
 .drawer-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #8b949e; }
 .drawer-logout { margin-top: 14px; padding-top: 14px; border-top: 1px solid #30363d; }
-#nav-cb:checked ~ .nav-drawer { transform: translateX(0); }
-#nav-cb:checked ~ .nav-backdrop { display: block; }
+nav.drawer-open .nav-drawer { transform: translateX(0); visibility: visible; transition: transform .2s ease; }
+nav.drawer-open .nav-backdrop { display: block; }
 @media (max-width: 768px) {
   .page { width: 100%; }
   .card { padding: 20px 16px; }
@@ -126,14 +125,15 @@ fn nav_html(active: &str) -> String {
     <a href="/admin/users" class="nav-link{users_active}">Users</a>
     <a href="/admin/stats" class="nav-link{stats_active}">Stats</a>"#
     );
-    // #nav-cb is the first child so `#nav-cb:checked ~ .nav-drawer/.nav-backdrop`
-    // can reveal the drawer (CSS checkbox hack — no JS). Tapping the ☰ label or
-    // the dim backdrop toggles it. Links are real <a> navigations, so the drawer
-    // resets on the next page load. The drawer/burger are hidden ≥768px via CSS.
+    // A real <button> toggles the mobile drawer (with aria-controls /
+    // aria-expanded) so keyboard and AT users can open it; a small inline script
+    // flips the `drawer-open` class and Escape closes it — mirroring the JS the
+    // delete-confirm modal already uses. Burger + drawer are hidden ≥768px via
+    // CSS. Links are real <a> navigations; the drawer's duplicate links stay
+    // visibility:hidden (out of tab/AT order) until the drawer is opened.
     format!(
         r#"<nav>
-  <input type="checkbox" id="nav-cb" class="nav-cb">
-  <label for="nav-cb" class="nav-burger" aria-label="Open menu" title="Menu">&#9776;</label>
+  <button type="button" class="nav-burger" aria-label="Open menu" aria-controls="nav-drawer" aria-expanded="false" onclick="bbToggleNav(this)">&#9776;</button>
   <div class="nav-left">
     <span class="brand">Briska Blast Admin</span>
     <span class="nav-links">{links}</span>
@@ -141,10 +141,10 @@ fn nav_html(active: &str) -> String {
   <form class="nav-logout" method="POST" action="/admin/logout" style="margin:0">
     <button type="submit" class="btn btn-sm">Logout</button>
   </form>
-  <label for="nav-cb" class="nav-backdrop"></label>
-  <aside class="nav-drawer">
+  <div class="nav-backdrop" onclick="bbCloseNav()"></div>
+  <aside class="nav-drawer" id="nav-drawer">
     <div class="drawer-head">
-      <label for="nav-cb" class="drawer-close" aria-label="Close menu" title="Close">&#10005;</label>
+      <button type="button" class="drawer-close" aria-label="Close menu" onclick="bbCloseNav()">&#10005;</button>
       <span class="drawer-title">Menu</span>
     </div>
     {links}
@@ -152,7 +152,12 @@ fn nav_html(active: &str) -> String {
       <button type="submit" class="btn btn-sm" style="width:100%">Logout</button>
     </form>
   </aside>
-</nav>"#
+</nav>
+<script>
+function bbToggleNav(btn){{var nav=btn.closest('nav');var open=nav.classList.toggle('drawer-open');btn.setAttribute('aria-expanded',open?'true':'false');}}
+function bbCloseNav(){{var nav=document.querySelector('nav.drawer-open');if(!nav)return;nav.classList.remove('drawer-open');var b=nav.querySelector('.nav-burger');if(b)b.setAttribute('aria-expanded','false');}}
+document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCloseNav();}});
+</script>"#
     )
 }
 
