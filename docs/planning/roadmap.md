@@ -135,6 +135,13 @@ Work intentionally deferred until after the initial production deployment of the
 - **Trigger to start**: Saves layout stabilises (after the platform-standard data dir migration) OR the keep-saves-on-uninstall flow accumulates real users whose backups end up orphaned.
 - **Related**: `Saves dir relocation` (above) — both items land together once saves move out of the install dir.
 
+### Consistent save-failure handling in the username-rename flow
+
+- **What**: Make `confirm_username_change` (the launcher rename handler) mirror the safer ordering already used by `confirm_welcome_username` (first-register): clone the identity → set the new username → `identity::save` → return/log on save error → and only on a successful save commit `state.identity`, close the menu, and fan out `update_username` to the channel servers. Today the rename handler mutates in-memory state and notifies the servers even when the local save fails, so on-disk, in-memory, and server username can briefly diverge.
+- **Why deferred**: Pre-existing latent inconsistency, not a live bug — a failed save during rename leaves only the *username* stale; `player_id`/`secret_token` stay intact and the server-canonical username reconciliation on the next `/register` heals the drift. The stricter clone-then-commit ordering is load-bearing only for first-register (reaching `/register` without an on-disk record would orphan the server identity), which is why the two handlers legitimately differ. Folding the change into the `app.rs` → `app/` refactor (PR #61) would have broken that PR's no-behavior-change contract, so it was split out here. Flagged by review on PR #61.
+- **Trigger to start**: The identity-file schema or registration flow is reworked (raising the stakes of a half-saved rename), OR a user reports real username drift after a save failure.
+- **Related**: `launcher/src/app/handlers/identity.rs` — `confirm_username_change` (handler to change) vs. `confirm_welcome_username` (the pattern to copy).
+
 ### Game reserve fuction
 
 Ball-loss watchdog — if the single ball died with the crashed process, the rejoined match has no ball until a watchdog re-serves it. Designed in the plan: ball holder broadcasts a BallAlive heartbeat; lowest-id connected player serves after a gap. Fast-follow.
