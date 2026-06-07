@@ -126,7 +126,7 @@ Work intentionally deferred until after the initial production deployment of the
 - **What**: Make the "Skip & Play" dismissal of the first-Play firewall prompt persistent per-channel, so a user who declined once isn't re-prompted on the next launcher launch while the rule is still missing.
 - **Why deferred**: The shipped behavior uses an in-memory `firewall_prompt_dismissed` set that resets on restart — re-prompting next launch is defensible (the rule genuinely is still absent), and persisting it means an identity.json schema add. Polish, not correctness.
 - **Trigger to start**: User annoyance reports about being re-prompted, OR the identity schema is being revised for another reason.
-- **Related**: `launcher/src/app.rs` (`AppState::firewall_prompt_dismissed`), `launcher/src/identity.rs` (where a persisted per-channel flag would live).
+- **Related**: `launcher/src/app/state.rs` (`AppState::firewall_prompt_dismissed`), `launcher/src/identity.rs` (where a persisted per-channel flag would live).
 
 ### Saves-dir intact verify mode
 
@@ -134,6 +134,13 @@ Work intentionally deferred until after the initial production deployment of the
 - **Why deferred**: Stage 7 takes the simpler exe-only path because the saves layout itself is still in flux — saves currently live colocated under the install dir for Stage 1 testing convenience, but the roadmap also tracks moving them to a platform-standard data dir for stable. Verifying the colocated layout would be wasted work if the dir moves.
 - **Trigger to start**: Saves layout stabilises (after the platform-standard data dir migration) OR the keep-saves-on-uninstall flow accumulates real users whose backups end up orphaned.
 - **Related**: `Saves dir relocation` (above) — both items land together once saves move out of the install dir.
+
+### Consistent save-failure handling in the username-rename flow
+
+- **What**: Make `confirm_username_change` (the launcher rename handler) mirror the safer ordering already used by `confirm_welcome_username` (first-register): clone the identity → set the new username → `identity::save` → return/log on save error → and only on a successful save commit `state.identity`, close the menu, and fan out `update_username` to the channel servers. Today the rename handler mutates in-memory state and notifies the servers even when the local save fails, so on-disk, in-memory, and server username can briefly diverge.
+- **Why deferred**: Pre-existing latent inconsistency, not a live bug — a failed save during rename leaves only the *username* stale; `player_id`/`secret_token` stay intact and the server-canonical username reconciliation on the next `/register` heals the drift. The stricter clone-then-commit ordering is load-bearing only for first-register (reaching `/register` without an on-disk record would orphan the server identity), which is why the two handlers legitimately differ. Folding the change into the `app.rs` → `app/` refactor (PR #61) would have broken that PR's no-behavior-change contract, so it was split out here. Flagged by review on PR #61.
+- **Trigger to start**: The identity-file schema or registration flow is reworked (raising the stakes of a half-saved rename), OR a user reports real username drift after a save failure.
+- **Related**: `launcher/src/app/handlers/identity.rs` — `confirm_username_change` (handler to change) vs. `confirm_welcome_username` (the pattern to copy).
 
 ### Game reserve fuction
 

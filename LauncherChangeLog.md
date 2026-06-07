@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.12.1] — 2026-06-07
+
+Internal refactor only — **no behavior change**.
+
+### Changed
+
+- **`app.rs` split into an `app/` module tree** for maintainability (it had grown
+  to ~1487 lines). The single file is now `app/mod.rs` (the `update` dispatcher,
+  shared helpers, `boot`/`view`/`theme`/`title`), `app/message.rs` (`Message`,
+  `CenterView`, `SettingsTab`), `app/state.rs` (`AppState`), and per-feature
+  handlers under `app/handlers/` (`nav`, `launcher_update`, `identity`, `install`,
+  `play`, `maintenance`, `firewall`). Each `update` match arm moved verbatim into a
+  handler function; the public `crate::app::{…}` surface and runtime behavior are
+  unchanged (build, clippy on the Linux + `x86_64-pc-windows-gnu` targets, and the
+  test suite all pass).
+
+---
+
 ## [0.12.0] — 2026-06-05
 
 Identity **self-heal** when a channel's server-side id is deleted. Pairs with
