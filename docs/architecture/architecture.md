@@ -76,7 +76,11 @@ Rust + Iced standalone binary that runs before the game. See [`devtools.md`](../
 
 **Built:**
 - `src/main.rs` — entry point; inits tracing, cleans up stale self-update artifacts, then boots the Iced application
-- `src/app.rs` — Iced state machine: `AppState` view-model and the `Message` enum; boot registers across channels and queries the latest release per channel
+- `src/app/` — Iced state machine, split by feature concern:
+  - `mod.rs` — the `update()` dispatcher, shared helpers (per-channel register / latest-release fan-out, `launch_game`, update-banner recompute), and the `boot`/`view`/`theme`/`title` hooks; boot registers across channels and queries the latest release per channel
+  - `message.rs` — the `Message` enum (closed set of UI intents), `CenterView` (center-pane route), `SettingsTab`
+  - `state.rs` — `AppState` view-model and its `Default`
+  - `handlers/` — one module per feature domain, each holding that domain's `update` arms: `nav`, `launcher_update`, `identity`, `install`, `play`, `maintenance`, `firewall`
 - `src/channel.rs` — `Channel` enum (Stable / EA / Dev) and the per-channel server hostname mapping
 - `src/identity.rs` — per-user identity file (username + per-channel creds: `player_id`, `secret_token`, install location, installed version), stored under the OS data dir (outside the binary location for UAC/elevation safety)
 - `src/server_api.rs` — thin HTTP wrapper over `/register` and `/me/username` (pooled `reqwest`)

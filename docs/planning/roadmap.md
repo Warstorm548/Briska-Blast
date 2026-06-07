@@ -126,7 +126,7 @@ Work intentionally deferred until after the initial production deployment of the
 - **What**: Make the "Skip & Play" dismissal of the first-Play firewall prompt persistent per-channel, so a user who declined once isn't re-prompted on the next launcher launch while the rule is still missing.
 - **Why deferred**: The shipped behavior uses an in-memory `firewall_prompt_dismissed` set that resets on restart — re-prompting next launch is defensible (the rule genuinely is still absent), and persisting it means an identity.json schema add. Polish, not correctness.
 - **Trigger to start**: User annoyance reports about being re-prompted, OR the identity schema is being revised for another reason.
-- **Related**: `launcher/src/app.rs` (`AppState::firewall_prompt_dismissed`), `launcher/src/identity.rs` (where a persisted per-channel flag would live).
+- **Related**: `launcher/src/app/state.rs` (`AppState::firewall_prompt_dismissed`), `launcher/src/identity.rs` (where a persisted per-channel flag would live).
 
 ### Saves-dir intact verify mode
 
