@@ -5,6 +5,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.14.1] — 2026-06-09
+
+**Refactor: split `signaling/ws.rs` into a `ws/` module tree.** `ws.rs` had grown
+to ~905 lines, bundling the connection lifecycle, identify/auth, inbound frame
+routing, disconnect-grace orchestration, and the atomic Redis Lua mutations in
+one file. Split it into a `ws/` module tree so each file holds one concern:
+
+```
+ws/mod.rs          ws_handler + handle_socket lifecycle, close-code consts, close_with
+ws/identify.rs     Phase-1 token auth + peer-roster snapshot
+ws/frame.rs        Phase-3 inbound client-frame routing
+ws/disconnect.rs   promotion/reconnect grace windows + slot-hold timers
+ws/session_ops.rs  atomic end / promote-demote / remove Lua scripts
+```
+
+Every function body moved **verbatim** — cross-module calls go through `use`
+imports so each relocated body is byte-for-byte identical to the original. No
+behavior or logic change; the public `crate::signaling::ws::ws_handler` surface
+is preserved, so `main.rs`'s route wiring is untouched.
+
+Verified: `cargo build` + `cargo clippy` clean (only the pre-existing `is_full` /
+`Kicked` dead-code warnings), `cargo test` (51/51) pass, and a logic-token
+invariant check confirms only import statements differ between the old single
+file and the new module tree.
+
+Patch bump `0.14.0` → `0.14.1` as a marker for the refactor.
+
+---
+
 ## [0.14.0] — 2026-06-06
 
 **Admin panel idle session timeout.** The admin session now auto-expires after a
