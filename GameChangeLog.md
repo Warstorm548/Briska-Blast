@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.11.0] — 2026-06-09
+
+### Added
+- **Achievements** and **Credits** buttons on the main menu (`MainMenu.tscn`).
+  Achievements sits under Customization; Credits sits under Settings. Both ship
+  **disabled** as placeholders following the existing menu theme — no `Pressed`
+  handlers are wired yet (like the existing Solo Play / Customization buttons).
+  Functionality lands in a later release.
+
 ## [0.10.0] — 2026-06-02
 
 Fix: a **server-synced clock** for ball handoffs. Previously the handoff
