@@ -94,6 +94,10 @@ public partial class GameScene : Node2D
         BuildEdges(ctx);
 
         _view = new View2D();
+        // Label the scoreboard by username (server-provided, learned via the
+        // signaling roster) instead of the internal player_id. Null-safe: a view
+        // without a resolver falls back to the raw id.
+        _view.NameResolver = ctx != null ? ctx.DisplayNameFor : null;
         AddChild(_view);
 
         BuildOverlay();

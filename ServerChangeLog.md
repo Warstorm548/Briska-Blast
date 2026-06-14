@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.15.0] — 2026-06-13
+
+### Added
+- **Usernames in the signaling roster frames.** The `Identified` frame now
+  carries a `usernames` map (player_id → display name) for the ids it
+  references — self, host, and peers — and `PeerJoined` carries the joining
+  player's `username`. Names are resolved from Redis (`player:<id>:username`) in
+  a single `MGET` via a new `fetch_usernames` helper (`api/mod.rs`). Ids with no
+  stored username are omitted from the map, and a Redis error degrades to an
+  empty map, so a missing display name never fails a signaling connection — the
+  client falls back to `Player <id>`. This lets the game client label the lobby
+  roster and in-game scoreboard by username while keeping `player_id` an
+  internal-only identifier. Additive to the WS protocol; pairs with game
+  **v0.12.0**.
+
+---
+
 ## [0.14.1] — 2026-06-09
 
 **Refactor: split `signaling/ws.rs` into a `ws/` module tree.** `ws.rs` had grown

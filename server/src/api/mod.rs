@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shared::types::gamemode::GameMode;
 use shared::types::session::SessionStatus;
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 
 use axum::extract::ConnectInfo;
@@ -84,6 +85,42 @@ pub(crate) async fn validate_player(
     }
 
     Ok(())
+}
+
+/// Resolve the server-stored display names for `ids` in one round-trip,
+/// returning a `player_id -> username` map. Ids with no username on file are
+/// **omitted** (so the client falls back to `Player <id>`), and a Redis error
+/// degrades to an empty map rather than failing — a missing display name must
+/// never break a signaling connection. Used to label the lobby roster and
+/// in-game scoreboard by username instead of the internal numeric id.
+pub(crate) async fn fetch_usernames(
+    conn: &mut deadpool_redis::Connection,
+    ids: &[String],
+) -> HashMap<String, String> {
+    if ids.is_empty() {
+        return HashMap::new();
+    }
+
+    let keys: Vec<String> = ids
+        .iter()
+        .map(|id| format!("player:{}:username", id))
+        .collect();
+
+    let values: Vec<Option<String>> = match conn.mget(&keys).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("fetch_usernames: mget failed, falling back to ids: {}", e);
+            return HashMap::new();
+        }
+    };
+
+    // Zip ids back with their values; keep only ids that had a stored name.
+    // Filtering nils here means the wire map never carries an empty string,
+    // which the client would otherwise render as a blank name.
+    ids.iter()
+        .zip(values)
+        .filter_map(|(id, name)| name.map(|n| (id.clone(), n)))
+        .collect()
 }
 
 pub(crate) fn client_ip(

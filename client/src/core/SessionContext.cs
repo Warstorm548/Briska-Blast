@@ -25,6 +25,14 @@ public partial class SessionContext : Node
     public string HostPlayerId { get; set; } = "";
     public bool LocalPlayerIsHost => HostPlayerId == PlayerId && !string.IsNullOrEmpty(PlayerId);
 
+    /// <summary>player_id → server-provided display name, learned from the
+    /// signaling Identified / PeerJoined frames. Backs <see cref="DisplayNameFor"/>
+    /// so the lobby roster and in-game scoreboard show usernames rather than the
+    /// internal id. Additive within a session (not pruned on PeerLeft, so a
+    /// departed player who still holds points keeps their name on the scoreboard);
+    /// cleared whenever a session starts or ends.</summary>
+    private readonly Dictionary<string, string> _usernames = new();
+
     // ---- Identity ----
     public string PlayerId { get; private set; } = "";
     public string SecretToken { get; private set; } = "";
@@ -137,6 +145,7 @@ public partial class SessionContext : Node
         GameMode = mode;
         MaxPlayers = maxPlayers;
         PlayerIds.Clear();
+        _usernames.Clear();
         PlayerIds.Add(PlayerId);
         HostPlayerId = PlayerId;
     }
@@ -148,6 +157,7 @@ public partial class SessionContext : Node
         GameMode = mode;
         MaxPlayers = maxPlayers;
         PlayerIds.Clear();
+        _usernames.Clear();
         PlayerIds.AddRange(roster);
         if (!PlayerIds.Contains(PlayerId))
             PlayerIds.Add(PlayerId);
@@ -164,6 +174,7 @@ public partial class SessionContext : Node
         GameMode = mode;
         MaxPlayers = maxPlayers;
         PlayerIds.Clear();
+        _usernames.Clear();
         HostPlayerId = "";
         RejoinInProgress = true;
     }
@@ -174,6 +185,7 @@ public partial class SessionContext : Node
         GameMode = "";
         MaxPlayers = 0;
         PlayerIds.Clear();
+        _usernames.Clear();
         HostPlayerId = "";
         RejoinInProgress = false;
     }
@@ -210,9 +222,33 @@ public partial class SessionContext : Node
         Signaling = null;
     }
 
-    /// <summary>Display name for a roster slot: the local username for self,
-    /// otherwise <c>Player &lt;id&gt;</c> (the server roster has no usernames
-    /// yet — usernames-in-roster is a documented later enhancement).</summary>
-    public string DisplayNameFor(string playerId) =>
-        playerId == PlayerId ? LocalUsername : $"Player {playerId}";
+    /// <summary>Record one peer's server-provided display name (from a
+    /// PeerJoined frame). Empty ids/names are ignored so a player with no
+    /// username on file falls through to the <c>Player &lt;id&gt;</c> fallback.</summary>
+    public void SetUsername(string playerId, string username)
+    {
+        if (!string.IsNullOrEmpty(playerId) && !string.IsNullOrEmpty(username))
+            _usernames[playerId] = username;
+    }
+
+    /// <summary>Merge a player_id → username map (from an Identified roster
+    /// snapshot) into the known names. Empty names are skipped.</summary>
+    public void MergeUsernames(IReadOnlyDictionary<string, string> usernames)
+    {
+        foreach (var (id, name) in usernames)
+            SetUsername(id, name);
+    }
+
+    /// <summary>Display name for a roster slot: the local username for self, the
+    /// server-provided username once we've learned one for this id, otherwise the
+    /// <c>Player &lt;id&gt;</c> fallback. The numeric id is an internal key and is
+    /// only surfaced through this fallback when no username is available.</summary>
+    public string DisplayNameFor(string playerId)
+    {
+        if (playerId == PlayerId)
+            return LocalUsername;
+        if (_usernames.TryGetValue(playerId, out var name) && !string.IsNullOrEmpty(name))
+            return name;
+        return $"Player {playerId}";
+    }
 }

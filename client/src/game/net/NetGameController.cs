@@ -143,9 +143,12 @@ public sealed class NetGameController : IDisposable
     /// peers whose link we'd walled off (it dropped mid-game and is rejoining),
     /// restore its portal edge and re-negotiate just that connection. Ignored
     /// when the peer is still live (a process-alive WS blip — its mesh link
-    /// never died, so it stays in <see cref="_peerToEdge"/>) or isn't ours.</summary>
-    private void OnPeerRejoined(string peerId)
+    /// never died, so it stays in <see cref="_peerToEdge"/>) or isn't ours.
+    /// The peer's username (second arg) is irrelevant to mesh healing — the
+    /// lobby/scoreboard consume it via SessionContext.</summary>
+    private void OnPeerRejoined(string peerId, string username)
     {
+        _ = username; // not used for re-meshing; carried by the PeerJoined event
         if (!_peerHomeEdge.TryGetValue(peerId, out var edge))
             return; // not one of this screen's portal peers
         if (_peerToEdge.ContainsKey(peerId))

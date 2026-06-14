@@ -249,6 +249,7 @@ mod tests {
             "ABC",
             ServerMsg::PeerJoined {
                 player_id: "X".into(),
+                username: "Xander".into(),
             },
             None,
         )
@@ -268,6 +269,7 @@ mod tests {
             "ABC",
             ServerMsg::PeerJoined {
                 player_id: "X".into(),
+                username: "Xander".into(),
             },
             Some("0000001"),
         )
