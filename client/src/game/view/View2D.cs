@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 using Godot;
@@ -33,6 +34,12 @@ public partial class View2D : Node2D, IGameView
     private readonly StringBuilder _scoreText = new();
 
     private GameState? _state;
+
+    /// <summary>Resolves a player_id to the display name shown on the scoreboard.
+    /// Injected by <c>GameScene</c> from <c>SessionContext.DisplayNameFor</c>. When
+    /// null (e.g. a view rendered in isolation) the scoreboard falls back to the
+    /// raw id, so the numeric id is never shown as long as a resolver is wired.</summary>
+    public Func<string, string>? NameResolver { get; set; }
 
     public override void _Ready()
     {
@@ -100,8 +107,11 @@ public partial class View2D : Node2D, IGameView
             _ballSprites.Remove(id);
         }
 
-        // Scoreboard: "<pid>: N  <pid>: N  ..." sorted by player_id. Reusing the
-        // StringBuilder + sort buffer keeps Render allocation-free.
+        // Scoreboard: "<name>: N  <name>: N  ..." sorted by player_id (stable and
+        // unique, so duplicate display names never reorder columns); each id is
+        // rendered as its username via NameResolver, falling back to the raw id
+        // only when no resolver/name is available. Reusing the StringBuilder +
+        // sort buffer keeps Render allocation-free apart from the resolver call.
         _scoreOrder.Clear();
         foreach (var pid in state.Scores.Keys)
             _scoreOrder.Add(pid);
@@ -112,7 +122,8 @@ public partial class View2D : Node2D, IGameView
         {
             if (_scoreText.Length > 0)
                 _scoreText.Append("   ");
-            _scoreText.Append(pid).Append(": ").Append(state.Scores[pid]);
+            var name = NameResolver?.Invoke(pid) ?? pid;
+            _scoreText.Append(name).Append(": ").Append(state.Scores[pid]);
         }
         _scoreboard.Text = _scoreText.ToString();
 

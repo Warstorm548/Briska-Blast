@@ -47,6 +47,8 @@ All authenticated POSTs carry `player_id` + `secret_token` in the JSON body. Tok
 
 The client must send `{"type":"identify","player_id":"…","secret_token":"…"}` as the first text frame within 5 seconds of the upgrade. The server validates the token, confirms the player is a member of `session:{code}` in Redis, registers them in the in-process SignalHub, and replies with `Identified`. Any other initial frame closes the connection with code `4400`.
 
+The `Identified` reply carries the lobby roster (`peers`) plus a `usernames` map — `player_id → display name` for the ids in the frame (self, host, peers), resolved from Redis `player:<id>:username`. Ids with no stored username are omitted, so the client labels the lobby roster and in-game scoreboard by username and falls back to `Player <id>` only when a name is unavailable. The numeric `player_id` stays an internal identifier and is never shown to players otherwise.
+
 Close codes (4xxx, app-defined):
 
 | Code | Reason | When |
@@ -59,7 +61,7 @@ Close codes (4xxx, app-defined):
 
 After `Identified`, the client and server exchange the messages documented in `server/src/signaling/protocol.rs` (`ClientMsg` for incoming, `ServerMsg` for outgoing). The server attests `from` on every relayed message based on the authenticated WS connection — clients cannot forge a `from` field.
 
-Lobby lifecycle frames (server → client): `PeerJoined`, `PeerLeft { reason }` (`"disconnect"` for a dropped socket, `"leave"` for a deliberate `Leave`), `HostChanged { player_id }` (host role moved — currently only via a voluntary `/session/{code}/host` transfer), `SessionEnded { reason }`, and `Kicked { reason }`.
+Lobby lifecycle frames (server → client): `PeerJoined { player_id, username }` (`username` empty when none is on file), `PeerLeft { reason }` (`"disconnect"` for a dropped socket, `"leave"` for a deliberate `Leave`), `HostChanged { player_id }` (host role moved — currently only via a voluntary `/session/{code}/host` transfer), `SessionEnded { reason }`, and `Kicked { reason }`.
 
 ## End-to-end signaling flow
 

@@ -26,9 +26,14 @@ namespace BriskaBlast.Net;
 /// </summary>
 public partial class SignalingClient : Node
 {
-    /// <summary>Identify accepted. Carries (hostPlayerId, peers, selfIsHost).</summary>
-    public event Action<string, string[], bool>? Identified;
-    public event Action<string>? PeerJoined;
+    /// <summary>Identify accepted. Carries (hostPlayerId, peers, selfIsHost,
+    /// usernames) where <c>usernames</c> maps player_id → display name for the
+    /// ids in this frame (host + self + peers); ids with no server username are
+    /// absent, so consumers fall back to <c>Player &lt;id&gt;</c>.</summary>
+    public event Action<string, string[], bool, Dictionary<string, string>>? Identified;
+    /// <summary>A peer completed identify. Carries (playerId, username); username
+    /// is empty when none is on file.</summary>
+    public event Action<string, string>? PeerJoined;
     public event Action<string, string>? PeerLeft;
     public event Action<string>? HostChanged;
     public event Action<string, int, string[]>? StartSignaling;
@@ -360,10 +365,11 @@ public partial class SignalingClient : Node
                     Identified?.Invoke(
                         Str(root, "host_player_id"),
                         ReadStrings(root, "peers"),
-                        root.GetProperty("is_host").GetBoolean());
+                        root.GetProperty("is_host").GetBoolean(),
+                        ReadStringMap(root, "usernames"));
                     break;
                 case "peer_joined":
-                    PeerJoined?.Invoke(Str(root, "player_id"));
+                    PeerJoined?.Invoke(Str(root, "player_id"), Str(root, "username"));
                     break;
                 case "peer_left":
                     PeerLeft?.Invoke(Str(root, "player_id"), Str(root, "reason"));
@@ -442,6 +448,19 @@ public partial class SignalingClient : Node
             foreach (var prop in el.EnumerateObject())
                 if (prop.Value.TryGetInt32(out var v))
                     map[prop.Name] = v;
+        return map;
+    }
+
+    /// <summary>Read a JSON object of string→string into a dictionary. Returns an
+    /// empty map when the property is absent (so a client talking to a server
+    /// that predates the field degrades gracefully rather than throwing).</summary>
+    private static Dictionary<string, string> ReadStringMap(JsonElement obj, string name)
+    {
+        var map = new Dictionary<string, string>();
+        if (obj.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.Object)
+            foreach (var prop in el.EnumerateObject())
+                if (prop.Value.ValueKind == JsonValueKind.String)
+                    map[prop.Name] = prop.Value.GetString() ?? "";
         return map;
     }
 

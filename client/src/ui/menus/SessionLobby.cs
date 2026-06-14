@@ -70,9 +70,11 @@ public partial class SessionLobby : Control
 
     // ---- signaling callbacks (main thread) ----
 
-    private void OnIdentified(string hostId, string[] peers, bool isHost)
+    private void OnIdentified(string hostId, string[] peers, bool isHost,
+        System.Collections.Generic.Dictionary<string, string> usernames)
     {
         var ctx = SessionContext.Instance;
+        ctx.MergeUsernames(usernames);
         ctx.HostPlayerId = hostId;
         ctx.PlayerIds.Clear();
         if (!string.IsNullOrEmpty(hostId))
@@ -85,11 +87,12 @@ public partial class SessionLobby : Control
         Render();
     }
 
-    private void OnPeerJoined(string playerId)
+    private void OnPeerJoined(string playerId, string username)
     {
-        var ids = SessionContext.Instance.PlayerIds;
-        if (!ids.Contains(playerId))
-            ids.Add(playerId);
+        var ctx = SessionContext.Instance;
+        ctx.SetUsername(playerId, username);
+        if (!ctx.PlayerIds.Contains(playerId))
+            ctx.PlayerIds.Add(playerId);
         Render();
     }
 

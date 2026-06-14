@@ -119,9 +119,11 @@ public partial class JoinMenu : Control
         _rejoinSignaling.Connect(code, ctx.PlayerId, ctx.SecretToken);
     }
 
-    private void OnRejoinIdentified(string hostId, string[] peers, bool isHost)
+    private void OnRejoinIdentified(string hostId, string[] peers, bool isHost,
+        System.Collections.Generic.Dictionary<string, string> usernames)
     {
         var ctx = SessionContext.Instance;
+        ctx.MergeUsernames(usernames);
         ctx.HostPlayerId = hostId;
         ctx.PlayerIds.Clear();
         if (!string.IsNullOrEmpty(hostId))

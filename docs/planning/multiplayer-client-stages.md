@@ -54,7 +54,10 @@ plain data, and a swappable *view* draws it.
 players ready"; no peer connection is made yet.
 
 **Known Stage 1 limitations (deferred):**
-- Peers display as `Player <id>` — the server roster carries no usernames.
+- ~~Peers display as `Player <id>` — the server roster carries no usernames.~~
+  **Resolved (game v0.12.0 / server v0.15.0):** the signaling `Identified` /
+  `PeerJoined` frames now carry usernames; the lobby and scoreboard show names,
+  with `Player <id>` only as a fallback.
 - Running from the editor (no launcher handoff) uses a DEBUG/editor-only
   self-register fallback to get an identity; it doesn't exist in release
   builds. The server host is always the compile-time-baked channel host.
@@ -244,6 +247,8 @@ Tracked in or alongside [`roadmap.md`](roadmap.md):
 - **WS-ticket auth** — replace the cleartext `secret_token` in the WS
   `identify` frame with a short-lived signed ticket. Good to define when
   Stage 2 lands.
-- **Usernames in the session roster** — so the lobby shows names instead of
-  `Player <id>`. Needs the server to store a username per session member.
+- ~~**Usernames in the session roster** — so the lobby shows names instead of
+  `Player <id>`.~~ **Done (game v0.12.0 / server v0.15.0):** the `Identified` /
+  `PeerJoined` signaling frames carry server-resolved usernames; the lobby roster
+  and in-game scoreboard label players by name, falling back to `Player <id>`.
 - **3D view** — `View3D` per the Stage 3 architecture.

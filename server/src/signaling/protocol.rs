@@ -60,14 +60,23 @@ pub enum ServerMsg {
     /// the server has bound to this connection, who the authoritative host
     /// is, plus the current lobby roster at identify time so the client
     /// doesn't need a separate poll.
+    ///
+    /// `usernames` maps the player_ids appearing in this frame (the union of
+    /// `your_player_id`, `host_player_id`, and `peers`) to their server-stored
+    /// display names, so the client can label the lobby/scoreboard by username
+    /// instead of the internal id. Ids with no stored username are omitted —
+    /// the client falls back to `Player <id>`.
     Identified {
         your_player_id: String,
         host_player_id: String,
         peers: Vec<String>,
         is_host: bool,
+        usernames: HashMap<String, String>,
     },
     /// Broadcast when a new player completes Identify in this session.
-    PeerJoined { player_id: String },
+    /// `username` is the joining player's server-stored display name (empty if
+    /// none on file — the client falls back to `Player <id>`).
+    PeerJoined { player_id: String, username: String },
     /// Broadcast when a player disconnects or is removed. `reason` is a
     /// closed-set discriminator so clients can decide UI/recovery behavior.
     PeerLeft {

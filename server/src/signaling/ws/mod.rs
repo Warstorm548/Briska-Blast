@@ -27,6 +27,7 @@ use std::borrow::Cow;
 use std::net::SocketAddr;
 
 use crate::{
+    api::fetch_usernames,
     signaling::{protocol::ServerMsg, GraceKind},
     state::AppState,
 };
@@ -83,11 +84,32 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
         }
     };
 
+    // Resolve display names for everyone named in this frame (self, host, peers)
+    // so the client labels the lobby/scoreboard by username rather than the
+    // internal id. peer_roster already returned its own conn, so grab a fresh
+    // one; a failure degrades to an empty map (clients fall back to `Player <id>`).
+    let usernames = match state.redis.get().await {
+        Ok(mut conn) => {
+            let mut ids = Vec::with_capacity(peers.len() + 2);
+            ids.push(player_id.clone());
+            ids.push(host_player_id.clone());
+            ids.extend(peers.iter().cloned());
+            fetch_usernames(&mut conn, &ids).await
+        }
+        Err(_) => std::collections::HashMap::new(),
+    };
+
+    // The joining player's own name, reused for the PeerJoined broadcast below so
+    // existing members can label the newcomer without another lookup. Empty when
+    // unknown — peers then fall back to `Player <id>`.
+    let self_username = usernames.get(&player_id).cloned().unwrap_or_default();
+
     let identified = ServerMsg::Identified {
         your_player_id: player_id.clone(),
         host_player_id,
         peers,
         is_host,
+        usernames,
     };
     if let Ok(text) = serde_json::to_string(&identified) {
         let _ = socket.send(Message::Text(text)).await;
@@ -97,7 +119,10 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
         .signal_hub
         .broadcast(
             &code,
-            ServerMsg::PeerJoined { player_id: player_id.clone() },
+            ServerMsg::PeerJoined {
+                player_id: player_id.clone(),
+                username: self_username,
+            },
             Some(&player_id),
         )
         .await;

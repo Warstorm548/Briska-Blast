@@ -9,6 +9,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.12.0] — 2026-06-13
+
+Multiplayer UI now shows player **usernames** instead of raw player-id numbers in
+the lobby roster and the in-game scoreboard. The numeric `player_id` stays an
+internal key (networking, scoring, peer matching) and is never shown to players —
+it appears only inside the `Player <id>` fallback when a username isn't available.
+Requires server **v0.15.0+**.
+
+### Added
+- **Usernames in the lobby roster and scoreboard.** `SessionContext` keeps a
+  `player_id → username` map learned from the signaling `Identified` /
+  `PeerJoined` frames; `DisplayNameFor` resolves self → local username, else the
+  server-provided username, else the `Player <id>` fallback. The map is additive
+  within a session (a departed player who still holds points keeps their name)
+  and cleared when a session starts or ends.
+- **`View2D.NameResolver`** — the in-game scoreboard renders each player's
+  resolved name (injected by `GameScene` from `SessionContext.DisplayNameFor`),
+  still sorted by `player_id` so duplicate display names never reorder columns.
+
+### Changed
+- `SignalingClient`'s `Identified` / `PeerJoined` events now carry the
+  username/usernames data parsed from the new server fields (requires server
+  **v0.15.0+**).
+
 ## [0.11.0] — 2026-06-09
 
 ### Added

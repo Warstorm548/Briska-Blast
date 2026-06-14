@@ -141,7 +141,9 @@ Re-binding through settings is future work.
   a cap is wanted so the ball can never get too fast for the eye to track.
 - **Serve gate** — if a player serves before the WebRTC channel is open, the
   first handoff packet is dropped silently; a "wait for peers" gate is wanted.
-- **Server-side trajectory validation**, **TURN relay** (symmetric-NAT peers),
-  and **usernames in the roster** remain in [`../planning/roadmap.md`](../planning/roadmap.md).
+- **Server-side trajectory validation** and **TURN relay** (symmetric-NAT peers)
+  remain in [`../planning/roadmap.md`](../planning/roadmap.md). (**Usernames in the
+  roster** shipped in game v0.12.0 / server v0.15.0 — the lobby and scoreboard now
+  label players by name.)
 - **3D view** — implement `View3D : Node3D` against `IGameView`, mapping the same
   `(x, y)` data to `Vector3`. Simulation and networking are untouched.
