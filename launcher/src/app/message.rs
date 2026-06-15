@@ -76,6 +76,18 @@ pub enum Message {
     ConfirmUsernameChange,
     UninstallChannel(Channel),
     VerifyChannel(Channel),
+    /// User pressed "Check for Updates" for a channel (Settings → Game Channel
+    /// Management → Channel Updates). Re-runs the GitHub `latest_release` query
+    /// so the bottom-bar button and the inline status box pick up new releases
+    /// published since launcher boot.
+    CheckChannelUpdatePressed(Channel),
+    /// Result of a manual `CheckChannelUpdatePressed` fetch. Refreshes
+    /// `available_versions[channel]` (driving the bottom-bar button) and sets
+    /// the per-channel `channel_update_status` box.
+    ChannelUpdateCheckDone {
+        channel: Channel,
+        result: Result<Option<crate::updater::branches::GameRelease>, String>,
+    },
     GameSavePressed(Channel),
     StartLauncherUpdatePressed,
     CheckForUpdatesPressed,

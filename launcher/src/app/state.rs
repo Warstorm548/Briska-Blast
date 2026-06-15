@@ -65,6 +65,46 @@ pub struct AppState {
     /// launcher restart while the rule is still missing. A successful add makes
     /// the rule detectable, so accepted channels never re-prompt regardless.
     pub firewall_prompt_dismissed: HashSet<Channel>,
+    /// Last manual "Check for Updates" outcome per channel (Settings → Game
+    /// Channel Management → Channel Updates). Drives the inline status cell
+    /// beside each channel's button. Not persisted — absent entries mean "not
+    /// checked this launch", matching `verify_results` / `firewall_status`.
+    pub channel_update_status: BTreeMap<Channel, ChannelUpdateStatus>,
+}
+
+/// Result of a manual per-channel update check. The check refreshes
+/// `available_versions` (which the bottom-bar button already reads), and this
+/// records the user-facing verdict for the Settings status box.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChannelUpdateStatus {
+    /// Fetch in flight — disables the button to block a double-press.
+    Checking,
+    /// Installed version is at or above the latest published release.
+    UpToDate(semver::Version),
+    /// A newer release than the installed version is available.
+    UpdateAvailable(semver::Version),
+    /// The GitHub fetch errored; prior `available_versions` is left intact.
+    Failed,
+}
+
+impl ChannelUpdateStatus {
+    /// Classify a completed check from the installed vs. available versions.
+    /// `UpdateAvailable` only when a release is known AND strictly newer than
+    /// what's installed; everything else (equal, older, or no release) is
+    /// `UpToDate`, reported against whichever version we can show.
+    pub(crate) fn from_check(
+        installed: Option<&semver::Version>,
+        available: Option<&semver::Version>,
+    ) -> Self {
+        match (installed, available) {
+            (Some(inst), Some(avail)) if avail > inst => {
+                ChannelUpdateStatus::UpdateAvailable(avail.clone())
+            }
+            (Some(inst), _) => ChannelUpdateStatus::UpToDate(inst.clone()),
+            (None, Some(avail)) => ChannelUpdateStatus::UpToDate(avail.clone()),
+            (None, None) => ChannelUpdateStatus::Failed,
+        }
+    }
 }
 
 impl Default for AppState {
@@ -106,6 +146,51 @@ impl Default for AppState {
             uninstall_in_progress: None,
             firewall_status: BTreeMap::new(),
             firewall_prompt_dismissed: HashSet::new(),
+            channel_update_status: BTreeMap::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChannelUpdateStatus;
+    use semver::Version;
+
+    fn v(s: &str) -> Version {
+        Version::parse(s).unwrap()
+    }
+
+    #[test]
+    fn newer_release_is_update_available() {
+        let inst = v("0.12.1");
+        let avail = v("0.13.0");
+        assert_eq!(
+            ChannelUpdateStatus::from_check(Some(&inst), Some(&avail)),
+            ChannelUpdateStatus::UpdateAvailable(avail),
+        );
+    }
+
+    #[test]
+    fn equal_or_older_release_is_up_to_date() {
+        let inst = v("0.13.0");
+        // Equal → up to date, reported against the installed version.
+        assert_eq!(
+            ChannelUpdateStatus::from_check(Some(&inst), Some(&v("0.13.0"))),
+            ChannelUpdateStatus::UpToDate(inst.clone()),
+        );
+        // Remote somehow older → still up to date.
+        assert_eq!(
+            ChannelUpdateStatus::from_check(Some(&inst), Some(&v("0.12.0"))),
+            ChannelUpdateStatus::UpToDate(inst),
+        );
+    }
+
+    #[test]
+    fn no_release_with_install_is_up_to_date() {
+        let inst = v("0.13.0");
+        assert_eq!(
+            ChannelUpdateStatus::from_check(Some(&inst), None),
+            ChannelUpdateStatus::UpToDate(inst),
+        );
     }
 }

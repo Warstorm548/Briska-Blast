@@ -5,6 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.13.0] — 2026-06-14
+
+Adds a **manual per-channel update check** so a release published while the
+launcher is open can be picked up without a restart (the GitHub `latest_release`
+fan-out otherwise only runs once at boot).
+
+### Added
+
+- **"Check for Updates" button per channel** under a new **Channel Updates**
+  subheading in Settings → Game Channel Management (`ui/center/settings.rs`,
+  `app/handlers/install.rs`, `app/state.rs`). Pressing it re-queries GitHub for
+  the channel's latest `game-v*` release and reports the verdict in an inline
+  status box: *Update available — vX.Y.Z*, *You are up to date — vX.Y.Z*,
+  *Checking…* while in flight, or *? Check failed* on a fetch error.
+  - The check writes only to the existing `available_versions` cache and reuses
+    `recompute_branch_updates_available`, so the bottom-left Update/Install
+    button keeps its exact state-machine — it flips to *Update to vX.Y.Z* for the
+    channel currently selected in the dropdown. Channels are checked one at a
+    time (no auto-switch, no batch update) as a deliberate fail-safe while
+    multi-channel update orchestration is still unbuilt.
+  - The Dev row is gated behind the server-assigned dev flag (`visible_channels`),
+    matching every other section; the handler keeps a defence-in-depth
+    `Dev && !dev_flag` guard.
+  - A successful install clears the channel's status box so it can't keep
+    claiming an update is available for a channel just updated.
+
+---
+
 ## [0.12.1] — 2026-06-07
 
 Internal refactor only — **no behavior change**.

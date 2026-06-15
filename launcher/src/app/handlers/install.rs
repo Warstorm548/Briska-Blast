@@ -311,6 +311,9 @@ pub(crate) fn install_complete(
             // any firewall result cached against the old install is no
             // longer trustworthy — clear it and let the user re-check.
             state.firewall_status.remove(&channel);
+            // Same for the manual update-check verdict: the version just
+            // changed, so a stale "Update available" would be misleading.
+            state.channel_update_status.remove(&channel);
             state.center_view = CenterView::Default;
         }
         Err(e) => {
@@ -358,6 +361,85 @@ pub(crate) fn latest_release_fetched(
             // still sees something while GitHub recovers.
         }
     }
+    recompute_branch_updates_available(state);
+    Task::none()
+}
+
+/// User pressed "Check for Updates" for `channel` (Settings → Channel Updates).
+/// Re-runs the same GitHub `latest_release` query the boot fan-out uses, so a
+/// release published since launch is picked up. Marks the channel `Checking`
+/// (disabling the button) and hands the result back via `ChannelUpdateCheckDone`.
+pub(crate) fn check_channel_update_pressed(
+    state: &mut AppState,
+    channel: Channel,
+) -> Task<Message> {
+    // Dev gating defence-in-depth — the row is only rendered for visible
+    // channels (Dev hidden unless dev_flag), but never reach the GitHub API
+    // for Dev without the server-assigned flag regardless of UI state.
+    if channel == Channel::Dev && !state.dev_flag {
+        tracing::debug!("ignoring Dev update check — dev_flag is false");
+        return Task::none();
+    }
+    // Block a double-press while a check for this channel is already running.
+    if matches!(
+        state.channel_update_status.get(&channel),
+        Some(crate::app::ChannelUpdateStatus::Checking)
+    ) {
+        return Task::none();
+    }
+    state
+        .channel_update_status
+        .insert(channel, crate::app::ChannelUpdateStatus::Checking);
+    Task::perform(
+        crate::updater::branches::latest_release(channel),
+        move |result| Message::ChannelUpdateCheckDone { channel, result },
+    )
+}
+
+/// A manual `check_channel_update_pressed` fetch landed. Refreshes
+/// `available_versions[channel]` (the single source the bottom-bar button reads —
+/// its logic is untouched) and records the user-facing verdict in
+/// `channel_update_status` for the Settings status box.
+pub(crate) fn channel_update_check_done(
+    state: &mut AppState,
+    channel: Channel,
+    result: Result<Option<crate::updater::branches::GameRelease>, String>,
+) -> Task<Message> {
+    // Same late-arrival Dev guard as latest_release_fetched: a check issued
+    // before the flag was revoked must not poison the cache or status box.
+    if channel == Channel::Dev && !state.dev_flag {
+        tracing::debug!("dropping late ChannelUpdateCheckDone(Dev) — dev_flag is false");
+        state.channel_update_status.remove(&channel);
+        return Task::none();
+    }
+    let installed = state
+        .identity
+        .channels
+        .get(&channel)
+        .and_then(|c| c.parsed_installed_version());
+    let status = match result {
+        Ok(Some(release)) => {
+            let status = crate::app::ChannelUpdateStatus::from_check(
+                installed.as_ref(),
+                Some(&release.version),
+            );
+            state.available_versions.insert(channel, release.version);
+            status
+        }
+        Ok(None) => {
+            // No release published for this channel — nothing newer than disk.
+            state.available_versions.remove(&channel);
+            tracing::info!(?channel, "no game release published for this channel yet");
+            crate::app::ChannelUpdateStatus::from_check(installed.as_ref(), None)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, ?channel, "manual update check fetch failed");
+            // Leave any prior cached available_versions in place — the bottom
+            // button keeps showing what it knew before this failed re-check.
+            crate::app::ChannelUpdateStatus::Failed
+        }
+    };
+    state.channel_update_status.insert(channel, status);
     recompute_branch_updates_available(state);
     Task::none()
 }
