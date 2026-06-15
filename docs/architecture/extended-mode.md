@@ -85,11 +85,17 @@ All collisions use trigonometric angle reflection:
 
 ## Scoring (server-relayed)
 
-- A point goes to the **last player to have hit the ball with their paddle**,
-  awarded when the ball passes a paddle into that player's goal.
-- **A self-goal does not count:** if the scored-on player is also the last
-  hitter, no point is awarded. A ball that reached a goal untouched scores
-  nobody either.
+- A point goes to the **last player to have applied force to the ball**, awarded
+  when the ball passes a paddle into that player's goal. Applying force means
+  either deflecting it with your paddle **or serving it** — a serve tags the ball
+  with the serving player's id the instant it launches, exactly as a paddle hit
+  does, and a later hit by anyone overwrites it. So a clean serve that crosses
+  untouched into a peer's goal scores for the player who served.
+- **A self-goal does not count:** if the scored-on player is also the last to
+  have applied force, no point is awarded (e.g. your own serve bouncing back into
+  your own goal untouched). Because every ball is served, a truly *untouched*
+  ball no longer arises in practice; the "no last hitter ⇒ nobody scores" guard
+  remains only as a defensive fallback.
 - Scoring is **relayed through the server**, not peer-to-peer: the client whose
   goal the ball entered reports the scorer over the session WebSocket
   (`ReportScore`); the server holds the **authoritative** per-session tally and

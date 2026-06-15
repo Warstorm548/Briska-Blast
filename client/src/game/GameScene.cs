@@ -375,6 +375,13 @@ public partial class GameScene : Node2D
             if (!_paused && Input.IsActionJustPressed("serve"))
             {
                 _serveBall.Vel = new Vector2(0, -_serveSpeed);
+                // Serving applies force, so it counts as a hit: tag the ball with
+                // the server's id (same as a paddle deflection). A later paddle
+                // hit by anyone overwrites this, so credit always follows the last
+                // player to act on the ball. This lets a clean serve that crosses
+                // into a peer's goal untouched score for the server, instead of
+                // dying as an "untouched" ball that credited nobody.
+                _serveBall.LastHitterId = _state.LocalPlayerId;
                 _awaitingServe = false;
                 _serveBall = null;
             }
