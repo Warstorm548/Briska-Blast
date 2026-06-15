@@ -365,7 +365,7 @@ pub(crate) fn latest_release_fetched(
     Task::none()
 }
 
-/// User pressed "Check for Updates" for `channel` (Settings → Channel Updates).
+/// User pressed the left-rail "Check for Updates" button for `channel`.
 /// Re-runs the same GitHub `latest_release` query the boot fan-out uses, so a
 /// release published since launch is picked up. Marks the channel `Checking`
 /// (disabling the button) and hands the result back via `ChannelUpdateCheckDone`.
@@ -399,7 +399,7 @@ pub(crate) fn check_channel_update_pressed(
 /// A manual `check_channel_update_pressed` fetch landed. Refreshes
 /// `available_versions[channel]` (the single source the bottom-bar button reads —
 /// its logic is untouched) and records the user-facing verdict in
-/// `channel_update_status` for the Settings status box.
+/// `channel_update_status` for the left-rail status box.
 pub(crate) fn channel_update_check_done(
     state: &mut AppState,
     channel: Channel,

@@ -5,6 +5,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.13.1] — 2026-06-15
+
+Relocates the manual update check from Settings to the **left rail**, directly
+under the channel picker — a single button scoped to the focused channel,
+replacing the per-channel **Channel Updates** table in Settings (0.13.0). The
+check logic is unchanged; this is a UI move plus a clear-on-switch refinement.
+
+### Changed
+
+- **"Check for Updates" now lives under the channel selector** (`ui/left_rail.rs`).
+  One button checks only the channel currently selected in the dropdown, and the
+  verdict renders in a bordered box directly below it, labelled *Updates · <Channel>*:
+  *● Update available — vX.Y.Z*, *✓ You're up to date — vX.Y.Z*, *⚠ Check failed*,
+  or *Checking…* (the button itself also shows *Checking…* and is disabled) while
+  a fetch is in flight. The box reads the em-dash until the channel is checked.
+  - A found update still flips the bottom-bar Update button — it reads the same
+    `available_versions` cache the check refreshes — so clicking that button is
+    how the user proceeds with the update. No separate update path was added.
+  - The button stays disabled until the focused channel is installed and no
+    install / uninstall / running-game is in progress, matching the old row.
+- **The verdict box clears when the focused channel changes** (`app/handlers/nav.rs`).
+  Switching the dropdown drops `channel_update_status` so the box only ever
+  reflects the channel on screen; `available_versions` is left intact, so the
+  bottom-bar button keeps its per-channel state.
+
+### Removed
+
+- The **Channel Updates** subsection in Settings → Game Channel Management and its
+  per-channel status cells (`ui/center/settings.rs`), superseded by the left-rail
+  button above. The launcher self-update check in Settings → Launcher Options is
+  unaffected.
+
+---
+
 ## [0.13.0] — 2026-06-14
 
 Adds a **manual per-channel update check** so a release published while the

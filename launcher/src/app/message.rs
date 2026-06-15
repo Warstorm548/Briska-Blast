@@ -76,10 +76,10 @@ pub enum Message {
     ConfirmUsernameChange,
     UninstallChannel(Channel),
     VerifyChannel(Channel),
-    /// User pressed "Check for Updates" for a channel (Settings → Game Channel
-    /// Management → Channel Updates). Re-runs the GitHub `latest_release` query
-    /// so the bottom-bar button and the inline status box pick up new releases
-    /// published since launcher boot.
+    /// User pressed the left-rail "Check for Updates" button under the channel
+    /// picker. Re-runs the GitHub `latest_release` query for the focused channel
+    /// so the bottom-bar button and the left-rail verdict box pick up new
+    /// releases published since launcher boot.
     CheckChannelUpdatePressed(Channel),
     /// Result of a manual `CheckChannelUpdatePressed` fetch. Refreshes
     /// `available_versions[channel]` (driving the bottom-bar button) and sets
