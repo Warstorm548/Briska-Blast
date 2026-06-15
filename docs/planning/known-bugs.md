@@ -1,10 +1,13 @@
 # Known bugs
 
-Confirmed defects in shipped/current builds that are tracked but not yet fixed.
-Distinct from [`roadmap.md`](roadmap.md), which tracks *deferred features and
-decisions* — this file is for things that are **broken**. Each entry records the
-observed symptom, the suspected cause (with code pointers), a fix direction, and
-status.
+Confirmed defects in shipped/current builds. Distinct from
+[`roadmap.md`](roadmap.md), which tracks *deferred features and decisions* — this
+file is for things that are **broken**. Each entry records the observed symptom,
+the suspected cause (with code pointers), a fix direction, and status.
+
+Resolved entries are **kept, not deleted** (marked ✅ with the fix version) — a
+running record of past defects so a regression can be spotted fast if one ever
+resurfaces unintentionally later.
 
 ---
 
@@ -69,3 +72,34 @@ status.
   sees it, hence "one screen." Ball speed is constant and `View2D` is
   allocation-free, so neither a speed-up nor frame drops were involved.
 - **Fix:** server-anchored clock sync (option 3b) — see the game v0.10.0 changelog.
+
+---
+
+## A served ball that reaches a goal untouched scores nobody
+
+- **Status:** ✅ resolved 2026-06-14 (game v0.12.1). The serve now tags the ball
+  with the serving player's `player_id` at launch (`GameScene._PhysicsProcess`,
+  the `serve` branch), so serving counts as applied force exactly like a paddle
+  hit. Everything downstream was already correct — a later paddle hit overwrites
+  the id, the handoff carries it across screens, and the goal check credits it —
+  so this was the only missing link. Verified by reasoning + a clean build;
+  awaiting on-device confirmation of a serve scoring into an opponent's goal.
+- **Affects:** game builds with the playable Extended-mode round before v0.12.1
+  (≈ v0.6.0–v0.12.0).
+- **Symptom (as reported):** when a ball enters another player's screen and goes
+  into that player's goal **without being hit by a paddle** — e.g. when no paddle
+  moved on either screen — no point is awarded to anyone, in particular not to the
+  player who served/sent it.
+- **Cause:** `Ball.LastHitterId` was only ever set by a paddle deflection
+  (`GameSimulation.StepBall`, the paddle branch) — serving launched the ball
+  without tagging it. The goal check treats an empty `LastHitterId` as an untouched
+  ball and emits a `ScoreEvent("")` (`GameSimulation.StepBall`, the
+  `ball.Pos.Y >= h` block), which `NetGameController.ReportScore` then drops (empty
+  scorer ⇒ nothing sent over the session socket). So any ball that reached a goal
+  without a paddle ever touching it — every clean serve included — credited nobody.
+  The game server's scoring channel was fine; it simply never received a report.
+- **Fix:** treat the serve as applied force — set `_serveBall.LastHitterId =
+  _state.LocalPlayerId` at the serve press, alongside the launch velocity.
+  Self-goals stay suppressed (a serve bouncing back into your own goal still scores
+  nobody). See the game v0.12.1 changelog and
+  [`../architecture/extended-mode.md`](../architecture/extended-mode.md) (Scoring).

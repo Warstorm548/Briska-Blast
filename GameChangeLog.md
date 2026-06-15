@@ -9,6 +9,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.12.1] — 2026-06-14
+
+Fix: a **served ball now counts as a hit**, so serving credits the player who
+served. A ball that reaches a goal was only ever credited to the last player to
+deflect it with a paddle, and serving wasn't a deflection — so a clean serve that
+crossed into a peer's goal untouched (or any rally where no paddle ever touched
+the ball) scored nobody. The serve now tags the ball with the serving player's
+`player_id` the instant it is launched, exactly as a paddle hit does; a later
+paddle hit by anyone still overwrites it, so credit always follows the last player
+to act on the ball. Entirely a game-client change — no protocol, game-server, or
+version-requirement change.
+
+### Fixed
+- **Serve counts as applied force.** `GameScene` stamps `Ball.LastHitterId` with
+  the local `player_id` at serve launch (alongside the velocity). Self-goals stay
+  suppressed (a serve that returns to your own goal untouched still scores
+  nobody), and the now-unreachable "untouched ball" path remains as a harmless
+  guard. The simulation, handoff packet, and game-server scoring channel are
+  unchanged — they already propagate and credit `LastHitterId`.
+
 ## [0.12.0] — 2026-06-13
 
 Multiplayer UI now shows player **usernames** instead of raw player-id numbers in
