@@ -10,7 +10,7 @@ mod message;
 mod state;
 
 pub use message::{CenterView, Message, SettingsTab};
-pub use state::AppState;
+pub use state::{AppState, ChannelUpdateStatus};
 
 use handlers::{firewall, identity, install, launcher_update, maintenance, nav, play};
 
@@ -196,6 +196,12 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         }
         Message::LatestReleaseFetched { channel, result } => {
             install::latest_release_fetched(state, channel, result)
+        }
+        Message::CheckChannelUpdatePressed(channel) => {
+            install::check_channel_update_pressed(state, channel)
+        }
+        Message::ChannelUpdateCheckDone { channel, result } => {
+            install::channel_update_check_done(state, channel, result)
         }
 
         // ---- play / game launch ----
