@@ -1,17 +1,22 @@
 //! Trivial center-panel / draft-field navigation toggles. Pure state writes,
 //! no async work — every handler returns `Task::none()`.
 
-use crate::app::{AppState, CenterView, Message, SettingsTab};
+use crate::app::{AppState, CenterView, ChannelUpdateStatus, Message, SettingsTab};
 use crate::channel::Channel;
 use iced::Task;
 
 pub(crate) fn channel_picked(state: &mut AppState, c: Channel) -> Task<Message> {
     if c != state.selected_channel {
-        // Drop the manual update-check verdict so the left-rail box starts
-        // fresh (em-dash) for the newly-focused channel. `available_versions`
-        // is intentionally left intact — the bottom-bar Update button keeps
-        // its per-channel state across switches.
-        state.channel_update_status.clear();
+        // Reset the verdict box for the newly-focused channel: drop completed
+        // verdicts so it shows the em-dash, but keep any in-flight `Checking`
+        // sentinel. Dropping that sentinel would re-enable the channel's button
+        // (its dedup guard keys off `Checking`), allow a duplicate GitHub
+        // request, and lose the "Checking…" indicator if the user switches back
+        // mid-flight. `available_versions` is left intact so the bottom-bar
+        // Update button keeps its per-channel state across switches.
+        state
+            .channel_update_status
+            .retain(|_, status| matches!(status, ChannelUpdateStatus::Checking));
     }
     state.selected_channel = c;
     Task::none()
@@ -80,6 +85,24 @@ mod tests {
         assert!(
             state.channel_update_status.is_empty(),
             "verdict box must reset when the focused channel changes"
+        );
+    }
+
+    #[test]
+    fn switching_channel_keeps_in_flight_check() {
+        let mut state = AppState::default(); // selected = Stable
+        // A check is in flight on the channel we're about to leave.
+        state
+            .channel_update_status
+            .insert(Channel::Stable, ChannelUpdateStatus::Checking);
+
+        let _ = channel_picked(&mut state, Channel::Ea);
+
+        // The sentinel survives so the button stays deduped (no duplicate
+        // request) and "Checking…" returns if the user switches back mid-flight.
+        assert_eq!(
+            state.channel_update_status.get(&Channel::Stable),
+            Some(&ChannelUpdateStatus::Checking),
         );
     }
 

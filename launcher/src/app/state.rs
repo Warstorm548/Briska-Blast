@@ -67,9 +67,9 @@ pub struct AppState {
     pub firewall_prompt_dismissed: HashSet<Channel>,
     /// Last manual "Check for Updates" outcome per channel, driven by the
     /// left-rail button under the channel picker (`ui::left_rail`). Drives the
-    /// verdict box shown for the focused channel. Not persisted, and cleared on
-    /// a channel switch (`nav::channel_picked`) so the box only ever reflects
-    /// the channel on screen — an absent entry renders as the em-dash.
+    /// verdict box shown for the focused channel. Not persisted; a channel
+    /// switch (`nav::channel_picked`) drops completed verdicts so the box resets
+    /// to the em-dash, but keeps any in-flight `Checking` sentinel.
     pub channel_update_status: BTreeMap<Channel, ChannelUpdateStatus>,
 }
 

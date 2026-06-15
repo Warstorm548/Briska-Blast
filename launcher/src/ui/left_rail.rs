@@ -72,8 +72,9 @@ fn channel_box(state: &AppState) -> Element<'_, Message> {
 
 /// Verdict box for the manual per-channel update check, shown directly under
 /// the channel picker. Reads `channel_update_status` for the focused channel
-/// only; `nav::channel_picked` clears that map on a channel switch, so the box
-/// always reflects the channel currently on screen (em-dash until checked).
+/// only; `nav::channel_picked` drops completed verdicts on a channel switch
+/// (keeping in-flight checks), so the box reflects the channel currently on
+/// screen — em-dash until checked, or "Checking…" while a fetch is in flight.
 fn channel_update_box(state: &AppState) -> Element<'_, Message> {
     let channel = state.selected_channel;
     let verdict = match state.channel_update_status.get(&channel) {

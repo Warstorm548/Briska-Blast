@@ -26,9 +26,11 @@ check logic is unchanged; this is a UI move plus a clear-on-switch refinement.
   - The button stays disabled until the focused channel is installed and no
     install / uninstall / running-game is in progress, matching the old row.
 - **The verdict box clears when the focused channel changes** (`app/handlers/nav.rs`).
-  Switching the dropdown drops `channel_update_status` so the box only ever
-  reflects the channel on screen; `available_versions` is left intact, so the
-  bottom-bar button keeps its per-channel state.
+  Switching the dropdown drops completed verdicts so the box resets, but keeps
+  any in-flight `Checking` sentinel (so a running check isn't dropped, its button
+  stays deduped, and "Checking…" returns if the user switches back mid-flight).
+  `available_versions` is left intact, so the bottom-bar button keeps its
+  per-channel state.
 
 ### Removed
 
