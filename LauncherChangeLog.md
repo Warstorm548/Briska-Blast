@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.14.1] — 2026-06-16
+
+A small footprint reduction on update discovery. The first Part 4 lever from the
+rate-limit design doc; fetch-once and ETag remain deferred.
+
+### Changed
+
+- **Release discovery now requests `per_page=100`** (`updater/github_client.rs`),
+  GitHub's maximum, instead of the default 30. Each update check pulls the full
+  release list in **one** page rather than paginating, so at the current ~46
+  releases a check drops from **2 GitHub requests to 1** — roughly halving the
+  per-launch API footprint (a returning user's boot fan-out goes from ~6 to ~3).
+  The `Link: rel="next"` pagination loop is retained, so a repo that ever exceeds
+  100 releases still fetches correctly. No behavioural change to what's discovered.
+
+---
+
 ## [0.14.0] — 2026-06-15
 
 Adds a **GitHub rate-limit back-off safety net**. The launcher discovers updates

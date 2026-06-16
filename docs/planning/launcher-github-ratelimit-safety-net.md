@@ -222,14 +222,15 @@ correctness bug; all are worth a follow-up pass:
 
 ---
 
-## Part 4 — Deferred: footprint reduction (Problem A)
+## Part 4 — Footprint reduction (Problem A) — partially shipped
 
-Not being built now; captured so it isn't re-derived. All of these ride the same
-"own the request" prerequisite as the safety net.
+`per_page=100` shipped in **launcher v0.14.1**; the rest below is still deferred,
+captured so it isn't re-derived. All of these ride the same "own the request"
+prerequisite as the safety net.
 
 | Idea | Effect |
 |---|---|
-| **`per_page=100`** | One page instead of 30 → kills pagination (44 releases: 2 → 1 request/check). |
+| **`per_page=100`** ✅ shipped v0.14.1 | One page instead of 30 → kills pagination (46 releases: 2 → 1 request/check). |
 | **Fetch the list once, share it** | Launcher self-update + all channels hit the *same* repo's `/releases`; one fetch serves them all. |
 | **ETag / `If-None-Match`** | A `304 Not Modified` doesn't count against the limit → warm rechecks are free. |
 | **Delete old releases** | Stopgap only — helps solely below 30 total releases, temporary, made moot by `per_page`. Best deletion candidates: old `server-v*` dev releases (the launcher pages past them but never uses them). |
