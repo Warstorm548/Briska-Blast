@@ -65,16 +65,17 @@ pub struct AppState {
     /// launcher restart while the rule is still missing. A successful add makes
     /// the rule detectable, so accepted channels never re-prompt regardless.
     pub firewall_prompt_dismissed: HashSet<Channel>,
-    /// Last manual "Check for Updates" outcome per channel (Settings → Game
-    /// Channel Management → Channel Updates). Drives the inline status cell
-    /// beside each channel's button. Not persisted — absent entries mean "not
-    /// checked this launch", matching `verify_results` / `firewall_status`.
+    /// Last manual "Check for Updates" outcome per channel, driven by the
+    /// left-rail button under the channel picker (`ui::left_rail`). Drives the
+    /// verdict box shown for the focused channel. Not persisted; a channel
+    /// switch (`nav::channel_picked`) drops completed verdicts so the box resets
+    /// to the em-dash, but keeps any in-flight `Checking` sentinel.
     pub channel_update_status: BTreeMap<Channel, ChannelUpdateStatus>,
 }
 
 /// Result of a manual per-channel update check. The check refreshes
 /// `available_versions` (which the bottom-bar button already reads), and this
-/// records the user-facing verdict for the Settings status box.
+/// records the user-facing verdict for the left-rail status box.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChannelUpdateStatus {
     /// Fetch in flight — disables the button to block a double-press.

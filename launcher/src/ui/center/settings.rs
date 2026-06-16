@@ -1,7 +1,7 @@
 //! Settings center view: header + tab bar + active-tab body.
 //! Matches mockup Example Imgs/LuncherSettings.png.
 
-use crate::app::{AppState, ChannelUpdateStatus, Message, SettingsTab};
+use crate::app::{AppState, Message, SettingsTab};
 use crate::channel::Channel;
 use crate::firewall::FirewallStatus;
 use crate::ui::theme::{self, TITLE_SIZE, ZONE_GAP};
@@ -63,7 +63,6 @@ fn body<'a>(state: &'a AppState, active: SettingsTab) -> Element<'a, Message> {
     match active {
         SettingsTab::ChannelManagement => column![
             channels_section(state),
-            channel_updates_section(state),
             important_files_section(state),
             firewall_section(state),
         ]
@@ -111,66 +110,6 @@ fn channels_section(state: &AppState) -> Element<'_, Message> {
         );
     }
     col.into()
-}
-
-/// Manual per-channel "Check for Updates" row. Re-queries GitHub for the
-/// latest release on demand (the boot-time fan-out only runs once per launch),
-/// refreshing the bottom-left button and reporting the verdict in the inline
-/// status box. Channels are deliberately checked one at a time — the user picks
-/// the channel to update via the dropdown; we do not auto-switch or update
-/// several channels at once (multi-channel update orchestration isn't built).
-/// Iterates `visible_channels`, so the Dev row stays hidden unless the server
-/// assigned the dev flag — same gating as every other section.
-fn channel_updates_section(state: &AppState) -> Element<'_, Message> {
-    let mut col = column![text("Channel Updates").size(20)].spacing(ZONE_GAP);
-    let busy = state.install_in_progress.is_some()
-        || state.uninstall_in_progress.is_some()
-        || state.game_running;
-    for c in &state.visible_channels {
-        let c = *c;
-        let installed = state
-            .identity
-            .channels
-            .get(&c)
-            .map(|creds| creds.install_location.is_some() && creds.installed_version.is_some())
-            .unwrap_or(false);
-        let checking = matches!(
-            state.channel_update_status.get(&c),
-            Some(ChannelUpdateStatus::Checking)
-        );
-        col = col.push(
-            row![
-                bordered_cell(c.label(), 120.0),
-                cell_button_maybe(
-                    "Check for Updates",
-                    Message::CheckChannelUpdatePressed(c),
-                    installed && !busy && !checking,
-                ),
-                channel_update_status_cell(state, c),
-            ]
-            .spacing(ZONE_GAP),
-        );
-    }
-    col.into()
-}
-
-fn channel_update_status_cell(state: &AppState, channel: Channel) -> Element<'_, Message> {
-    let label = match state.channel_update_status.get(&channel) {
-        None => "\u{2014}".to_string(), // em dash — not checked this launch
-        Some(ChannelUpdateStatus::Checking) => "Checking\u{2026}".to_string(),
-        Some(ChannelUpdateStatus::UpdateAvailable(v)) => {
-            format!("Update available \u{2014} v{v}")
-        }
-        Some(ChannelUpdateStatus::UpToDate(v)) => format!("You are up to date \u{2014} v{v}"),
-        Some(ChannelUpdateStatus::Failed) => "? Check failed".to_string(),
-    };
-    container(text(label).size(13))
-        .style(theme::bordered)
-        .padding(8)
-        .center_y(Length::Fill)
-        .width(Length::Fill)
-        .height(Length::Fixed(36.0))
-        .into()
 }
 
 fn important_files_section(state: &AppState) -> Element<'_, Message> {
