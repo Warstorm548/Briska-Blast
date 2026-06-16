@@ -6,10 +6,12 @@
 //! network blip. This module is the minimal direct `reqwest` call that exposes
 //! both, feeding `crate::ratelimit` (Part 3 of the rate-limit design doc).
 //!
-//! Scope is deliberately the *minimum*: it preserves the existing request
-//! footprint — paginates at the current 30-per-page following `Link: rel="next"`.
-//! The footprint reductions that the same refactor would enable (`per_page=100`,
-//! ETag/`If-None-Match`, fetch-once) are Part 4 and explicitly out of scope here.
+//! Footprint: fetches one page of up to `PER_PAGE` (=100, GitHub's max) releases,
+//! still following `Link: rel="next"` for correctness if the repo ever exceeds
+//! that. At the current ~46 releases that's **one request per check** instead of
+//! two. The remaining Part 4 reductions are still deferred: sharing a single fetch
+//! across the self-update check + every channel (fetch-once), and ETag /
+//! `If-None-Match` conditional requests (a `304` doesn't count against the limit).
 //!
 //! `self_update` is still used elsewhere for the launcher's binary self-update
 //! swap and stale-artifact cleanup; only the *list fetch* is taken in-house.
@@ -19,7 +21,10 @@ use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use std::time::Duration;
 
-const PER_PAGE: u32 = 30;
+/// GitHub's maximum page size for the releases endpoint. One page covers the
+/// whole repo today (46 releases as of 2026-06-16); the `Link: rel="next"` loop
+/// below still handles a future overflow past 100.
+const PER_PAGE: u32 = 100;
 const USER_AGENT: &str = "briskablast-launcher";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// A releases page is small JSON; this trips only on a genuinely hung connection.

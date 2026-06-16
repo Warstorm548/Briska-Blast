@@ -30,7 +30,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Server foundation | ✓ Complete (v0.12.0) — see `ServerChangeLog.md` |
 | Shared crate | ✓ Complete (v0.2.0 — protocol types, player/session types) |
 | Game client | In progress (v0.12.0) — multiplayer lobby + WebRTC mesh behind `IPeerTransport` + a playable **Extended-mode** round (per-screen sim, ball handoff between screens, server-relayed scoring) + server-authoritative host promotion with a reconnect grace window + **usernames** in the lobby roster and scoreboard (server-resolved, `player_id` stays internal). See `GameChangeLog.md`, `docs/architecture/extended-mode.md`, and `docs/planning/multiplayer-client-stages.md` |
-| Launcher | In progress (v0.14.0) — identity (+ game handoff), multi-channel install/update, self-update, Windows firewall prompt, manual per-channel update check under the channel selector, GitHub rate-limit back-off safety net; see `LauncherChangeLog.md` |
+| Launcher | In progress (v0.14.1) — identity (+ game handoff), multi-channel install/update, self-update, Windows firewall prompt, manual per-channel update check under the channel selector, GitHub rate-limit back-off safety net (+ `per_page=100` discovery); see `LauncherChangeLog.md` |
 
 **Build order:** Server → Game → Launcher (each depends on the previous).
 
