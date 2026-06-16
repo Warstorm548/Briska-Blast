@@ -73,15 +73,15 @@ pub fn gate() -> Gate {
     }
 }
 
-/// Record the rate-limit headers seen on any GitHub response (Layer B). A healthy
-/// `remaining` clears any standing block; `remaining <= LOW_WATER` arms one until
-/// `reset + PAD`.
+/// Record the rate-limit headers seen on any GitHub response (Layer B).
+/// `remaining <= LOW_WATER` arms a block until `reset + PAD`; a healthy response
+/// only clears a block that has already expired — it must NOT clear an *active*
+/// one. The boot fan-out fires several requests concurrently, so a stale healthy
+/// response (older budget) can land after a low-water / confirmed-limit one;
+/// without this guard it would wipe the cooldown the more recent response set.
 pub fn note_response(remaining: Option<u32>, reset: Option<i64>) {
-    let blocked_until = match remaining {
-        Some(r) if r <= LOW_WATER => Some(compute_blocked_until(reset, now_secs())),
-        // Healthy budget (or no header at all) — clear any prior block.
-        _ => None,
-    };
+    let now = now_secs();
+    let blocked_until = resolve_blocked_until(remaining, reset, now, current_blocked_until());
     persist(RateLimitState {
         reset,
         remaining,
@@ -131,6 +131,23 @@ fn compute_blocked_until(reset: Option<i64>, now: i64) -> i64 {
     }
 }
 
+/// Layer-B decision for a recorded response. `remaining <= LOW_WATER` arms a fresh
+/// block; otherwise an already-active (`now < existing`) block is preserved and
+/// only an expired one is cleared — so a stale, out-of-order healthy response
+/// can't unblock us early.
+fn resolve_blocked_until(
+    remaining: Option<u32>,
+    reset: Option<i64>,
+    now: i64,
+    existing: Option<i64>,
+) -> Option<i64> {
+    match remaining {
+        Some(r) if r <= LOW_WATER => Some(compute_blocked_until(reset, now)),
+        // Healthy budget (or no header at all): keep an active block, drop a stale one.
+        _ => existing.filter(|&until| now < until),
+    }
+}
+
 fn now_secs() -> i64 {
     chrono::Utc::now().timestamp()
 }
@@ -155,6 +172,14 @@ fn persist(state: RateLimitState) {
 fn load_at(path: &Path) -> Option<RateLimitState> {
     let s = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&s).ok()
+}
+
+/// The currently-persisted block instant, if any — so a healthy response can
+/// preserve an active cooldown rather than blindly clearing it. `None` on any
+/// read/parse failure (consistent with the gate's fail-open).
+fn current_blocked_until() -> Option<i64> {
+    let path = paths::ratelimit_path().ok()?;
+    load_at(&path)?.blocked_until
 }
 
 /// Atomic write: a uuid-suffixed sibling tmp then rename. The unique tmp name
@@ -227,18 +252,45 @@ mod tests {
     #[test]
     fn note_response_layer_b_boundaries() {
         let now = 1_000_000;
-        // remaining == LOW_WATER -> block.
-        let armed = match Some(LOW_WATER) {
-            Some(r) if r <= LOW_WATER => Some(compute_blocked_until(Some(2_000_000), now)),
-            _ => None,
-        };
-        assert_eq!(armed, Some(2_000_000 + PAD_SECS));
-        // remaining just above LOW_WATER -> no block.
-        let clear = match Some(LOW_WATER + 1) {
-            Some(r) if r <= LOW_WATER => Some(0),
-            _ => None,
-        };
-        assert_eq!(clear, None);
+        let reset = 2_000_000;
+        // remaining == LOW_WATER -> arm a block, regardless of prior state.
+        assert_eq!(
+            resolve_blocked_until(Some(LOW_WATER), Some(reset), now, None),
+            Some(reset + PAD_SECS)
+        );
+        // remaining just above LOW_WATER, no prior block -> stay clear.
+        assert_eq!(
+            resolve_blocked_until(Some(LOW_WATER + 1), Some(reset), now, None),
+            None
+        );
+    }
+
+    /// A healthy / no-header response must NOT clear an *active* block (a stale,
+    /// out-of-order response from the concurrent boot fan-out), but it should drop
+    /// an already-expired one.
+    #[test]
+    fn healthy_response_preserves_active_block() {
+        let now = 1_000_000;
+        // Active block in the future -> preserved.
+        assert_eq!(
+            resolve_blocked_until(Some(40), Some(9_999_999), now, Some(now + 300)),
+            Some(now + 300)
+        );
+        // No-header healthy response (remaining None) -> also preserves.
+        assert_eq!(
+            resolve_blocked_until(None, None, now, Some(now + 300)),
+            Some(now + 300)
+        );
+        // Expired block -> cleared.
+        assert_eq!(
+            resolve_blocked_until(Some(40), Some(9_999_999), now, Some(now - 1)),
+            None
+        );
+        // A fresh low-water signal still arms even with a prior (expired) block.
+        assert_eq!(
+            resolve_blocked_until(Some(2), Some(2_000_000), now, Some(now - 1)),
+            Some(2_000_000 + PAD_SECS)
+        );
     }
 
     #[test]

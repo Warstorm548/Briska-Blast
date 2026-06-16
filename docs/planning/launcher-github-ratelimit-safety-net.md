@@ -1,8 +1,8 @@
 # Launcher — GitHub Rate-Limit Safety Net (and deferred footprint work)
 
 **Status:** **Part 3 (the safety net) implemented in launcher v0.14.0** — see
-`LauncherChangeLog.md`. The **footprint reductions** (Part 4) remain deliberately
-deferred.
+[LauncherChangeLog.md](/LauncherChangeLog.md). The **footprint reductions**
+(Part 4) remain deliberately deferred.
 
 This doc captures the analysis and decisions from the 2026-06-15 design session
 so the work can be picked up cold.
