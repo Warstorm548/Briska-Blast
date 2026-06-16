@@ -7,6 +7,15 @@ use iced::Task;
 
 pub(crate) fn check_for_updates_pressed(state: &mut AppState) -> Task<Message> {
     if !state.update_check_in_flight && !state.self_update_in_flight {
+        // Rate-limit gate: if the back-off window is open, surface the resume time
+        // instead of spending (and failing) a GitHub request.
+        if let crate::ratelimit::Gate::Blocked { resume_at } = crate::ratelimit::gate() {
+            state.last_self_update_error = Some(format!(
+                "GitHub rate limit reached \u{2014} checks resume at {}.",
+                crate::ratelimit::format_resume(resume_at)
+            ));
+            return Task::none();
+        }
         state.update_check_in_flight = true;
         state.last_self_update_error = None;
         return Task::perform(updater::check_for_update(), Message::LauncherUpdateCheckDone);

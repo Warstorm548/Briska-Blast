@@ -12,6 +12,7 @@ mod firewall;
 mod game_launch;
 mod identity;
 mod paths;
+mod ratelimit;
 mod server_api;
 mod ui;
 mod updater;

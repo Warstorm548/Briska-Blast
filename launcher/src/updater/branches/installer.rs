@@ -221,6 +221,17 @@ where
 
     let temp_archive = staging_dir.join(format!(".download-{asset_name}"));
 
+    // Rate-limit gate: the asset endpoint is a counted core-API request, so it
+    // honours the same back-off the discovery checks do. A closed gate yields a
+    // clean "resumes at HH:MM" instead of letting the install start and die
+    // mid-flight on a 403.
+    if let crate::ratelimit::Gate::Blocked { resume_at } = crate::ratelimit::gate() {
+        return Err(format!(
+            "GitHub rate limit reached \u{2014} install resumes at {}.",
+            crate::ratelimit::format_resume(resume_at)
+        ));
+    }
+
     let client = reqwest::Client::builder()
         .user_agent("briskablast-launcher")
         .connect_timeout(CONNECT_TIMEOUT)
@@ -242,7 +253,23 @@ where
         .header(reqwest::header::ACCEPT, "application/octet-stream")
         .send()
         .await
-        .map_err(|e| format!("download request: {e}"))?
+        .map_err(|e| format!("download request: {e}"))?;
+    // A rate-limit comes back as a *direct* 403/429 from api.github.com, whose
+    // rate-limit headers are readable here. A success is a 302 to the CDN that
+    // reqwest already followed, whose final headers are the CDN's and carry no
+    // GitHub budget — so we only act on the rate-limit case (the gate above plus
+    // the release-list Layer B cover proactive back-off; there's no budget to
+    // record off a CDN 200).
+    if let crate::updater::github_client::RateSignal::Limited { reset } =
+        crate::updater::github_client::inspect(resp.status(), resp.headers())
+    {
+        let resume_at = crate::ratelimit::note_rate_limited(reset);
+        return Err(format!(
+            "GitHub rate limit reached \u{2014} install resumes at {}.",
+            crate::ratelimit::format_resume(resume_at)
+        ));
+    }
+    let resp = resp
         .error_for_status()
         .map_err(|e| format!("download HTTP error: {e}"))?;
 

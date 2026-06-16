@@ -5,6 +5,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.14.0] — 2026-06-15
+
+Adds a **GitHub rate-limit back-off safety net**. The launcher discovers updates
+against GitHub Releases unauthenticated, so every user shares GitHub's 60-req/hr
+**per-IP** bucket. Previously the launcher never read the rate-limit signal and so
+kept knocking once throttled — exactly the "ignoring the back-off" pattern that can
+escalate a harmless hourly throttle into GitHub's secondary limits or an IP block.
+Now, once a rate-limit is observed, the launcher goes quiet until the window resets.
+This is back-off only; it does **not** reduce request volume (that footprint work —
+`per_page=100`, ETag, fetch-once — stays deferred, see
+`docs/planning/launcher-github-ratelimit-safety-net.md` Part 4).
+
+### Added
+
+- **`ratelimits.json`** in the per-user data dir, next to `identity.json`
+  (`ratelimit.rs`, `paths::ratelimit_path`). Stores GitHub's last-seen
+  `X-RateLimit-Reset` + `X-RateLimit-Remaining` and a derived resume instant, so the
+  gate is a trivial local file read — never itself a GitHub request.
+  - **Reset gate (Layer A):** on a confirmed `403`/`429` rate-limit, block all
+    GitHub-counting requests until `reset` + a 2-minute clock-skew pad.
+  - **Proactive stop (Layer B):** read `X-RateLimit-Remaining` off every response;
+    go quiet at `remaining ≤ 5` until the same `reset` + 2 min.
+  - **No-header fallback:** a confirmed rate-limit lacking a reset header → fixed
+    1-hour cooldown (near-dead path on public GitHub).
+  - **Fails OPEN:** a missing/corrupt `ratelimits.json` never bricks update checks.
+- **A clear, gated state surfaces on the manual checks.** The left-rail per-channel
+  *Updates* box reads *⏳ GitHub limit — retry at HH:MM*
+  (`ChannelUpdateStatus::RateLimited`), and the launcher self-update check reports
+  the same in Launcher Options. Both pre-check the gate synchronously, so a blocked
+  press spends no request and shows the resume time at once.
+
+### Changed
+
+- **Update discovery now owns its GitHub request** (`updater/github_client.rs`).
+  Both the launcher self-update check and the per-channel game `latest_release`
+  discovery moved off `self_update`'s `ReleaseList::fetch()` (which hides the HTTP
+  status + headers) onto a direct `reqwest` call that exposes the status and the two
+  rate-limit headers — the prerequisite for the safety net. The request footprint is
+  unchanged (still paginates 30/page following `Link: rel="next"`); `self_update`
+  still powers the launcher binary self-update swap and stale-artifact cleanup.
+- **The gate covers every counted GitHub request:** the launcher self-update check,
+  the per-channel game `latest_release` checks, and the binary-download asset
+  request (`updater/branches/installer.rs`). A user-initiated install that's
+  rate-limited fails fast with a clean "resumes at HH:MM" rather than starting and
+  dying mid-flight on a 403. Actions that hit our own server (register / reachability)
+  or stay local (uninstall / verify / saves / firewall) are untouched.
+  - **Correctness guardrail:** the cooldown arms only on a *confirmed* `403`/`429`
+    rate-limit (`X-RateLimit-Remaining: 0` or a `Retry-After`), **never** on a
+    generic network error/timeout — a Wi-Fi blip cannot cause a lockout.
+
+---
+
 ## [0.13.1] — 2026-06-15
 
 Relocates the manual update check from Settings to the **left rail**, directly

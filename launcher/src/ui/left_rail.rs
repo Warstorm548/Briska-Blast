@@ -87,6 +87,9 @@ fn channel_update_box(state: &AppState) -> Element<'_, Message> {
             format!("\u{2713} You're up to date \u{2014} v{v}")
         }
         Some(ChannelUpdateStatus::Failed) => "\u{26A0} Check failed".to_string(),
+        Some(ChannelUpdateStatus::RateLimited { resume_at }) => {
+            format!("\u{23F3} GitHub limit \u{2014} retry at {resume_at}")
+        }
     };
     container(
         column![

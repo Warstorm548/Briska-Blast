@@ -9,6 +9,7 @@
 //! `std::process::exit(0)` immediately after; the renamed orphan is cleaned up
 //! by the next launcher run via `self_update`'s own logic.
 
+use super::github_client;
 use semver::Version;
 
 const REPO_OWNER: &str = "Warstorm548";
@@ -28,44 +29,27 @@ pub enum UpdateCheckOutcome {
     },
 }
 
-/// Async wrapper suitable for `iced::Task::perform`. Runs the blocking
-/// `self_update` call on a tokio blocking thread.
+/// Query GitHub Releases for a newer `launcher-v*` than the running binary.
+/// Suitable for `iced::Task::perform`. Goes through `github_client` (our owned
+/// request) so the rate-limit safety net can see the status + headers; a closed
+/// gate or a confirmed `403`/`429` surfaces as the user-facing rate-limit message.
 pub async fn check_for_update() -> Result<UpdateCheckOutcome, String> {
-    tokio::task::spawn_blocking(check_for_update_blocking)
-        .await
-        .map_err(|e| format!("update check join error: {e}"))?
-}
-
-/// Async wrapper for the binary-swap. Returns Ok(()) on a successful swap;
-/// caller MUST then `std::process::exit(0)` because the running binary has
-/// been renamed and replaced on disk.
-pub async fn run_self_update(version: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || run_self_update_blocking(&version))
-        .await
-        .map_err(|e| format!("self-update join error: {e}"))?
-}
-
-fn check_for_update_blocking() -> Result<UpdateCheckOutcome, String> {
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .map_err(|e| format!("invalid current version {:?}: {e}", env!("CARGO_PKG_VERSION")))?;
     tracing::debug!(%current, "querying GitHub Releases for launcher updates");
 
-    let releases = self_update::backends::github::ReleaseList::configure()
-        .repo_owner(REPO_OWNER)
-        .repo_name(REPO_NAME)
-        .build()
-        .map_err(|e| format!("release list build: {e}"))?
-        .fetch()
-        .map_err(|e| format!("release list fetch: {e}"))?;
+    let releases = github_client::fetch_releases(REPO_OWNER, REPO_NAME)
+        .await
+        .map_err(|e| e.to_user_string())?;
 
-    let mut best: Option<(Version, &self_update::update::Release)> = None;
+    let mut best: Option<(Version, &github_client::Release)> = None;
     for r in &releases {
-        // `version` on self_update's Release is the git tag string.
-        let Some(stripped) = r.version.strip_prefix(TAG_PREFIX) else {
+        // `tag_name` is the git tag string.
+        let Some(stripped) = r.tag_name.strip_prefix(TAG_PREFIX) else {
             continue;
         };
         let Ok(v) = Version::parse(stripped) else {
-            tracing::trace!(tag = %r.version, "skipping unparseable launcher tag");
+            tracing::trace!(tag = %r.tag_name, "skipping unparseable launcher tag");
             continue;
         };
         if best.as_ref().is_none_or(|(b, _)| v > *b) {
@@ -87,6 +71,15 @@ fn check_for_update_blocking() -> Result<UpdateCheckOutcome, String> {
         version: latest.to_string(),
         notes: release.body.clone().unwrap_or_default(),
     })
+}
+
+/// Async wrapper for the binary-swap. Returns Ok(()) on a successful swap;
+/// caller MUST then `std::process::exit(0)` because the running binary has
+/// been renamed and replaced on disk.
+pub async fn run_self_update(version: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || run_self_update_blocking(&version))
+        .await
+        .map_err(|e| format!("self-update join error: {e}"))?
 }
 
 fn run_self_update_blocking(version: &str) -> Result<(), String> {
