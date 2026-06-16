@@ -190,8 +190,8 @@ though the same refactor enables them.
 
 ### Known limitations (revisit — shipped in v0.14.0)
 
-Two UX rough edges were accepted to keep the v0.14.0 scope tight. Neither is a
-correctness bug; both are worth a follow-up pass:
+Three rough edges were accepted to keep the v0.14.0 scope tight. None is a
+correctness bug; all are worth a follow-up pass:
 
 1. **Disabled install button on a cold-gated boot.** If the gate is already closed
    at launch (a prior session hit the wall), boot discovery is skipped, so a
@@ -209,6 +209,16 @@ correctness bug; both are worth a follow-up pass:
    **secondary-limit** block ever pushed the resume across midnight or well past an
    hour. *Revisit:* if those paths become non-rare, show a relative form ("~37 min")
    or include the date.
+
+3. **`ratelimits.json` read-modify-write is not atomic across the concurrent
+   fan-out.** `note_response` now reads the current block and preserves an active
+   one rather than blindly clearing it (`resolve_blocked_until`), which fixes the
+   stale-out-of-order *clear*. But the read→compute→write is still not atomic, so a
+   vanishingly narrow race remains: if a block is armed by another task *between*
+   this task's read and its write, a healthy response could still clobber it. It's
+   best-effort local cache state (the gate fails open anyway), so this was judged
+   not worth a lock. *Revisit:* only if it ever proves to matter in practice —
+   close it with file locking or a single-writer task that owns the file.
 
 ---
 
