@@ -86,6 +86,9 @@ pub enum ChannelUpdateStatus {
     UpdateAvailable(semver::Version),
     /// The GitHub fetch errored; prior `available_versions` is left intact.
     Failed,
+    /// The rate-limit back-off gate is closed — no GitHub request was spent.
+    /// `resume_at` is a preformatted local `HH:MM` for display.
+    RateLimited { resume_at: String },
 }
 
 impl ChannelUpdateStatus {

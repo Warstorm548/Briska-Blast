@@ -1,7 +1,7 @@
 # Launcher — GitHub Rate-Limit Safety Net (and deferred footprint work)
 
-**Status:** design agreed; not yet built. The **safety net** (Part 3) is the
-next thing to implement. The **footprint reductions** (Part 4) are deliberately
+**Status:** **Part 3 (the safety net) implemented in launcher v0.14.0** — see
+`LauncherChangeLog.md`. The **footprint reductions** (Part 4) remain deliberately
 deferred.
 
 This doc captures the analysis and decisions from the 2026-06-15 design session
@@ -97,7 +97,7 @@ on that network's GitHub access, not just the launcher.
 
 ---
 
-## Part 3 — The safety net (BUILD THIS FIRST)
+## Part 3 — The safety net (IMPLEMENTED — launcher v0.14.0)
 
 **Scope:** graceful back-off only. **Goal:** once we know we're rate-limited, send
 **zero** further GitHub-counting requests until the window resets — so we can never
@@ -187,6 +187,28 @@ therefore needs a **minimal direct `reqwest` call** that exposes the status + th
 two rate-limit headers. **Only that minimum is in scope here** — `per_page=100`,
 ETag, and fetch-once (Part 4) are explicitly out of scope for this work, even
 though the same refactor enables them.
+
+### Known limitations (revisit — shipped in v0.14.0)
+
+Two UX rough edges were accepted to keep the v0.14.0 scope tight. Neither is a
+correctness bug; both are worth a follow-up pass:
+
+1. **Disabled install button on a cold-gated boot.** If the gate is already closed
+   at launch (a prior session hit the wall), boot discovery is skipped, so a
+   channel whose available version was never learned leaves the bottom-bar
+   Install/Update button **disabled** (it has nothing to offer). The user then sees
+   a dead button rather than the "resumes at HH:MM" explanation — that message only
+   surfaces on the *manual* Check buttons and inside the install prompt, which they
+   can't open. *Revisit:* surface the gate state on the bottom-bar button or a small
+   top-bar banner so a rate-limited boot explains itself even with no cached version.
+   (Today the explanation is reachable via either "Check for Updates" button.)
+
+2. **Resume time is local `HH:MM` only (no date / relative form).** Fine while the
+   block is GitHub's hourly window (resume is always < ~1h out, so `HH:MM` is
+   unambiguous). It would read poorly if the **1-hour no-header fallback** or a long
+   **secondary-limit** block ever pushed the resume across midnight or well past an
+   hour. *Revisit:* if those paths become non-rare, show a relative form ("~37 min")
+   or include the date.
 
 ---
 

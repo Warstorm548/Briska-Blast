@@ -387,6 +387,17 @@ pub(crate) fn check_channel_update_pressed(
     ) {
         return Task::none();
     }
+    // Rate-limit gate: if the back-off window is open, show the resume time
+    // immediately instead of spending (and failing) a GitHub request.
+    if let crate::ratelimit::Gate::Blocked { resume_at } = crate::ratelimit::gate() {
+        state.channel_update_status.insert(
+            channel,
+            crate::app::ChannelUpdateStatus::RateLimited {
+                resume_at: crate::ratelimit::format_resume(resume_at),
+            },
+        );
+        return Task::none();
+    }
     state
         .channel_update_status
         .insert(channel, crate::app::ChannelUpdateStatus::Checking);

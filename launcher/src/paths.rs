@@ -50,6 +50,13 @@ pub fn identity_path() -> io::Result<PathBuf> {
     Ok(data_dir()?.join("identity.json"))
 }
 
+/// `<data_dir>/ratelimits.json` — the GitHub rate-limit back-off state
+/// (last-seen reset + remaining, derived block window). Sits next to
+/// `identity.json` under the per-user data root. See `ratelimit.rs`.
+pub fn ratelimit_path() -> io::Result<PathBuf> {
+    Ok(data_dir()?.join("ratelimits.json"))
+}
+
 /// `<data_dir>/saves/<channel>/`. Created on first call. Reserved for the
 /// existing `Settings → Game Channel Management → Game Save` button row once
 /// it gets a real implementation; exposing the path here is in scope so

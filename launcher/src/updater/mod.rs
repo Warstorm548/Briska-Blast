@@ -16,3 +16,7 @@ pub use github::{check_for_update, run_self_update, UpdateCheckOutcome};
 
 mod cleanup;
 mod github;
+/// Owned GitHub Releases list fetch (exposes status + rate-limit headers for the
+/// back-off safety net). Private to `updater`; reachable from `branches::github`
+/// (a descendant module) and `github` (a sibling).
+mod github_client;
