@@ -9,6 +9,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.14.0] — 2026-06-16
+
+Lobby chat goes live. The chat box in the Session Lobby — previously a static
+mockup — now sends and receives real messages relayed through the server, so
+every player in the session sees the same conversation in the same order.
+Requires server **v0.16.0+**.
+
+### Added
+- **Server-relayed lobby chat.** `SignalingClient` gains a `SendChatMessage` and
+  a `ChatMessage` event over the signaling WebSocket (`send_chat` /
+  `chat_message`). In `SessionLobby`, pressing **Enter** in the chat input
+  (`LineEdit.TextSubmitted`) sends the trimmed message; the field clears
+  immediately. Incoming messages append to the chat log as `<name>: <text>`, with
+  the name resolved through the same `DisplayNameFor` fallback (`Player <id>`) the
+  roster uses. The server echoes every message back to the sender too, so all
+  clients render from the same broadcast rather than a local guess. Names and
+  message text are added with `RichTextLabel.AddText` (not parsed as BBCode), so a
+  message can't inject formatting tags.
+
+### Changed
+- The chat log's placeholder sample line is removed; the log starts empty and
+  fills only from server broadcasts.
+
 ## [0.13.0] — 2026-06-16
 
 The Session Lobby gets a visual + layout pass. Its panels now read as deliberate,

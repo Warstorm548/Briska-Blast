@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.16.0] — 2026-06-16
+
+### Added
+- **Lobby chat relay.** New signaling frames `SendChat { text }` (client→server)
+  and `ChatMessage { from, username, text }` (server→client). When a player sends
+  a chat message, the server trims it, drops empties, bounds the length (500
+  chars, truncated on a char boundary), resolves the sender's display name from
+  Redis via the existing `fetch_usernames` helper, and **broadcasts to every
+  member including the sender** — so all clients render an identical,
+  server-ordered transcript (same rationale as `ScoreUpdate`). `from` is
+  server-attested from the authenticated WS connection — clients cannot forge it.
+  Relayed through signaling rather than the WebRTC mesh because the lobby has no
+  mesh yet. Additive to the WS protocol; pairs with game **v0.14.0**.
+
+---
+
 ## [0.15.0] — 2026-06-13
 
 ### Added

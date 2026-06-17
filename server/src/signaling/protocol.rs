@@ -49,6 +49,11 @@ pub enum ClientMsg {
     /// compute round-trip delay and its offset to the server clock without the
     /// server tracking any per-connection state. See `ServerClock` (client).
     TimeSync { client_send_ms: i64 },
+    /// A lobby chat message typed by this player. Relayed through signaling
+    /// (the lobby has no WebRTC mesh yet) so the server can attest the sender
+    /// and resolve their display name, then broadcast `ChatMessage` to the whole
+    /// room. The server trims the text, bounds its length, and drops empties.
+    SendChat { text: String },
 }
 
 /// Server → client signaling frames. JSON-tagged on `type`. Cloneable
@@ -140,4 +145,14 @@ pub enum ServerMsg {
     /// peers can stamp ball handoffs in a shared (server) time frame, making the
     /// transit fast-forward immune to per-machine wall-clock skew.
     TimeSync { client_send_ms: i64, server_ms: i64 },
+    /// Broadcast after an accepted `SendChat`. `from` is the server-attested
+    /// sender id; `username` is their server-stored display name (empty when none
+    /// is on file — the client falls back to `Player <id>`). Sent to everyone
+    /// including the sender so all clients render an identical, server-ordered
+    /// transcript (same rationale as `ScoreUpdate`).
+    ChatMessage {
+        from: String,
+        username: String,
+        text: String,
+    },
 }
