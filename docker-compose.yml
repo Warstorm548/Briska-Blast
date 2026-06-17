@@ -21,6 +21,11 @@ services:
       # known-literal token would mean a missing .env silently runs with a
       # public secret. Fail-closed is safer.
       - WATCHTOWER_TOKEN=${WATCHTOWER_TOKEN:?WATCHTOWER_TOKEN must be set in .env}
+      # Optional GitHub PAT for the update check's Releases API call. When set in
+      # .env it raises the anonymous 60 req/hr/IP limit to 5000 authenticated.
+      # The ":-" default keeps it optional — absence runs anonymous (the server
+      # treats an empty token as no auth), so this never fails closed.
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     labels:
