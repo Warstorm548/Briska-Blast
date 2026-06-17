@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.16.1] — 2026-06-17
+
+### Added
+- **Update-check auth-state logging.** `update::github::check_for_update` now
+  emits one `info` line per check stating whether it ran **authenticated
+  (5000/hr limit)** or **anonymous (60/hr limit)**, depending on whether
+  `GITHUB_TOKEN` was present in the environment. Lets ops confirm the higher
+  GitHub rate limit is in effect with `docker compose logs server | grep "github check"`
+  instead of inspecting outbound traffic. No behaviour change — the request is
+  built exactly as before; only an observability line was added.
+
+---
+
 ## [0.16.0] — 2026-06-16
 
 ### Added
