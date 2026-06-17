@@ -101,6 +101,8 @@ GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 
 Absence is fully supported — the server falls back to anonymous calls. The check also uses ETag conditional requests (`If-None-Match`) so unchanged responses (`304 Not Modified`) cost nothing against the rate limit either way.
 
+Two caveats worth knowing: the variable only reaches the container if the `server` service in `docker-compose.yml` passes it through (`- GITHUB_TOKEN=${GITHUB_TOKEN:-}` under `environment:`), and because that's a host-side compose file — **not** part of the server image — it never arrives via an image pull, version tag, or Watchtower update; you update it on the host directly. For multi-environment setup on one dedi (a token per env, refreshing an env's compose without git), see the `GITHUB_TOKEN` note in the [ops manual](briska-blast-ops-manual.md#compose-stacks).
+
 ---
 
 ## Admin Panel — Server Updates Section
