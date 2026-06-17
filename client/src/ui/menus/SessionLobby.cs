@@ -27,10 +27,10 @@ public partial class SessionLobby : Control
     {
         _slots = new[]
         {
-            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/PlayerSlots/Slot1"),
-            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/PlayerSlots/Slot2"),
-            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/PlayerSlots/Slot3"),
-            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/PlayerSlots/Slot4"),
+            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot1"),
+            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot2"),
+            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot3"),
+            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot4"),
         };
 
         for (int i = 0; i < _slots.Length; i++)
