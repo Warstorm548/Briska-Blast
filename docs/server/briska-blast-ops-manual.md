@@ -117,7 +117,47 @@ per environment with:
 openssl rand -base64 32
 ```
 
-Optionally set `GITHUB_TOKEN=<read-only PAT>` to raise the GitHub Releases API rate limit from 60/hr anon to 5000/hr authenticated. Absence is supported.
+**`GITHUB_TOKEN` is optional but recommended — set it per environment.** The
+server's update check calls the GitHub Releases API. Anonymous calls share a
+**60 req/hr per source IP** budget across *every* environment on this dedi (they all
+egress from one IP), so a handful of "Check for Updates" clicks across dev/ea/stable
+can exhaust it. Setting `GITHUB_TOKEN` to a GitHub PAT authenticates the call and
+raises the limit to **5000 req/hr**; absence just runs anonymous. Set it in **each
+environment's `.env`** — one **no-scope** classic PAT (or a read-only fine-grained
+token) can be reused across all of them, since it only needs to read public releases.
+
+For the token to actually reach the container, the `server` service in
+`docker-compose.yml` must list `- GITHUB_TOKEN=${GITHUB_TOKEN:-}` under
+`environment:` (present in the repo's compose as of the passthrough fix).
+
+> **A token in `.env` alone is not enough — and a new image/tag will not add it.**
+> Two separate things run the server: the **image**
+> (`ghcr.io/.../briska-blast:<channel>`, the program — delivered by `docker pull` /
+> Watchtower) and the **`docker-compose.yml`** (the run *instructions* on the dedi's
+> disk — which ports, which env vars, which volumes). The image never contains the
+> compose file, so **no version tag, image pull, or Watchtower update changes the
+> compose wiring.** If an environment's compose predates the `GITHUB_TOKEN` line,
+> refresh that file on the dedi directly (it is not git-managed):
+>
+> ```bash
+> cd ~/briska/dev                                  # the env's folder
+> cp docker-compose.yml docker-compose.yml.bak
+> curl -fsSL https://raw.githubusercontent.com/Warstorm548/Briska-Blast/dev/docker-compose.yml -o docker-compose.yml
+> docker compose up -d --force-recreate server
+> ```
+>
+> The compose file is channel-agnostic (everything per-env lives in `.env`), so the
+> same file serves dev/ea/stable.
+
+Generate a token (any no-scope classic PAT works) at
+<https://github.com/settings/tokens>, then **verify** the running container has it
+and is on the higher limit:
+
+```bash
+docker compose exec server printenv GITHUB_TOKEN          # prints the token
+TOKEN=$(docker compose exec -T server printenv GITHUB_TOKEN | tr -d '\r\n')
+curl -s -H "Authorization: Bearer $TOKEN" https://api.github.com/rate_limit | jq -r '.resources.core.limit'   # 5000
+```
 
 ### Compose Project Isolation (`COMPOSE_PROJECT_NAME`)
 
@@ -359,7 +399,7 @@ To add a new env (e.g., a "beta" branch):
 
 1. Pick port numbers following the tens-digit pattern (beta could be 25949 / 25950 / 25951 for game / admin / watchtower).
 2. Create directory: `mkdir -p ~/briska/beta`
-3. Create `docker-compose.yml` and `.env` in that directory.
+3. Create `docker-compose.yml` and `.env` in that directory. Copy the latest `docker-compose.yml` from the repo (or another env) so it already includes the `GITHUB_TOKEN` passthrough, then fill the env's `.env`: ports, a fresh `WATCHTOWER_TOKEN`, and — for the authenticated 5000/hr update-check limit — `GITHUB_TOKEN` (see the `GITHUB_TOKEN` note in [§3 Compose Stacks](#compose-stacks); the same no-scope PAT may be reused across envs).
 4. Add DNS A record: `beta.briska-blast.com` → dedi public IP.
 5. Issue TLS cert: `sudo certbot --nginx -d beta.briska-blast.com`
 6. Create nginx config at `/etc/nginx/sites-available/briska-beta.conf` (copy from prod, adjust ports/cert path/server_name).
