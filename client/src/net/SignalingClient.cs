@@ -42,6 +42,12 @@ public partial class SignalingClient : Node
     /// <summary>Authoritative per-session score tally (player_id → points)
     /// broadcast by the server after a score report. Overwrite, don't add.</summary>
     public event Action<Dictionary<string, int>>? ScoreUpdate;
+    /// <summary>A lobby chat message arrived. Carries (from, username, text):
+    /// <c>from</c> is the server-attested sender id and <c>username</c> their
+    /// display name (empty when none — fall back to <c>Player &lt;id&gt;</c>). The
+    /// server broadcasts to everyone including the sender, so this also fires for
+    /// this client's own messages — render them all the same way.</summary>
+    public event Action<string, string, string>? ChatMessage; // (from, username, text)
     /// <summary>Socket closed for good (deliberate close, an auth-level
     /// rejection, or the reconnect window expired). Carries the close code
     /// (4xxx app codes from the server, or transport codes like 1006) and the
@@ -108,6 +114,7 @@ public partial class SignalingClient : Node
     private sealed record PeerConnectionFailedFrame(string Type, string Peer, string Reason);
     private sealed record ReportScoreFrame(string Type, string ScoringPlayerId);
     private sealed record TimeSyncFrame(string Type, long ClientSendMs);
+    private sealed record SendChatFrame(string Type, string Text);
 
     /// <summary>Open the WS for <paramref name="code"/> and begin identifying.</summary>
     public void Connect(string code, string playerId, string secretToken)
@@ -178,6 +185,12 @@ public partial class SignalingClient : Node
     /// to hit the ball) scored. The server tallies and broadcasts ScoreUpdate.</summary>
     public void SendReportScore(string scoringPlayerId) =>
         SendFrame(new ReportScoreFrame("report_score", scoringPlayerId));
+
+    /// <summary>Send a lobby chat message. The server attests the sender,
+    /// resolves the display name, and broadcasts <see cref="ChatMessage"/> to the
+    /// whole room (including this client). No-op if the socket isn't open.</summary>
+    public void SendChatMessage(string text) =>
+        SendFrame(new SendChatFrame("send_chat", text));
 
     /// <summary>Current time in the server-synced frame (ms). Both ends of a ball
     /// handoff stamp/compare with this so cross-machine wall-clock skew cancels
@@ -400,6 +413,9 @@ public partial class SignalingClient : Node
                     break;
                 case "score_update":
                     ScoreUpdate?.Invoke(ReadIntMap(root, "scores"));
+                    break;
+                case "chat_message":
+                    ChatMessage?.Invoke(Str(root, "from"), Str(root, "username"), Str(root, "text"));
                     break;
                 case "time_sync":
                     // T4 = now; fold this round-trip into the server-clock offset.

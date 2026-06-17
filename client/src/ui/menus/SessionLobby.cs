@@ -43,6 +43,13 @@ public partial class SessionLobby : Control
         GetNode<Button>("%CancelSessionButton").Pressed += OnCancelOrLeavePressed;
         GetNode<Button>("%ReturnToSetupButton").Pressed += OnReturnToSetupPressed;
 
+        // Lobby chat: Enter in the input sends (LineEdit.TextSubmitted). The log
+        // starts empty (drop the scene's sample line) and fills only from
+        // server-broadcast chat_message frames so every client shows the same
+        // transcript.
+        GetNode<LineEdit>("%ChatInput").TextSubmitted += OnChatSubmitted;
+        GetNode<RichTextLabel>("%ChatLog").Clear();
+
         _status = new Label { HorizontalAlignment = HorizontalAlignment.Center, Visible = false };
         GetNode("LeftPanel/LeftMargins/LeftContent").AddChild(_status);
 
@@ -61,6 +68,7 @@ public partial class SessionLobby : Control
         _signaling.Closed += OnClosed;
         _signaling.Reconnecting += OnReconnecting;
         _signaling.Reconnected += OnReconnected;
+        _signaling.ChatMessage += OnChatMessage;
 
         var ctx = SessionContext.Instance;
         _signaling.Connect(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
@@ -113,6 +121,42 @@ public partial class SessionLobby : Control
     private void OnReconnecting() => ShowStatus("Reconnecting…");
 
     private void OnReconnected() => ShowStatus("");
+
+    // Enter pressed in the chat input. Trim, send through signaling (the server
+    // echoes it back to everyone, including us, so we render on receipt rather
+    // than locally — keeping all clients' transcripts identical), then clear the
+    // field. Empty/whitespace input is dropped without a round-trip.
+    private void OnChatSubmitted(string text)
+    {
+        var input = GetNode<LineEdit>("%ChatInput");
+        var trimmed = text.Trim();
+        if (trimmed.Length > 0 && _signaling != null)
+            _signaling.SendChatMessage(trimmed);
+        input.Clear();
+    }
+
+    // A chat line broadcast by the server (ours or a peer's). Keep the roster's
+    // name map in step with what chat reports, then label via the same
+    // DisplayNameFor fallback (Player <id>) the rest of the lobby uses.
+    private void OnChatMessage(string from, string username, string text)
+    {
+        var ctx = SessionContext.Instance;
+        if (!string.IsNullOrEmpty(username))
+            ctx.SetUsername(from, username);
+        AppendChatLine(ctx.DisplayNameFor(from), text);
+    }
+
+    // Append one "<name>: <text>" line. Uses AddText (not AppendText) for the
+    // server- and user-supplied strings so they are never parsed as BBCode —
+    // only the bold tag around the name is pushed by us, so no tag injection.
+    private void AppendChatLine(string name, string text)
+    {
+        var log = GetNode<RichTextLabel>("%ChatLog");
+        log.PushBold();
+        log.AddText(name);
+        log.Pop();
+        log.AddText($": {text}\n");
+    }
 
     private void OnStartSignaling(string gamemode, int playerCount, string[] peers)
     {
@@ -174,6 +218,7 @@ public partial class SessionLobby : Control
         _signaling.Closed -= OnClosed;
         _signaling.Reconnecting -= OnReconnecting;
         _signaling.Reconnected -= OnReconnected;
+        _signaling.ChatMessage -= OnChatMessage;
     }
 
     private void OnSessionEnded(string reason) => LeaveToMenu($"Session ended ({reason}).");

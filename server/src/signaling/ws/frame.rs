@@ -6,9 +6,14 @@
 use chrono::Utc;
 
 use crate::{
+    api::fetch_usernames,
     signaling::protocol::{ClientMsg, ServerMsg},
     state::AppState,
 };
+
+/// Upper bound on a single chat message after trimming. Keeps one client from
+/// flooding the room with an oversized frame; the client also limits input.
+const MAX_CHAT_LEN: usize = 500;
 
 /// Parse and route a single incoming text frame. Returns true to keep
 /// the loop running, false on explicit Leave.
@@ -103,6 +108,45 @@ pub(super) async fn handle_client_frame(
                         client_send_ms,
                         server_ms: Utc::now().timestamp_millis(),
                     },
+                )
+                .await;
+        }
+        ClientMsg::SendChat { text } => {
+            // Drop empties (a stray Enter shouldn't broadcast a blank line) and
+            // bound the length. Truncate on a char boundary so multi-byte input
+            // can't panic.
+            let text = text.trim();
+            if text.is_empty() {
+                return true;
+            }
+            let text: String = text.chars().take(MAX_CHAT_LEN).collect();
+
+            // Resolve the sender's display name fresh from Redis so a mid-session
+            // rename is reflected; a miss or Redis error degrades to empty (the
+            // client then shows `Player <id>`), never dropping the message.
+            let username = match state.redis.get().await {
+                Ok(mut conn) => {
+                    let ids = [from_player.to_string()];
+                    fetch_usernames(&mut conn, &ids)
+                        .await
+                        .remove(from_player)
+                        .unwrap_or_default()
+                }
+                Err(_) => String::new(),
+            };
+
+            // Broadcast to everyone including the sender so all clients render an
+            // identical, server-ordered transcript (same rationale as ScoreUpdate).
+            state
+                .signal_hub
+                .broadcast(
+                    code,
+                    ServerMsg::ChatMessage {
+                        from: from_player.to_string(),
+                        username,
+                        text,
+                    },
+                    None,
                 )
                 .await;
         }
