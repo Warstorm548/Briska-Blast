@@ -9,6 +9,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.13.0] — 2026-06-16
+
+The Session Lobby gets a visual + layout pass. Its panels now read as deliberate,
+framed areas instead of the engine's default flat boxes, and the whole screen is
+laid out by **percentage of the viewport** so every field stays on-screen at any
+window size or aspect ratio. Purely a game-client presentation change — no
+protocol, game-server, or version-requirement change. (Lobby chat is wired in a
+follow-up.)
+
+### Added
+- **Bordered, defined lobby panels.** `MenuTheme.tres` gains a
+  `PanelContainer` panel stylebox in the existing blue/cyan family (translucent
+  navy fill, 2px light-blue border, 8px corners, subtle cyan glow) so the left
+  (session info) and right (roster + chat) panels are clearly framed. A darker
+  `InnerPanel` theme-type-variation gives the player-roster box and the chat box a
+  recessed, nested look.
+
+### Changed
+- **Percentage-based responsive layout.** `SessionLobby.tscn`'s side panels move
+  from absolute, top-anchored pixel offsets (which left the right panel only ~20px
+  above the bottom buttons) to **fractional anchors**, so each panel holds its
+  proportion of the screen. The roster is wrapped in an inner panel and the chat
+  box now expands to fill the remaining height (replacing a greedy spacer), keeping
+  the chat log and input fully visible. The four roster slots re-parent under the
+  new `RosterBox/RosterMargins`; `SessionLobby.cs` slot paths follow.
+
 ## [0.12.1] — 2026-06-14
 
 Fix: a **served ball now counts as a hit**, so serving credits the player who
