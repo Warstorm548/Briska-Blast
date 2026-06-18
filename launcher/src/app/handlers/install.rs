@@ -157,15 +157,18 @@ pub(crate) fn install_location_picked(
         } = &mut state.center_view
         {
             // Reject a location that would nest the game inside the launcher's
-            // own folder. Leave install_root untouched so the bad path is never
-            // stored and Confirm stays gated; surface the blocking message in
-            // the prompt's existing error slot.
+            // own folder. Clear install_root so the rejection is unambiguous —
+            // Confirm stays gated and a previously-selected path (e.g. the prior
+            // install dir seeded by the update flow) can't be confirmed while
+            // the error is showing — and surface the blocking message in the
+            // prompt's existing error slot.
             if crate::paths::install_location_collides(&path, channel.dir_name()) {
                 tracing::info!(
                     ?channel,
                     path = %path.display(),
                     "rejected install location — collides with launcher dir"
                 );
+                *install_root = None;
                 *error = Some(INVALID_INSTALL_LOCATION_MSG.to_string());
             } else {
                 *install_root = Some(path);
