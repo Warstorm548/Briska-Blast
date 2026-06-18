@@ -5,6 +5,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.14.2] — 2026-06-17
+
+Closes a footgun in the game install flow: the user could pick an install folder
+that sat **inside the launcher's own application directory**, nesting the game
+under the launcher. Such an install is broken — the game won't launch and never
+gets its Windows firewall rule prompt. The launcher now refuses these locations.
+
+### Fixed
+
+- **Reject install locations that collide with the launcher's own folder**
+  (`paths::install_location_collides`, wired into `app/handlers/install.rs`). The
+  resolved game install dir (`<chosen folder>/<channel>/`) is compared against the
+  launcher's install directory after canonicalizing both; if either is nested in
+  the other (or they're equal), the install is refused with a blocking message in
+  the install prompt rather than producing a game that can't launch or obtain its
+  firewall permission. Enforced at **both** the folder-picker step (immediate
+  feedback, Confirm stays disabled) and at confirm time (defence-in-depth, also
+  covering an update whose path comes from `identity.json`). Applies on all
+  platforms. Legitimate siblings (e.g. launcher `…/BriskaBlast`, game `…/dev`) are
+  unaffected — the check is component-wise, not a string prefix.
+
+---
+
 ## [0.14.1] — 2026-06-16
 
 A small footprint reduction on update discovery. The first Part 4 lever from the

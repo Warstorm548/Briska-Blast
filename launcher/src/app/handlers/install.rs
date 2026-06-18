@@ -8,6 +8,15 @@ use crate::identity;
 use futures_util::StreamExt;
 use iced::Task;
 
+/// Shown in the install prompt when the chosen folder collides with the
+/// launcher's own install directory (see `paths::install_location_collides`).
+/// Installing the game there leaves it unable to launch or obtain its Windows
+/// firewall rule, so the install is refused rather than silently broken.
+const INVALID_INSTALL_LOCATION_MSG: &str =
+    "Invalid install location: that folder is inside the launcher's own application \
+     folder. The game can't run or get its firewall permission from there. Please \
+     choose a different location (e.g. your Documents or a Games folder).";
+
 /// Internal pipe between the spawned download task and the Iced stream
 /// adapter — see `install_confirmed`. Not surfaced as a public Message
 /// because the variants here are mapped 1:1 onto two existing user-facing
@@ -140,8 +149,28 @@ pub(crate) fn install_location_picked(
     picked: Option<std::path::PathBuf>,
 ) -> Task<Message> {
     if let Some(path) = picked {
-        if let CenterView::InstallPrompt { install_root, .. } = &mut state.center_view {
-            *install_root = Some(path);
+        if let CenterView::InstallPrompt {
+            channel,
+            install_root,
+            error,
+            ..
+        } = &mut state.center_view
+        {
+            // Reject a location that would nest the game inside the launcher's
+            // own folder. Leave install_root untouched so the bad path is never
+            // stored and Confirm stays gated; surface the blocking message in
+            // the prompt's existing error slot.
+            if crate::paths::install_location_collides(&path, channel.dir_name()) {
+                tracing::info!(
+                    ?channel,
+                    path = %path.display(),
+                    "rejected install location — collides with launcher dir"
+                );
+                *error = Some(INVALID_INSTALL_LOCATION_MSG.to_string());
+            } else {
+                *install_root = Some(path);
+                *error = None;
+            }
         }
     }
     Task::none()
@@ -176,6 +205,21 @@ pub(crate) fn install_confirmed(state: &mut AppState) -> Task<Message> {
             ?channel,
             "InstallConfirmed for {channel} with missing credentials — refusing"
         );
+        return Task::none();
+    }
+    // Defence-in-depth: the picker rejects a colliding location up front, but
+    // an update reuses the prior install_root from identity.json (which could
+    // be hand-edited). Re-check before any destructive work so the game is
+    // never installed inside the launcher's own folder.
+    if crate::paths::install_location_collides(&install_root, channel.dir_name()) {
+        tracing::warn!(
+            ?channel,
+            root = %install_root.display(),
+            "refusing install — location collides with launcher dir"
+        );
+        if let CenterView::InstallPrompt { error, .. } = &mut state.center_view {
+            *error = Some(INVALID_INSTALL_LOCATION_MSG.to_string());
+        }
         return Task::none();
     }
     if state.install_in_progress.is_some() {

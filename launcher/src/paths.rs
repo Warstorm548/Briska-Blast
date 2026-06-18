@@ -33,6 +33,58 @@ pub fn install_dir() -> io::Result<PathBuf> {
     Ok(parent.to_path_buf())
 }
 
+/// True if `a` and `b` are the same directory or one is nested inside the
+/// other (either direction). Pure component-wise prefix comparison on paths
+/// that are expected to already be canonical — `Path::starts_with` matches
+/// whole path components, so `/a/BriskaBlast` and `/a/BriskaBlastGames` are
+/// correctly treated as disjoint. Split out from [`install_location_collides`]
+/// so the overlap logic is unit-testable without touching the filesystem.
+fn paths_overlap(a: &Path, b: &Path) -> bool {
+    a.starts_with(b) || b.starts_with(a)
+}
+
+/// Refuse a game install location that collides with the launcher's OWN
+/// install directory. The game lands at `<install_root>/<channel_dir>/`;
+/// returns `true` when that resolved dir IS the launcher dir, is nested
+/// inside it, or contains it. Any of those puts the game files inside (or on
+/// top of) the launcher app, which breaks game launch and the Windows
+/// firewall-rule prompt — and the install pipeline's pre-extract wipe could
+/// even delete the launcher in the "launcher inside game dir" case.
+///
+/// Comparing the resolved install dir (not the raw `install_root`) is
+/// deliberate: a legitimate sibling — launcher at `…/BriskaBlast`, root
+/// `…/Program Files`, game at `…/Program Files/<channel>` — does NOT overlap
+/// and is correctly allowed.
+///
+/// Fails OPEN (`false`) if either path can't be resolved or canonicalized.
+/// This is a footgun guard, not a security boundary, so an un-resolvable path
+/// must not block every install; the case is logged. The folder picker always
+/// hands back an existing directory, so the live path canonicalizes fine.
+pub fn install_location_collides(install_root: &Path, channel_dir: &str) -> bool {
+    let launcher = match install_dir().and_then(|d| d.canonicalize()) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "could not resolve launcher dir — skipping install-location collision check"
+            );
+            return false;
+        }
+    };
+    let root = match install_root.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                path = %install_root.display(),
+                "could not canonicalize chosen install root — skipping collision check"
+            );
+            return false;
+        }
+    };
+    paths_overlap(&root.join(channel_dir), &launcher)
+}
+
 /// Per-user data root, created on first call.
 ///
 /// Empty `organization` keeps the Windows path at `%APPDATA%\BriskaBlast\data`
@@ -224,5 +276,46 @@ mod tests {
         let new = tmp.path().join("appdata/data");
         let migrated = migrate_data(&legacy, &new).unwrap();
         assert!(!migrated);
+    }
+
+    /// Identical paths overlap (game install dir == launcher dir).
+    #[test]
+    fn paths_overlap_equal() {
+        let p = Path::new("/opt/BriskaBlast");
+        assert!(paths_overlap(p, p));
+    }
+
+    /// Game install dir nested inside the launcher dir — the reported bug.
+    #[test]
+    fn paths_overlap_game_inside_launcher() {
+        let launcher = Path::new("/opt/BriskaBlast");
+        let game = Path::new("/opt/BriskaBlast/dev");
+        assert!(paths_overlap(game, launcher));
+    }
+
+    /// Launcher dir nested inside the game install dir — the pre-extract wipe
+    /// would delete the launcher, so this must also count as a collision.
+    #[test]
+    fn paths_overlap_launcher_inside_game() {
+        let game = Path::new("/games/briska/dev");
+        let launcher = Path::new("/games/briska/dev/launcher");
+        assert!(paths_overlap(game, launcher));
+    }
+
+    /// Disjoint trees are fine — a normal install next to the launcher.
+    #[test]
+    fn paths_overlap_disjoint() {
+        let launcher = Path::new("/opt/BriskaBlast");
+        let game = Path::new("/home/user/Games/dev");
+        assert!(!paths_overlap(game, launcher));
+    }
+
+    /// A shared name PREFIX that is not a shared path COMPONENT must not be
+    /// treated as overlap (`starts_with` is component-wise, not byte-wise).
+    #[test]
+    fn paths_overlap_shared_name_prefix_is_disjoint() {
+        let launcher = Path::new("/opt/BriskaBlast");
+        let game = Path::new("/opt/BriskaBlastGames/dev");
+        assert!(!paths_overlap(game, launcher));
     }
 }
