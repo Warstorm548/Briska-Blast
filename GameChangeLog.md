@@ -9,6 +9,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.14.1] — 2026-06-19
+
+Fixes the Extended-mode portal layout so each player's screen matches the
+canonical seating diagram (`Example Imgs/GameMode Extended.png`) instead of every
+player getting the same Top/Right/Left arrangement.
+
+### Fixed
+- **Portal edges are now assigned by seat, not a flat id-sort.**
+  `GameScene.BuildEdges` previously sorted peers by `player_id` and filled a fixed
+  `{ Top, Right, Left }` slot list in that order, so every player saw the same
+  shape regardless of who they were. Players are now placed on a fixed table
+  (**P1 = Host bottom, P2 top, P3 left, P4 right**) using a globally-consistent
+  order (Host first, then the rest sorted by id): on your own upright screen the
+  peer **opposite** you takes Top, the one on your **right** takes Right, the one
+  on your **left** takes Left — reproducing the per-player layout in the diagram.
+  Fewer-than-4-player rounds leave empty seats as walls, unchanged. The seating is
+  decided once at Start and **frozen** for the match, so a mid-game host promotion
+  never re-seats anyone or moves a portal. See
+  [`docs/architecture/extended-mode.md`](docs/architecture/extended-mode.md).
+
 ## [0.14.0] — 2026-06-16
 
 Lobby chat goes live. The chat box in the Session Lobby — previously a static
