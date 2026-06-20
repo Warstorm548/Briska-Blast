@@ -31,9 +31,12 @@ roster); against an older server the client falls back to the v0.14.1 id-sort.
   the roster is missing (older server), `BuildEdges` falls back to host-first +
   id-sort. See [`docs/architecture/extended-mode.md`](docs/architecture/extended-mode.md).
 
+## [0.14.1] — 2026-06-19
+
 Fixes the Extended-mode portal layout so each player's screen matches the
 canonical seating diagram (`Example Imgs/GameMode Extended.png`) instead of every
-player getting the same Top/Right/Left arrangement.
+player getting the same Top/Right/Left arrangement. (The seating *basis* was
+later refined from this `player_id` sort to join order in [0.14.2] above.)
 
 ### Fixed
 - **Portal edges are now assigned by seat, not a flat id-sort.**
