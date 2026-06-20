@@ -4,6 +4,14 @@
 use crate::app::{AppState, CenterView, ChannelUpdateStatus, Message, SettingsTab};
 use crate::channel::Channel;
 use iced::Task;
+use shared::protocol::messages::MAX_USERNAME_LEN;
+
+/// Hard-cap a username draft at `MAX_USERNAME_LEN` Unicode scalar values. Used by
+/// both username inputs so a 21st character is never even stored in the draft —
+/// the launcher therefore never sends an over-length name to the server.
+fn cap_username(s: &str) -> String {
+    s.chars().take(MAX_USERNAME_LEN).collect()
+}
 
 pub(crate) fn channel_picked(state: &mut AppState, c: Channel) -> Task<Message> {
     if c != state.selected_channel {
@@ -30,6 +38,13 @@ pub(crate) fn open_settings(state: &mut AppState) -> Task<Message> {
 }
 
 pub(crate) fn change_name_pressed(state: &mut AppState) -> Task<Message> {
+    if state.game_running {
+        // Username is locked while a game is running — the in-game identity must
+        // not change mid-session. The button is disabled too; this guards the
+        // stale-press path.
+        tracing::debug!("ChangeNamePressed ignored — game running");
+        return Task::none();
+    }
     state.center_view = CenterView::ChangeUsername {
         draft: state.identity.username.clone(),
     };
@@ -55,13 +70,13 @@ pub(crate) fn settings_tab_selected(state: &mut AppState, t: SettingsTab) -> Tas
 
 pub(crate) fn username_draft_changed(state: &mut AppState, s: String) -> Task<Message> {
     if let CenterView::ChangeUsername { draft } = &mut state.center_view {
-        *draft = s;
+        *draft = cap_username(&s);
     }
     Task::none()
 }
 
 pub(crate) fn welcome_draft_changed(state: &mut AppState, s: String) -> Task<Message> {
-    state.welcome_draft = s;
+    state.welcome_draft = cap_username(&s);
     Task::none()
 }
 
@@ -70,6 +85,18 @@ mod tests {
     use super::*;
     use crate::app::ChannelUpdateStatus;
     use semver::Version;
+
+    #[test]
+    fn cap_username_enforces_scalar_value_limit() {
+        // Over-limit ASCII is truncated to exactly MAX_USERNAME_LEN.
+        let long = "x".repeat(MAX_USERNAME_LEN + 5);
+        assert_eq!(cap_username(&long).chars().count(), MAX_USERNAME_LEN);
+        // Under-limit passes through unchanged.
+        assert_eq!(cap_username("alice"), "alice");
+        // Counts scalar values, not bytes — multibyte chars each count once.
+        let emoji = "🙂".repeat(MAX_USERNAME_LEN + 2);
+        assert_eq!(cap_username(&emoji).chars().count(), MAX_USERNAME_LEN);
+    }
 
     #[test]
     fn switching_channel_clears_update_verdict() {

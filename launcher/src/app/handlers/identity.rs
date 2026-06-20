@@ -9,7 +9,7 @@ use crate::channel::Channel;
 use crate::identity::{self, ChannelCreds};
 use crate::server_api;
 use iced::Task;
-use shared::protocol::messages::{RegisterResponse, UpdateUsernameRequest};
+use shared::protocol::messages::{RegisterResponse, UpdateUsernameRequest, MAX_USERNAME_LEN};
 
 pub(crate) fn register_done(
     state: &mut AppState,
@@ -85,10 +85,45 @@ pub(crate) fn register_done(
 pub(crate) fn update_username_done(
     state: &mut AppState,
     channel: Channel,
-    result: Result<(), server_api::ServerApiError>,
+    result: Result<server_api::UpdateUsernameOutcome, server_api::ServerApiError>,
 ) -> Task<Message> {
     match result {
-        Ok(()) => {}
+        Ok(server_api::UpdateUsernameOutcome::Accepted(name)) => {
+            // Server stored the new name and echoes it back as canonical. Adopt
+            // it (normally identical to the value we set optimistically on
+            // Confirm); persist only when it actually differs so the per-channel
+            // fan-out doesn't rewrite identity.json once per channel.
+            if state.identity.username != name {
+                state.identity.username = name;
+                if let Err(e) = identity::save(&state.identity) {
+                    tracing::warn!(
+                        error = %e,
+                        channel = %channel,
+                        "failed to persist identity after username accept"
+                    );
+                }
+            }
+        }
+        Ok(server_api::UpdateUsernameOutcome::Rejected(stable)) => {
+            // Trust-boundary reject. The launcher hard-caps the input, so a
+            // reject here means a tampered/raw client; the server left Redis
+            // untouched and handed back the stored stable name. Snap the local
+            // identity back to it and surface a notice.
+            tracing::warn!(
+                channel = %channel,
+                "username change rejected by server — reverting to stored name"
+            );
+            state.identity.username = stable;
+            if let Err(e) = identity::save(&state.identity) {
+                tracing::warn!(
+                    error = %e,
+                    channel = %channel,
+                    "failed to persist identity after username revert"
+                );
+            }
+            state.username_notice =
+                Some("Server rejected that name; reverted to your saved username.".to_string());
+        }
         Err(server_api::ServerApiError::Unauthorized) => {
             // The server no longer recognises this identity — it was deleted
             // (and possibly its id recycled to someone else) via the admin
@@ -114,9 +149,10 @@ pub(crate) fn update_username_done(
 
 pub(crate) fn confirm_welcome_username(state: &mut AppState) -> Task<Message> {
     let trimmed = state.welcome_draft.trim().to_string();
-    if trimmed.is_empty() {
-        // Defence in depth — the Confirm button is disabled when
-        // empty, but `on_submit` (Enter key) routes here too.
+    if trimmed.is_empty() || trimmed.chars().count() > MAX_USERNAME_LEN {
+        // Defence in depth — the Confirm button is disabled when empty and the
+        // input is hard-capped at MAX_USERNAME_LEN, but `on_submit` (Enter key)
+        // routes here too.
         return Task::none();
     }
 
@@ -149,7 +185,10 @@ pub(crate) fn confirm_welcome_username(state: &mut AppState) -> Task<Message> {
 pub(crate) fn confirm_username_change(state: &mut AppState) -> Task<Message> {
     if let CenterView::ChangeUsername { draft } = &state.center_view {
         let trimmed = draft.trim().to_string();
-        if !trimmed.is_empty() {
+        // The input is hard-capped at MAX_USERNAME_LEN, so the length re-check is
+        // pure defence-in-depth (Enter-key path); empty stays a no-op.
+        if !trimmed.is_empty() && trimmed.chars().count() <= MAX_USERNAME_LEN {
+            state.username_notice = None;
             state.identity.username = trimmed.clone();
             state.center_view = CenterView::Default;
             if let Err(e) = identity::save(&state.identity) {

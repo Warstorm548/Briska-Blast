@@ -131,6 +131,21 @@ pub fn boot() -> (AppState, Task<Message>) {
         state.identity = id;
     }
 
+    // Cross-restart recovery: if a game this launcher spawned is still running
+    // (the launcher was closed and reopened mid-game, so the in-memory child
+    // handle is gone), reflect that so the game-gated buttons (Play, Change
+    // Name, …) stay locked. The poll subscription clears it once that externally
+    // owned process exits. A stale / crashed-game file is removed by `recover`.
+    if let Some(rec) = crate::running_game::recover() {
+        tracing::info!(
+            channel = %rec.channel,
+            pid = rec.pid,
+            "recovered a still-running game on boot"
+        );
+        state.game_running = true;
+        state.recovered_game = Some(rec);
+    }
+
     let mut tasks: Vec<Task<Message>> = vec![Task::perform(
         updater::check_for_update(),
         Message::LauncherUpdateCheckDone,
@@ -207,6 +222,7 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         // ---- play / game launch ----
         Message::PlayPressed => play::play_pressed(state),
         Message::GameExited { channel, result } => play::game_exited(state, channel, result),
+        Message::RecoveredGamePoll => play::recovered_game_poll(state),
         Message::PlayFirewallResolved {
             channel,
             status,
@@ -299,6 +315,21 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
     ]
     .spacing(ZONE_GAP)
     .into()
+}
+
+/// The only background subscription: a slow poll active **only** while a game
+/// was recovered from `running_game.json` on boot (launcher restarted mid-game).
+/// It drives `RecoveredGamePoll` so the launcher notices when that externally
+/// owned process finally exits and can re-enable the game-gated buttons. In the
+/// normal case — and whenever idle — this is `Subscription::none()`, so there is
+/// no recurring timer cost; the normal launch path reports exit via the
+/// `spawn_and_wait` task's `GameExited` instead.
+pub fn subscription(state: &AppState) -> iced::Subscription<Message> {
+    if state.recovered_game.is_some() {
+        iced::time::every(std::time::Duration::from_secs(2)).map(|_| Message::RecoveredGamePoll)
+    } else {
+        iced::Subscription::none()
+    }
 }
 
 pub fn theme(_state: &AppState) -> Theme {

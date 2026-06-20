@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.18.0] — 2026-06-20
+
+Tightens the username cap from 32 to **20 characters**, sources it from a single
+shared constant so the launcher and server can never disagree, and makes
+`/me/username` tell a rejected client what to revert to.
+
+### Changed
+
+- **Username cap is now 20 chars, from `shared`.** `register` and
+  `me::update_username` drop their duplicated local `const MAX_USERNAME_LEN = 32`
+  in favour of `shared::protocol::messages::MAX_USERNAME_LEN` (= 20), so the
+  server's trust-boundary check and the launcher's input cap share one value.
+  Enforced on write only — existing stored names longer than 20 are left
+  untouched until their next change. Length is counted in Unicode scalar values.
+- **`/me/username` returns a body and reverts tampered clients.** The handler now
+  authenticates **before** the length check, then on an empty/over-length name
+  returns `422 Unprocessable Entity` carrying `UpdateUsernameResponse { username }`
+  — the caller's **unchanged stored** name (Redis is left untouched) — so the
+  launcher can snap back to the last stable value. A valid change returns
+  `200 OK` with the new name. (Previously `204 No Content` on success and a
+  bodyless `400` on reject.) The launcher hard-caps input client-side, so reaching
+  the reject path means a modified/raw client.
+
+---
+
 ## [0.17.0] — 2026-06-20
 
 Adds a frozen seating roster to the session so the game client can lay out

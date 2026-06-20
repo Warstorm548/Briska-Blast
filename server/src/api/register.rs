@@ -5,7 +5,7 @@ use axum::{
 };
 use deadpool_redis::redis::AsyncCommands;
 use rand::Rng;
-use shared::protocol::messages::{RegisterRequest, RegisterResponse};
+use shared::protocol::messages::{RegisterRequest, RegisterResponse, MAX_USERNAME_LEN};
 use shared::types::player::PlayerId;
 use std::net::SocketAddr;
 
@@ -14,11 +14,6 @@ use crate::{
     state::AppState,
 };
 use super::{client_ip, hash_token, FREELIST_KEY, PLAYER_COUNTER_KEY};
-
-/// Cap username at 32 chars to match the launcher UI input; trimmed of
-/// surrounding whitespace before storage so the admin Users tab sees
-/// canonical values.
-const MAX_USERNAME_LEN: usize = 32;
 
 pub async fn register(
     State(state): State<AppState>,

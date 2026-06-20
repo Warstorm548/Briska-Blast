@@ -9,6 +9,7 @@ use crate::app::{AppState, Message};
 use crate::ui::theme::{self, TITLE_SIZE, ZONE_GAP};
 use iced::widget::{button, column, container, text, text_input};
 use iced::{Alignment, Element, Length};
+use shared::protocol::messages::MAX_USERNAME_LEN;
 
 pub fn view(state: &AppState) -> Element<'_, Message> {
     let trimmed_non_empty = !state.welcome_draft.trim().is_empty();
@@ -26,6 +27,8 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
             .on_submit(Message::ConfirmWelcomeUsername)
             .padding(10)
             .width(Length::Fixed(320.0)),
+        // Live counter — the input is hard-capped at MAX_USERNAME_LEN.
+        text(format!("{}/{}", state.welcome_draft.chars().count(), MAX_USERNAME_LEN)).size(12),
         confirm,
     ]
     .spacing(ZONE_GAP * 3)

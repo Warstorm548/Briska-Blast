@@ -13,6 +13,7 @@ mod game_launch;
 mod identity;
 mod paths;
 mod ratelimit;
+mod running_game;
 mod server_api;
 mod ui;
 mod updater;
@@ -25,6 +26,7 @@ fn main() -> iced::Result {
     iced::application(app::boot, app::update, app::view)
         .title(app::title)
         .theme(app::theme)
+        .subscription(app::subscription)
         .run()
 }
 

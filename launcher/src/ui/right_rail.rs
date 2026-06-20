@@ -14,17 +14,32 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
 }
 
 fn username_box(state: &AppState) -> Element<'_, Message> {
-    container(
-        column![
-            text(state.identity.username.clone()).size(18),
-            button(text("Change Name")).on_press(Message::ChangeNamePressed),
-        ]
-        .spacing(ZONE_GAP * 2),
-    )
-    .style(theme::bordered)
-    .padding(8)
-    .width(Length::Fill)
-    .into()
+    // Drop the on_press while a game is running so the button renders
+    // non-pressable (Iced's idiom for disabled — same pattern as Play/Update in
+    // the bottom bar). The username must not change mid-session; the lock holds
+    // even across a launcher restart because `game_running` is recovered from the
+    // running-game memory file. The handler re-checks `game_running` too.
+    let mut change_btn = button(text("Change Name"));
+    if !state.game_running {
+        change_btn = change_btn.on_press(Message::ChangeNamePressed);
+    }
+
+    let mut col = column![text(state.identity.username.clone()).size(18), change_btn]
+        .spacing(ZONE_GAP * 2);
+
+    if state.game_running {
+        col = col.push(text("Locked while in game").size(11));
+    }
+    // Transient notice — e.g. the server rejected a name and we reverted.
+    if let Some(notice) = &state.username_notice {
+        col = col.push(text(notice.clone()).size(11));
+    }
+
+    container(col)
+        .style(theme::bordered)
+        .padding(8)
+        .width(Length::Fill)
+        .into()
 }
 
 fn player_ids_box(state: &AppState) -> Element<'_, Message> {

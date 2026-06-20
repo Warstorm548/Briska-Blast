@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 use crate::types::gamemode::GameMode;
 use crate::types::session::SessionStatus;
 
+/// Maximum username length, in Unicode scalar values (`char`s, not bytes).
+/// Single source of truth shared by the launcher's input cap and the server's
+/// authoritative `/register` + `/me/username` validation, so the client-side UX
+/// limit and the server's trust-boundary check can never drift apart.
+pub const MAX_USERNAME_LEN: usize = 20;
+
 /// Sent by the launcher on every boot. `prior_*` are present when the launcher
 /// has a cached identity for this channel — the server reuses the existing
 /// player_id when the token hash matches, otherwise it falls through to a
@@ -30,6 +36,17 @@ pub struct RegisterResponse {
 pub struct UpdateUsernameRequest {
     pub player_id: String,
     pub secret_token: String,
+    pub username: String,
+}
+
+/// Response to `/me/username`. Always carries the username the server now has on
+/// file for this player: the **new** name on a `200` accept, or the **unchanged
+/// stored** name on a `422` reject (e.g. a tampered client that bypassed the
+/// launcher's input cap). The launcher adopts this value either way, so a reject
+/// snaps it back to the last stable username. Mirrors `RegisterResponse.username`
+/// being canonical.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateUsernameResponse {
     pub username: String,
 }
 
