@@ -109,6 +109,22 @@ pub async fn spawn_and_wait(
         .spawn()
         .map_err(|e| format!("spawn {}: {e}", exe_path.display()))?;
 
+    // Record the running game so a launcher restart mid-game can recover it and
+    // keep the game-gated buttons locked. The PID only exists post-spawn. This is
+    // best-effort: losing it only costs the cross-restart recovery, never the
+    // running session (the in-memory child handle below is authoritative). The
+    // file is removed by the `GameExited` handler once `wait()` returns; it is
+    // deliberately left behind if the *launcher* dies first — that is the case
+    // boot recovery exists for.
+    match child.id() {
+        Some(pid) => crate::running_game::write(&crate::running_game::RunningGame::now(
+            pid,
+            exe_path.clone(),
+            channel,
+        )),
+        None => tracing::warn!("spawned game has no pid — skipping running_game memory file"),
+    }
+
     let status = child
         .wait()
         .await

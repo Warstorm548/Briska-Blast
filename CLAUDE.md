@@ -28,9 +28,9 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Component | Status |
 |---|---|
 | Server foundation | ✓ Complete (v0.12.0) — see `ServerChangeLog.md` |
-| Shared crate | ✓ Complete (v0.2.0 — protocol types, player/session types) |
+| Shared crate | ✓ Complete (v0.3.0 — protocol types, player/session types, shared `MAX_USERNAME_LEN` cap + `UpdateUsernameResponse`) |
 | Game client | In progress (v0.14.2) — multiplayer lobby (bordered, responsive panels + server-relayed lobby chat) + WebRTC mesh behind `IPeerTransport` + a playable **Extended-mode** round (per-screen sim, ball handoff between screens, server-relayed scoring, **seat-relative portal layout** seated by join order from a server-frozen roster, matching the canonical seating diagram) + server-authoritative host promotion with a reconnect grace window + **usernames** in the lobby roster and scoreboard (server-resolved, `player_id` stays internal). See `GameChangeLog.md`, `docs/architecture/extended-mode.md`, and `docs/planning/multiplayer-client-stages.md` |
-| Launcher | In progress (v0.14.2) — identity (+ game handoff), multi-channel install/update (install locations inside the launcher's own folder are refused), self-update, Windows firewall prompt, manual per-channel update check under the channel selector, GitHub rate-limit back-off safety net (+ `per_page=100` discovery); see `LauncherChangeLog.md` |
+| Launcher | In progress (v0.15.0) — identity (+ game handoff), multi-channel install/update (install locations inside the launcher's own folder are refused), self-update, Windows firewall prompt, manual per-channel update check under the channel selector, GitHub rate-limit back-off safety net (+ `per_page=100` discovery), **20-char username cap** (hard-blocked in UI + server-enforced trust boundary, with a server-reverts-tampered-clients path), and **username changes locked while a game is running** — durable across a launcher restart via a `running_game.json` PID memory file (`sysinfo`-backed, PID-reuse-safe); see `LauncherChangeLog.md` |
 
 **Build order:** Server → Game → Launcher (each depends on the previous).
 

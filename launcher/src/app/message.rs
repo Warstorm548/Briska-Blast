@@ -99,7 +99,7 @@ pub enum Message {
     },
     UpdateUsernameDone {
         channel: Channel,
-        result: Result<(), server_api::ServerApiError>,
+        result: Result<server_api::UpdateUsernameOutcome, server_api::ServerApiError>,
     },
     WelcomeDraftChanged(String),
     ConfirmWelcomeUsername,
@@ -142,6 +142,13 @@ pub enum Message {
         channel: Channel,
         result: Result<Option<i32>, String>,
     },
+    /// Periodic tick from the poll subscription that is active only while a
+    /// game was **recovered** from `running_game.json` on boot (the launcher was
+    /// restarted mid-game, so there is no `spawn_and_wait` task to report exit).
+    /// Each tick re-checks whether the recorded PID is still alive; when it has
+    /// exited, `game_running` is cleared and the file removed. See
+    /// `crate::running_game` and `super::subscription`.
+    RecoveredGamePoll,
     // ---- Stage 7: uninstall / verify / game save ----
     /// Toggle the Keep-saves radio inside the uninstall confirmation prompt.
     UninstallKeepSavesToggled(bool),

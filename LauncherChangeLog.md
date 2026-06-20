@@ -5,6 +5,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.15.0] — 2026-06-20
+
+Adds a 20-character username cap (hard-blocked in the UI, enforced server-side as
+the real trust boundary) and locks username changes while a game is running —
+including across a launcher restart, via a new running-game memory file.
+
+### Added
+
+- **20-char username cap, hard-blocked at the input.** Both username fields (the
+  welcome screen and Change Name) stop accepting input at 20 Unicode scalar
+  values (`nav::cap_username`), with a live `N/20` counter. The limit is the
+  shared `shared::protocol::messages::MAX_USERNAME_LEN`, so client and server
+  agree. The confirm handlers re-check the length as defence-in-depth for the
+  Enter-key path.
+- **Server-reject revert.** `/me/username` now returns the canonical username on
+  both accept (200) and reject (422); `server_api::update_username` surfaces this
+  as `UpdateUsernameOutcome::{Accepted, Rejected}`. On a reject — only reachable
+  from a tampered client, since the UI hard-caps — the launcher reverts its stored
+  username to the server's stable value and shows a notice in the username box.
+  This also closes a latent bug where a server-rejected name stayed persisted
+  locally and out of sync.
+- **Username changes are locked while a game is running.** The Change Name button
+  drops its action while `game_running` (the same disabled idiom as Play/Update),
+  with a "Locked while in game" hint; `nav::change_name_pressed` re-checks too.
+- **Running-game memory file (`running_game.json`) for restart recovery.** The
+  launcher records the spawned game's PID + spawn time + exe + channel next to
+  `identity.json` and `ratelimits.json`. If the launcher is closed and reopened
+  while a game is still open, boot recovers that state (`running_game::recover`)
+  and keeps every game-gated button locked — Play, Change Name, Uninstall,
+  Verify, … — until a slow poll subscription (`app::subscription`) sees the
+  process exit. PID reuse is defeated by also matching the process start time and
+  exe. Adds the `sysinfo` dependency. The file fails safe: a missing/corrupt/stale
+  file reads as "no game running".
+
+---
+
 ## [0.14.2] — 2026-06-17
 
 Closes a footgun in the game install flow: the user could pick an install folder

@@ -1,6 +1,6 @@
 [package]
 name = "launcher"
-version = "0.14.2"
+version = "0.15.0"
 edition = "2021"
 description = "BriskaBlast Launcher — manages install, update, and launch of the BriskaBlast game across stable, ea, and dev channels."
 license = "AGPL-3.0-or-later"
@@ -50,6 +50,12 @@ uuid               = { version = "1", features = ["v4"] }
 # location (Program Files) — writable data can no longer live next to the
 # binary. Windows → %APPDATA%\BriskaBlast\, Linux → ~/.local/share/briskablast/.
 directories        = "5"
+# Cross-platform process introspection for the running-game memory file
+# (running_game.rs): looks up a persisted PID's liveness, start time, and exe
+# name so the launcher can tell whether a game it spawned is still open after a
+# launcher restart — and reject a recycled PID belonging to a later, unrelated
+# process (start-time / exe mismatch). Only the system/process info is needed.
+sysinfo            = { version = "0.33", default-features = false, features = ["system"] }
 
 # Elevated (UAC) netsh invocation to create the game's inbound firewall rule —
 # Windows-only, so this target-gated section keeps it out of the Linux/macOS

@@ -93,10 +93,34 @@ pub(crate) fn game_exited(
     result: Result<Option<i32>, String>,
 ) -> Task<Message> {
     state.game_running = false;
+    // Single clear point for the normal (launcher-alive) path: the tracked child
+    // exited, so drop the cross-restart memory file. The recovered-game path
+    // clears it from `recovered_game_poll` instead.
+    crate::running_game::clear();
     match result {
         Ok(Some(code)) => tracing::info!(?channel, code, "game exited"),
         Ok(None) => tracing::info!(?channel, "game exited (signal)"),
         Err(e) => tracing::warn!(?channel, error = %e, "game spawn / wait failed"),
+    }
+    Task::none()
+}
+
+/// Tick handler for the recovered-game poll subscription. Active only when boot
+/// recovered a still-running game from `running_game.json` (the launcher was
+/// restarted mid-game, so there is no `spawn_and_wait` task to report exit).
+/// Each tick re-checks the recorded PID; once it has exited, clear the running
+/// state + file and drop `recovered_game`, which also stops the subscription.
+pub(crate) fn recovered_game_poll(state: &mut AppState) -> Task<Message> {
+    let still_running = state
+        .recovered_game
+        .as_ref()
+        .map(crate::running_game::is_alive)
+        .unwrap_or(false);
+    if !still_running {
+        tracing::info!("recovered game is no longer running — clearing running state");
+        state.game_running = false;
+        state.recovered_game = None;
+        crate::running_game::clear();
     }
     Task::none()
 }
