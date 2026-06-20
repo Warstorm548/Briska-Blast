@@ -111,12 +111,14 @@ pub(crate) fn game_exited(
 /// Each tick re-checks the recorded PID; once it has exited, clear the running
 /// state + file and drop `recovered_game`, which also stops the subscription.
 pub(crate) fn recovered_game_poll(state: &mut AppState) -> Task<Message> {
-    let still_running = state
-        .recovered_game
-        .as_ref()
-        .map(crate::running_game::is_alive)
-        .unwrap_or(false);
-    if !still_running {
+    // Only meaningful while a recovered game is actually being tracked. The poll
+    // subscription only fires in that state, but guard explicitly so the clearing
+    // block can never run — and wrongly drop `game_running` — without a recorded
+    // game to confirm dead (e.g. a `game_running` set by a normal launch).
+    let Some(rec) = state.recovered_game.as_ref() else {
+        return Task::none();
+    };
+    if !crate::running_game::is_alive(rec) {
         tracing::info!("recovered game is no longer running — clearing running state");
         state.game_running = false;
         state.recovered_game = None;
