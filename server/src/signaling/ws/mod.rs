@@ -37,7 +37,7 @@ use disconnect::{
     session_status_is_active,
 };
 use frame::handle_client_frame;
-use identify::{identify, peer_roster};
+use identify::{identify, peer_roster, RosterSnapshot};
 use session_ops::{
     end_session_if_waiting, promote_demote_or_end_active, remove_joiner_on_leave,
     HostDisconnectStage,
@@ -60,6 +60,9 @@ pub async fn ws_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, code, state))
 }
 
+/// Drive one signaling WebSocket end to end: authenticate the player (Identify),
+/// reply with the `Identified` roster snapshot, register with the `SignalHub`, and
+/// relay signaling/chat frames until the socket closes.
 async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
     // Phase 1: Identify-frame auth with deadline.
     let (player_id, is_host, host_player_id) = match identify(&mut socket, &code, &state).await {
@@ -72,9 +75,11 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
     // cleanup can't evict a newer socket that re-bound this player_id.
     let (conn_id, mut rx) = state.signal_hub.join_room(&code, &player_id).await;
 
-    // Snapshot peers at identify time so the client doesn't need a poll.
-    let peers = match peer_roster(&state, &code, &player_id).await {
-        Ok(p) => p,
+    // Snapshot the roster at identify time so the client doesn't need a poll.
+    // `peers` excludes self (mesh targets); `seat_order` is the frozen seating
+    // roster (empty until Start) the client uses to lay out Extended-mode portals.
+    let RosterSnapshot { peers, seat_order } = match peer_roster(&state, &code, &player_id).await {
+        Ok(r) => r,
         Err(_) => {
             // Session must have been deleted between membership check
             // and now — vanishingly rare race, but bail cleanly.
@@ -108,6 +113,7 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
         your_player_id: player_id.clone(),
         host_player_id,
         peers,
+        seat_order,
         is_host,
         usernames,
     };

@@ -48,8 +48,30 @@ built from the **actual roster at Start**. Unfilled portal slots are walls.
 - 3 players → 2 portals + 1 wall + goal
 - 4 players → 3 portals + goal
 
-Edges are assigned locally: present peers (sorted by `player_id` for
-determinism) take Top, then Right, then Left.
+Edges are assigned **by seat**, matching the canonical image. Players sit at a
+fixed table — **P1 (bottom), P2 top, P3 left, P4 right** — in **join order**: P1
+is the player who created the lobby (the start-time host, first to join), then the
+rest in the order they joined. On your own upright screen the peer seated
+**opposite** you takes your **Top** edge, the one on your **right hand** takes
+**Right**, and the one on your **left** takes **Left**; any seat with no player is
+a wall. This reproduces the per-player layout in the image (e.g. P3 sees P4 on
+Top, P1 on Right, P2 on Left) rather than the same shape for everyone.
+
+The seating order is **frozen server-side at Start**: the `/start` handler
+snapshots `[host, …joiners]` into `session.seat_order` (server ≥ v0.17.0) and
+never mutates it. The client captures it once — from the `start_signaling`
+roster on a fresh start, or from the `Identified` frame's `seat_order` on a
+process-death rejoin — into `SessionContext.SeatOrder`, and
+`GameScene.BuildEdges` reads it a single time in `_Ready`. Because the snapshot is
+frozen, the layout is identical on every client and **never changes mid-match**:
+if the host disconnects and a peer is promoted, no one is re-seated and no portal
+moves — a dropped peer's edge only toggles to a wall and is restored to the
+**same** edge if they rejoin (`NetGameController`), and a rejoiner reconstructs the
+identical seating even if a promotion happened while it was gone. (Against an
+older server with no `seat_order`, the client falls back to a deterministic
+host-first + `player_id` sort.) Unfilled portal edges are walls, so the cases
+above still hold: 2 players → 1 portal (Top) + 2 walls; 3 → 2 portals + 1 wall;
+4 → 3 portals.
 
 ## Ball travel (handoff)
 

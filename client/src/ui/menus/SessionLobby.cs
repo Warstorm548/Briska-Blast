@@ -78,9 +78,15 @@ public partial class SessionLobby : Control
 
     // ---- signaling callbacks (main thread) ----
 
-    private void OnIdentified(string hostId, string[] peers, bool isHost,
-        System.Collections.Generic.Dictionary<string, string> usernames)
+    /// <summary>Handle the lobby's <c>Identified</c> frame: refresh usernames, the
+    /// host, and the roster from the server's snapshot and re-render. (seatOrder is
+    /// empty before Start, so it's captured later in <see cref="OnStartSignaling"/>.)
+    /// </summary>
+    private void OnIdentified(string hostId, string[] peers, string[] seatOrder,
+        bool isHost, System.Collections.Generic.Dictionary<string, string> usernames)
     {
+        // seatOrder is empty in the lobby (it's frozen at Start); the seating
+        // roster is captured in OnStartSignaling. Nothing to do with it here.
         var ctx = SessionContext.Instance;
         ctx.MergeUsernames(usernames);
         ctx.HostPlayerId = hostId;
@@ -158,6 +164,9 @@ public partial class SessionLobby : Control
         log.AddText($": {text}\n");
     }
 
+    /// <summary>Handle <c>start_signaling</c>: freeze the seating roster, bring up
+    /// the WebRTC mesh, hand the live net to <see cref="SessionContext"/>, and enter
+    /// the game scene. One-shot — guards against a duplicate frame.</summary>
     private void OnStartSignaling(string gamemode, int playerCount, string[] peers)
     {
         // One-shot transition: guard against a duplicate start_signaling and
@@ -169,6 +178,12 @@ public partial class SessionLobby : Control
         ShowStatus("Starting…");
 
         var ctx = SessionContext.Instance;
+
+        // Freeze the seating roster for Extended-mode portal layout. `peers` here
+        // is the server's authoritative, self-inclusive start-time roster
+        // ([host, …joiners] in join order) — identical on every client — so each
+        // screen lays out portals consistently. See GameScene.BuildEdges.
+        ctx.SetSeatOrder(peers);
 
         // Establish the WebRTC mesh to every peer. Negotiation rides the
         // signaling socket and continues in the background after the transition

@@ -90,21 +90,30 @@ pub(super) async fn identify(
     Ok((player_id, is_host, session.host_player_id))
 }
 
-/// Roster of everyone in the session EXCEPT the requesting player. Used
-/// in the Identified frame so the client doesn't need a separate poll.
+/// Session roster snapshot for the Identified frame, so the client needs no
+/// separate poll. `peers` excludes the requesting player (used to mesh);
+/// `seat_order` is the frozen, self-inclusive seating roster (empty until Start).
+pub(super) struct RosterSnapshot {
+    pub peers: Vec<String>,
+    pub seat_order: Vec<String>,
+}
+
 pub(super) async fn peer_roster(
     state: &AppState,
     code: &str,
     self_player_id: &str,
-) -> Result<Vec<String>, ()> {
+) -> Result<RosterSnapshot, ()> {
     let mut conn = state.redis.get().await.map_err(|_| ())?;
     let raw: Option<String> = conn.get(format!("session:{}", code)).await.map_err(|_| ())?;
     let raw = raw.ok_or(())?;
     let session: Session = serde_json::from_str(&raw).map_err(|_| ())?;
 
-    let peers = std::iter::once(session.host_player_id)
-        .chain(session.joiners.into_iter().map(|j| j.player_id))
+    let peers = std::iter::once(session.host_player_id.clone())
+        .chain(session.joiners.iter().map(|j| j.player_id.clone()))
         .filter(|p| p != self_player_id)
         .collect();
-    Ok(peers)
+    Ok(RosterSnapshot {
+        peers,
+        seat_order: session.seat_order,
+    })
 }

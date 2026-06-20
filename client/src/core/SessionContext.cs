@@ -21,6 +21,14 @@ public partial class SessionContext : Node
 
     /// <summary>Roster as server player_ids, host first. Drives the lobby.</summary>
     public List<string> PlayerIds { get; } = new();
+    /// <summary>Frozen Extended-mode seating roster — `[host, …joiners]` in join
+    /// order, self-inclusive — captured once at match Start (from
+    /// <c>start_signaling</c>) or on a process-death rejoin (from the
+    /// <c>Identified</c> frame's <c>seat_order</c>). Drives
+    /// <see cref="Game.GameScene"/> portal layout; empty until a match starts and
+    /// identical on every client, so the layout matches across screens and is
+    /// unaffected by a later host promotion. Cleared when a session starts or ends.</summary>
+    public List<string> SeatOrder { get; } = new();
     /// <summary>player_id of the current host (authoritative, from the server).</summary>
     public string HostPlayerId { get; set; } = "";
     public bool LocalPlayerIsHost => HostPlayerId == PlayerId && !string.IsNullOrEmpty(PlayerId);
@@ -145,6 +153,7 @@ public partial class SessionContext : Node
         GameMode = mode;
         MaxPlayers = maxPlayers;
         PlayerIds.Clear();
+        SeatOrder.Clear();
         _usernames.Clear();
         PlayerIds.Add(PlayerId);
         HostPlayerId = PlayerId;
@@ -157,6 +166,7 @@ public partial class SessionContext : Node
         GameMode = mode;
         MaxPlayers = maxPlayers;
         PlayerIds.Clear();
+        SeatOrder.Clear();
         _usernames.Clear();
         PlayerIds.AddRange(roster);
         if (!PlayerIds.Contains(PlayerId))
@@ -174,17 +184,30 @@ public partial class SessionContext : Node
         GameMode = mode;
         MaxPlayers = maxPlayers;
         PlayerIds.Clear();
+        SeatOrder.Clear();
         _usernames.Clear();
         HostPlayerId = "";
         RejoinInProgress = true;
     }
 
+    /// <summary>Capture the server-authoritative, frozen seating roster (join
+    /// order, self-inclusive) for Extended-mode portal layout. Set once at match
+    /// Start or on rejoin; see <see cref="SeatOrder"/>.</summary>
+    public void SetSeatOrder(IEnumerable<string> order)
+    {
+        SeatOrder.Clear();
+        SeatOrder.AddRange(order);
+    }
+
+    /// <summary>Reset all per-session state (code, mode, roster, seating, usernames,
+    /// host, rejoin flag) back to empty — called when a match ends or is left.</summary>
     public void ClearSession()
     {
         SessionCode = "";
         GameMode = "";
         MaxPlayers = 0;
         PlayerIds.Clear();
+        SeatOrder.Clear();
         _usernames.Clear();
         HostPlayerId = "";
         RejoinInProgress = false;

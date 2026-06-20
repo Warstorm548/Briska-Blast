@@ -9,6 +9,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.14.2] — 2026-06-20
+
+Seats Extended-mode players by **join order** (who entered the lobby first)
+instead of a `player_id` sort, so the portal layout reflects the table order
+players actually see. Requires **server v0.17.0** (which sends the seating
+roster); against an older server the client falls back to the v0.14.1 id-sort.
+
+### Changed
+- **Portal seats now follow join order, not id.** `GameScene.BuildEdges` reads a
+  server-authoritative, frozen, self-inclusive seating roster
+  (`SessionContext.SeatOrder`) — `[host, …joiners]` in the order they joined (P1 =
+  the player who created the lobby) — captured once at match Start from
+  `start_signaling` and, on a process-death rejoin, from the new `seat_order`
+  field of the `Identified` frame. The `SeatEdge` table and the freeze/heal
+  behaviour are unchanged; only the basis for *which* player takes each seat moved
+  from `player_id` order to join order. Because the roster is frozen server-side
+  at Start, a mid-match host promotion still never re-seats anyone, and a rejoiner
+  now reproduces the identical layout (the previous id-sort happened to be
+  rejoin-safe too; join order needed the server to supply the frozen order). If
+  the roster is missing (older server), `BuildEdges` falls back to host-first +
+  id-sort. See [`docs/architecture/extended-mode.md`](docs/architecture/extended-mode.md).
+
+## [0.14.1] — 2026-06-19
+
+Fixes the Extended-mode portal layout so each player's screen matches the
+canonical seating diagram (`Example Imgs/GameMode Extended.png`) instead of every
+player getting the same Top/Right/Left arrangement. (The seating *basis* was
+later refined from this `player_id` sort to join order in [0.14.2] above.)
+
+### Fixed
+- **Portal edges are now assigned by seat, not a flat id-sort.**
+  `GameScene.BuildEdges` previously sorted peers by `player_id` and filled a fixed
+  `{ Top, Right, Left }` slot list in that order, so every player saw the same
+  shape regardless of who they were. Players are now placed on a fixed table
+  (**P1 = Host bottom, P2 top, P3 left, P4 right**) using a globally-consistent
+  order (Host first, then the rest sorted by id): on your own upright screen the
+  peer **opposite** you takes Top, the one on your **right** takes Right, the one
+  on your **left** takes Left — reproducing the per-player layout in the diagram.
+  Fewer-than-4-player rounds leave empty seats as walls, unchanged. The seating is
+  decided once at Start and **frozen** for the match, so a mid-game host promotion
+  never re-seats anyone or moves a portal. See
+  [`docs/architecture/extended-mode.md`](docs/architecture/extended-mode.md).
+
 ## [0.14.0] — 2026-06-16
 
 Lobby chat goes live. The chat box in the Session Lobby — previously a static

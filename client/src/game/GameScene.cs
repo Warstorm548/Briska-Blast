@@ -37,8 +37,21 @@ public partial class GameScene : Node2D
     private float _serveSpeed;
     private float _ballRadius;
 
-    // Peers fill these edges (bottom is always the local goal).
-    private static readonly Edge[] PortalSlots = { Edge.Top, Edge.Right, Edge.Left };
+    // Seat-relative portal layout (bottom is always the local goal). Seats are
+    // arranged on a fixed "table" matching Example Imgs/GameMode Extended.png:
+    // seat 0 = P1/Host at the bottom (South), 1 = P2 top (North), 2 = P3 left
+    // (West), 3 = P4 right (East). On the local player's own upright screen the
+    // peer seated OPPOSITE you is on your Top edge, the one on your right hand on
+    // Right, the one on your left on Left. This table is edge[localSeat, peerSeat]
+    // (the diagonal is unused — you are never your own peer).
+    private static readonly Edge[,] SeatEdge =
+    {
+        //              peer P1(S)   peer P2(N)   peer P3(W)   peer P4(E)
+        /* local P1 */ { Edge.Top,   Edge.Top,    Edge.Left,   Edge.Right },
+        /* local P2 */ { Edge.Top,   Edge.Top,    Edge.Right,  Edge.Left  },
+        /* local P3 */ { Edge.Right, Edge.Left,   Edge.Top,    Edge.Top   },
+        /* local P4 */ { Edge.Left,  Edge.Right,  Edge.Top,    Edge.Top   },
+    };
 
     private GameState _state = null!;
     private View2D _view = null!;
@@ -323,22 +336,57 @@ public partial class GameScene : Node2D
         _overlay.Visible = msg.Length > 0;
     }
 
-    /// <summary>Bottom is the goal; present peers (sorted for determinism) take
-    /// Top/Right/Left; any unfilled slot is a wall.</summary>
+    /// <summary>Bottom is the goal; every other player is placed on the Top/Left/
+    /// Right portal edge dictated by their seat relative to ours (see
+    /// <see cref="SeatEdge"/> and Example Imgs/GameMode Extended.png). Any edge
+    /// with no peer seated across it is a wall. Seats follow the server's frozen,
+    /// join-ordered roster (<see cref="SessionContext.SeatOrder"/>): P1 is the
+    /// player who created the lobby (the start-time host — first to join), then the
+    /// rest in the order they joined. This runs a single time, in <c>_Ready</c>,
+    /// and the roster is frozen server-side at Start, so the layout is identical on
+    /// every client and FROZEN for the match: a later host promotion never re-seats
+    /// anyone or moves a portal, and a process-death rejoiner reproduces the same
+    /// seating. Falls back to host-first + id-sort only if the roster is
+    /// unavailable (e.g. an older server that doesn't send <c>seat_order</c>).</summary>
     private void BuildEdges(SessionContext? ctx)
     {
         _state.Edges[Edge.Bottom] = EdgeTarget.Goal;
+        _state.Edges[Edge.Top] = EdgeTarget.Wall;
+        _state.Edges[Edge.Left] = EdgeTarget.Wall;
+        _state.Edges[Edge.Right] = EdgeTarget.Wall;
 
-        var peers = new List<string>();
-        if (ctx != null)
+        if (ctx == null)
+            return;
+
+        // Server-authoritative, join-ordered, self-inclusive seating roster,
+        // captured once at Start (start_signaling) or rejoin (Identified.seat_order)
+        // and identical on every client.
+        var seatOrder = new List<string>(ctx.SeatOrder);
+        if (seatOrder.Count == 0)
+        {
+            // Legacy fallback (older server without seat_order): host first, then
+            // the remaining members sorted by id — still deterministic everywhere.
+            if (!string.IsNullOrEmpty(ctx.HostPlayerId))
+                seatOrder.Add(ctx.HostPlayerId);
+            var others = new List<string>();
             foreach (var pid in ctx.PlayerIds)
-                if (pid != _state.LocalPlayerId)
-                    peers.Add(pid);
-        peers.Sort(string.CompareOrdinal);
+                if (pid != ctx.HostPlayerId && !others.Contains(pid))
+                    others.Add(pid);
+            others.Sort(string.CompareOrdinal);
+            seatOrder.AddRange(others);
+        }
 
-        for (int i = 0; i < PortalSlots.Length; i++)
-            _state.Edges[PortalSlots[i]] =
-                i < peers.Count ? EdgeTarget.Portal(peers[i]) : EdgeTarget.Wall;
+        int localSeat = seatOrder.IndexOf(_state.LocalPlayerId);
+        if (localSeat < 0 || localSeat >= 4)
+            return; // not seated (shouldn't happen in a 2–4 player round) — all walls
+
+        for (int peerSeat = 0; peerSeat < seatOrder.Count && peerSeat < 4; peerSeat++)
+        {
+            if (peerSeat == localSeat)
+                continue;
+            _state.Edges[SeatEdge[localSeat, peerSeat]] =
+                EdgeTarget.Portal(seatOrder[peerSeat]);
+        }
     }
 
     public override void _PhysicsProcess(double delta)

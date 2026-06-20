@@ -25,6 +25,8 @@ fn generate_code() -> String {
         .collect()
 }
 
+/// `POST /host` — create a new session: validate the caller, allocate a unique
+/// join code, and persist a fresh `Waiting` `Session` with this player as host.
 pub async fn host(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -64,6 +66,7 @@ pub async fn host(
         player_count: body.player_count,
         joiners: Vec::new(),
         status: SessionStatus::Waiting,
+        seat_order: Vec::new(),
     };
 
     let json = serde_json::to_string(&session)
