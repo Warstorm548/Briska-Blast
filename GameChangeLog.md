@@ -9,7 +9,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [0.14.1] — 2026-06-19
+## [0.14.2] — 2026-06-20
+
+Seats Extended-mode players by **join order** (who entered the lobby first)
+instead of a `player_id` sort, so the portal layout reflects the table order
+players actually see. Requires **server v0.17.0** (which sends the seating
+roster); against an older server the client falls back to the v0.14.1 id-sort.
+
+### Changed
+- **Portal seats now follow join order, not id.** `GameScene.BuildEdges` reads a
+  server-authoritative, frozen, self-inclusive seating roster
+  (`SessionContext.SeatOrder`) — `[host, …joiners]` in the order they joined (P1 =
+  the player who created the lobby) — captured once at match Start from
+  `start_signaling` and, on a process-death rejoin, from the new `seat_order`
+  field of the `Identified` frame. The `SeatEdge` table and the freeze/heal
+  behaviour are unchanged; only the basis for *which* player takes each seat moved
+  from `player_id` order to join order. Because the roster is frozen server-side
+  at Start, a mid-match host promotion still never re-seats anyone, and a rejoiner
+  now reproduces the identical layout (the previous id-sort happened to be
+  rejoin-safe too; join order needed the server to supply the frozen order). If
+  the roster is missing (older server), `BuildEdges` falls back to host-first +
+  id-sort. See [`docs/architecture/extended-mode.md`](docs/architecture/extended-mode.md).
 
 Fixes the Extended-mode portal layout so each player's screen matches the
 canonical seating diagram (`Example Imgs/GameMode Extended.png`) instead of every

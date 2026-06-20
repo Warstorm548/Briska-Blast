@@ -108,17 +108,22 @@ resurfaces unintentionally later.
 
 ## Extended-mode portals don't match the seating diagram
 
-- **Status:** ✅ resolved 2026-06-19 (game v0.14.1). `GameScene.BuildEdges` now
-  seats players at a fixed table — **P1 = Host (bottom), P2 top, P3 left, P4
-  right** — from a globally-consistent order (Host first, then the rest sorted by
-  `player_id`) and assigns each peer's edge via a `SeatEdge[localSeat, peerSeat]`
-  lookup: the peer opposite you → Top, right-hand → Right, left-hand → Left. The
-  seating is decided once in `_Ready` at Start and **frozen** for the match, so a
-  mid-game host promotion never re-seats anyone (`OnHostChangedInGame` updates the
-  host notion only — it does not re-run `BuildEdges`), and a dropped peer still
-  heals back to its **same** edge (`NetGameController._peerHomeEdge`). Verified by
-  reasoning against the diagram + a clean build; awaiting on-device confirmation of
-  a 3–4 player match.
+- **Status:** ✅ resolved 2026-06-19 (game v0.14.1); seating basis refined to
+  **join order** 2026-06-20 (game v0.14.2 + server v0.17.0). `GameScene.BuildEdges`
+  seats players at a fixed table — **P1 (bottom), P2 top, P3 left, P4 right** — and
+  assigns each peer's edge via a `SeatEdge[localSeat, peerSeat]` lookup: the peer
+  opposite you → Top, right-hand → Right, left-hand → Left. Seat order is the
+  server's frozen `seat_order` roster (`[host, …joiners]` in join order; P1 = the
+  player who created the lobby), snapshotted at `/start` and delivered via
+  `start_signaling`/the `Identified` frame; v0.14.1 originally used a `player_id`
+  sort. The seating is read once in `_Ready` at Start and **frozen** for the match,
+  so a mid-game host promotion never re-seats anyone (`OnHostChangedInGame` updates
+  the host notion only — it does not re-run `BuildEdges`), a dropped peer still
+  heals back to its **same** edge (`NetGameController._peerHomeEdge`), and a
+  process-death rejoiner reconstructs the identical layout from the server snapshot
+  even if a promotion happened while it was gone. Verified by reasoning against the
+  diagram + clean server/client builds; awaiting on-device confirmation of a 3–4
+  player match (incl. a rejoin).
 - **Affects:** game builds with the playable Extended-mode round before v0.14.1
   (≈ v0.6.0–v0.14.0).
 - **Symptom (as reported):** every player's screen showed the **same** Top/Right/

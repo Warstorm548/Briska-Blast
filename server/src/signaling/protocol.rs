@@ -71,10 +71,18 @@ pub enum ServerMsg {
     /// display names, so the client can label the lobby/scoreboard by username
     /// instead of the internal id. Ids with no stored username are omitted —
     /// the client falls back to `Player <id>`.
+    ///
+    /// `seat_order` is the frozen, self-inclusive seating roster (`[host,
+    /// ...joiners]` in join order) snapshotted at `/start`; empty while the
+    /// session is still Waiting. Unlike `peers` (which excludes self, for
+    /// meshing), this is identical on every client and includes the recipient,
+    /// so a process-death rejoiner can reproduce the exact Extended-mode portal
+    /// layout the rest of the match froze at Start. See `GameScene.BuildEdges`.
     Identified {
         your_player_id: String,
         host_player_id: String,
         peers: Vec<String>,
+        seat_order: Vec<String>,
         is_host: bool,
         usernames: HashMap<String, String>,
     },

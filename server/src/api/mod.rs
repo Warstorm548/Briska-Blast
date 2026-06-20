@@ -31,6 +31,15 @@ pub struct Session {
     pub player_count: u8,
     pub joiners: Vec<JoinerEntry>,
     pub status: SessionStatus,
+    /// Frozen seating roster (`[host, ...joiners]` in join order) snapshotted
+    /// once when the host calls `/start`. Empty while Waiting. Never mutated
+    /// afterwards — a host promotion reorders `joiners`/`host_player_id`, but
+    /// this snapshot is left intact so every client (including a process-death
+    /// rejoiner, whose live session state may post-date a promotion) derives the
+    /// identical Extended-mode portal layout. Consumed via the `Identified`
+    /// frame's `seat_order`; see `start.rs` and `GameScene.BuildEdges`.
+    #[serde(default)]
+    pub seat_order: Vec<String>,
 }
 
 impl Session {

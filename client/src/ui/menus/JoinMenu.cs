@@ -119,12 +119,17 @@ public partial class JoinMenu : Control
         _rejoinSignaling.Connect(code, ctx.PlayerId, ctx.SecretToken);
     }
 
-    private void OnRejoinIdentified(string hostId, string[] peers, bool isHost,
-        System.Collections.Generic.Dictionary<string, string> usernames)
+    private void OnRejoinIdentified(string hostId, string[] peers, string[] seatOrder,
+        bool isHost, System.Collections.Generic.Dictionary<string, string> usernames)
     {
         var ctx = SessionContext.Instance;
         ctx.MergeUsernames(usernames);
         ctx.HostPlayerId = hostId;
+        // Reproduce the exact seating the match froze at Start. The server's
+        // Identified frame carries the frozen, self-inclusive seat_order (the live
+        // session may have re-ordered after a host promotion while we were gone),
+        // so our portals line up with everyone still in the match. See BuildEdges.
+        ctx.SetSeatOrder(seatOrder);
         ctx.PlayerIds.Clear();
         if (!string.IsNullOrEmpty(hostId))
             ctx.PlayerIds.Add(hostId);

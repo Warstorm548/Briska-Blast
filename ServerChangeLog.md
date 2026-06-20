@@ -5,7 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [0.16.1] — 2026-06-17
+## [0.17.0] — 2026-06-20
+
+Adds a frozen seating roster to the session so the game client can lay out
+Extended-mode portals by **join order** (who entered the lobby first), and so a
+process-death rejoiner reproduces the identical layout.
+
+### Added
+- **`seat_order` — a frozen seating roster on the session.** When the host calls
+  `/start`, the `START_SCRIPT` Lua snapshots `[host, ...joiners]` in join order
+  into `session.seat_order` (alongside the Waiting → Starting transition) and
+  never mutates it again. A later host promotion reorders the live
+  `host_player_id`/`joiners` but leaves this snapshot intact, so every client —
+  including a rejoiner whose live session state post-dates a promotion — derives
+  the same Extended-mode portal layout. `Session` gains a `#[serde(default)]`
+  `seat_order: Vec<String>` field (older in-flight sessions decode as empty).
+- **`Identified` frame carries `seat_order`.** `peer_roster` now returns a
+  `RosterSnapshot { peers, seat_order }`: `peers` is unchanged (self-excluded,
+  for meshing), while `seat_order` is the frozen, **self-inclusive** roster. The
+  `/start` broadcast already sends the same list as `StartSignaling.peers`, so a
+  fresh start and a rejoin both receive an identical, authoritative seating
+  order. Empty while a session is still Waiting. Backward-compatible: clients
+  that ignore the field are unaffected.
 
 ### Added
 - **Update-check auth-state logging.** `update::github::check_for_update` now

@@ -339,11 +339,15 @@ public partial class GameScene : Node2D
     /// <summary>Bottom is the goal; every other player is placed on the Top/Left/
     /// Right portal edge dictated by their seat relative to ours (see
     /// <see cref="SeatEdge"/> and Example Imgs/GameMode Extended.png). Any edge
-    /// with no peer seated across it is a wall. Seats are derived once here (this
-    /// runs a single time, in <c>_Ready</c>, at match start) from a
-    /// globally-consistent order — Host first, then the rest sorted by id — so the
-    /// layout is identical on every client and is FROZEN for the match: a later
-    /// host promotion never re-seats anyone or moves a portal.</summary>
+    /// with no peer seated across it is a wall. Seats follow the server's frozen,
+    /// join-ordered roster (<see cref="SessionContext.SeatOrder"/>): P1 is the
+    /// player who created the lobby (the start-time host — first to join), then the
+    /// rest in the order they joined. This runs a single time, in <c>_Ready</c>,
+    /// and the roster is frozen server-side at Start, so the layout is identical on
+    /// every client and FROZEN for the match: a later host promotion never re-seats
+    /// anyone or moves a portal, and a process-death rejoiner reproduces the same
+    /// seating. Falls back to host-first + id-sort only if the roster is
+    /// unavailable (e.g. an older server that doesn't send <c>seat_order</c>).</summary>
     private void BuildEdges(SessionContext? ctx)
     {
         _state.Edges[Edge.Bottom] = EdgeTarget.Goal;
@@ -354,18 +358,23 @@ public partial class GameScene : Node2D
         if (ctx == null)
             return;
 
-        // Canonical seating, identical on every client: P1 = the start-time host,
-        // then all other members sorted by id. (Host is authoritative and the
-        // member set is the same everywhere, so every client derives this order.)
-        var seatOrder = new List<string>();
-        if (!string.IsNullOrEmpty(ctx.HostPlayerId))
-            seatOrder.Add(ctx.HostPlayerId);
-        var others = new List<string>();
-        foreach (var pid in ctx.PlayerIds)
-            if (pid != ctx.HostPlayerId && !others.Contains(pid))
-                others.Add(pid);
-        others.Sort(string.CompareOrdinal);
-        seatOrder.AddRange(others);
+        // Server-authoritative, join-ordered, self-inclusive seating roster,
+        // captured once at Start (start_signaling) or rejoin (Identified.seat_order)
+        // and identical on every client.
+        var seatOrder = new List<string>(ctx.SeatOrder);
+        if (seatOrder.Count == 0)
+        {
+            // Legacy fallback (older server without seat_order): host first, then
+            // the remaining members sorted by id — still deterministic everywhere.
+            if (!string.IsNullOrEmpty(ctx.HostPlayerId))
+                seatOrder.Add(ctx.HostPlayerId);
+            var others = new List<string>();
+            foreach (var pid in ctx.PlayerIds)
+                if (pid != ctx.HostPlayerId && !others.Contains(pid))
+                    others.Add(pid);
+            others.Sort(string.CompareOrdinal);
+            seatOrder.AddRange(others);
+        }
 
         int localSeat = seatOrder.IndexOf(_state.LocalPlayerId);
         if (localSeat < 0 || localSeat >= 4)

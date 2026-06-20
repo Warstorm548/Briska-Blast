@@ -64,6 +64,7 @@ pub async fn host(
         player_count: body.player_count,
         joiners: Vec::new(),
         status: SessionStatus::Waiting,
+        seat_order: Vec::new(),
     };
 
     let json = serde_json::to_string(&session)

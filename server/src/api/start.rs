@@ -54,6 +54,16 @@ if #session.joiners ~= tonumber(ARGV[3]) then
   return cjson.encode({result = 'conflict'})
 end
 session.status = 'starting'
+-- Freeze the seating roster ([host, ...joiners] in join order) at the instant
+-- of Start. Nothing mutates session.seat_order afterwards, so a later host
+-- promotion (which reorders joiners/host_player_id) leaves the original seating
+-- intact for every client, including a rejoiner. Mirrors `session_members` in
+-- the Rust StartSignaling broadcast.
+local seat_order = {session.host_player_id}
+for i = 1, #session.joiners do
+  seat_order[#seat_order + 1] = session.joiners[i].player_id
+end
+session.seat_order = seat_order
 redis.call('SET', KEYS[1], cjson.encode(session), 'EX', tonumber(ARGV[4]))
 return cjson.encode({result = 'ok'})
 "#;
