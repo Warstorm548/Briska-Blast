@@ -103,3 +103,33 @@ resurfaces unintentionally later.
   Self-goals stay suppressed (a serve bouncing back into your own goal still scores
   nobody). See the game v0.12.1 changelog and
   [`../architecture/extended-mode.md`](../architecture/extended-mode.md) (Scoring).
+
+---
+
+## Extended-mode portals don't match the seating diagram
+
+- **Status:** ✅ resolved 2026-06-19 (game v0.14.1). `GameScene.BuildEdges` now
+  seats players at a fixed table — **P1 = Host (bottom), P2 top, P3 left, P4
+  right** — from a globally-consistent order (Host first, then the rest sorted by
+  `player_id`) and assigns each peer's edge via a `SeatEdge[localSeat, peerSeat]`
+  lookup: the peer opposite you → Top, right-hand → Right, left-hand → Left. The
+  seating is decided once in `_Ready` at Start and **frozen** for the match, so a
+  mid-game host promotion never re-seats anyone (`OnHostChangedInGame` updates the
+  host notion only — it does not re-run `BuildEdges`), and a dropped peer still
+  heals back to its **same** edge (`NetGameController._peerHomeEdge`). Verified by
+  reasoning against the diagram + a clean build; awaiting on-device confirmation of
+  a 3–4 player match.
+- **Affects:** game builds with the playable Extended-mode round before v0.14.1
+  (≈ v0.6.0–v0.14.0).
+- **Symptom (as reported):** every player's screen showed the **same** Top/Right/
+  Left portal arrangement regardless of where they sat, so the portals didn't line
+  up with the canonical seating in `Example Imgs/GameMode Extended.png` (e.g. P3
+  should see P4 on Top, P1 on Right, P2 on Left).
+- **Cause:** the old `BuildEdges` collected present peers, sorted them by
+  `player_id`, and filled a flat `{ Top, Right, Left }` slot list in that order —
+  a per-client id-sort with no notion of seating, so the layout was identical for
+  everyone and unrelated to the table geometry.
+- **Fix:** seat-relative assignment via the `SeatEdge` table (see above) and
+  [`../architecture/extended-mode.md`](../architecture/extended-mode.md). The
+  fewer-than-4-player cases are unchanged (2 → 1 Top portal + 2 walls, 3 → 2
+  portals + 1 wall). See the game v0.14.1 changelog.
