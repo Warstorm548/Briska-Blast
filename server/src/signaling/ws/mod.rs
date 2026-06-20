@@ -60,6 +60,9 @@ pub async fn ws_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, code, state))
 }
 
+/// Drive one signaling WebSocket end to end: authenticate the player (Identify),
+/// reply with the `Identified` roster snapshot, register with the `SignalHub`, and
+/// relay signaling/chat frames until the socket closes.
 async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
     // Phase 1: Identify-frame auth with deadline.
     let (player_id, is_host, host_player_id) = match identify(&mut socket, &code, &state).await {

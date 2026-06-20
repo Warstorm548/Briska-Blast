@@ -366,6 +366,9 @@ public partial class SignalingClient : Node
         Closed?.Invoke(code, reason);
     }
 
+    /// <summary>Parse one server frame and dispatch it to the matching event
+    /// (<c>identified</c>, <c>peer_joined</c>, host/peer reconnect, score updates,
+    /// SDP/ICE relays, chat, …). Malformed or untyped frames are ignored.</summary>
     private void HandleFrame(string text)
     {
         try

@@ -119,6 +119,10 @@ public partial class JoinMenu : Control
         _rejoinSignaling.Connect(code, ctx.PlayerId, ctx.SecretToken);
     }
 
+    /// <summary>Handle the rejoin <c>Identified</c> frame (process-death recovery):
+    /// restore host, roster, and the frozen seating order, re-establish the WebRTC
+    /// mesh, hand the live net to <see cref="SessionContext"/>, and enter the game
+    /// scene.</summary>
     private void OnRejoinIdentified(string hostId, string[] peers, string[] seatOrder,
         bool isHost, System.Collections.Generic.Dictionary<string, string> usernames)
     {

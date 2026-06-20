@@ -199,6 +199,8 @@ public partial class SessionContext : Node
         SeatOrder.AddRange(order);
     }
 
+    /// <summary>Reset all per-session state (code, mode, roster, seating, usernames,
+    /// host, rejoin flag) back to empty — called when a match ends or is left.</summary>
     public void ClearSession()
     {
         SessionCode = "";

@@ -78,6 +78,10 @@ public partial class SessionLobby : Control
 
     // ---- signaling callbacks (main thread) ----
 
+    /// <summary>Handle the lobby's <c>Identified</c> frame: refresh usernames, the
+    /// host, and the roster from the server's snapshot and re-render. (seatOrder is
+    /// empty before Start, so it's captured later in <see cref="OnStartSignaling"/>.)
+    /// </summary>
     private void OnIdentified(string hostId, string[] peers, string[] seatOrder,
         bool isHost, System.Collections.Generic.Dictionary<string, string> usernames)
     {
@@ -160,6 +164,9 @@ public partial class SessionLobby : Control
         log.AddText($": {text}\n");
     }
 
+    /// <summary>Handle <c>start_signaling</c>: freeze the seating roster, bring up
+    /// the WebRTC mesh, hand the live net to <see cref="SessionContext"/>, and enter
+    /// the game scene. One-shot — guards against a duplicate frame.</summary>
     private void OnStartSignaling(string gamemode, int playerCount, string[] peers)
     {
         // One-shot transition: guard against a duplicate start_signaling and

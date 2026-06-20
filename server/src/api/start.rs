@@ -81,6 +81,9 @@ enum StartOutcome {
 
 const MAX_START_RETRIES: u32 = 3;
 
+/// `POST /session/:code/start` — host-only `Waiting` → `Starting` transition. Runs
+/// a Lua CAS (WS-ready check + optimistic retry) that also freezes the seating
+/// roster, then broadcasts `StartSignaling` so every client begins WebRTC setup.
 pub async fn start_session(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
