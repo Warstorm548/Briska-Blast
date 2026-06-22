@@ -38,8 +38,36 @@ pub struct Session {
     /// rejoiner, whose live session state may post-date a promotion) derives the
     /// identical Extended-mode portal layout. Consumed via the `Identified`
     /// frame's `seat_order`; see `start.rs` and `GameScene.BuildEdges`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_seat_order")]
     pub seat_order: Vec<String>,
+}
+
+/// Deserialize `seat_order` tolerantly. Redis's lua-cjson can't tell an empty
+/// array from an empty object, so any Lua script that round-trips a session while
+/// `seat_order` is empty re-encodes `[]` as `{}` — most importantly the join
+/// script, which runs in the Waiting phase when `seat_order` is *always* empty
+/// (it's only frozen at `/start`). A plain `Vec<String>` deserialize chokes on
+/// that `{}` and turns the join into a 500. Accept a real array normally and
+/// treat anything else (the cjson empty-object, or null) as an empty roster.
+/// This covers every path that reads a `Session` at once and self-heals a session
+/// already stored with `"seat_order":{}`, rather than relying on a per-script
+/// `string.gsub` like `remove_joiner_on_leave` uses for `joiners` (the omission
+/// of which for this newer field is exactly what caused the 500).
+fn deserialize_seat_order<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum SeatOrder {
+        List(Vec<String>),
+        // lua-cjson's empty-table-as-object (`{}`), or an explicit null.
+        Empty(serde::de::IgnoredAny),
+    }
+    Ok(match SeatOrder::deserialize(deserializer)? {
+        SeatOrder::List(v) => v,
+        SeatOrder::Empty(_) => Vec::new(),
+    })
 }
 
 impl Session {
@@ -142,4 +170,45 @@ pub(crate) fn client_ip(
         .and_then(|s| s.split(',').next())
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or_else(|| connect_info.0.ip())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Session;
+
+    fn session_json(seat_order: &str) -> String {
+        format!(
+            r#"{{"code":"ABC123","host_player_id":"1","gamemode":"extended",
+               "player_count":4,"joiners":[],"status":"waiting","seat_order":{seat_order}}}"#
+        )
+    }
+
+    // Regression: Redis lua-cjson re-encodes an empty `seat_order` (`[]`) as the
+    // JSON object `{}` whenever the join script round-trips a Waiting session.
+    // A naive `Vec<String>` deserialize 500'd the join on that `{}`. We must
+    // accept it as an empty roster.
+    #[test]
+    fn seat_order_tolerates_cjson_empty_object() {
+        let session: Session = serde_json::from_str(&session_json("{}")).unwrap();
+        assert!(session.seat_order.is_empty());
+    }
+
+    #[test]
+    fn seat_order_reads_a_real_array() {
+        let session: Session =
+            serde_json::from_str(&session_json(r#"["1","2","3"]"#)).unwrap();
+        assert_eq!(session.seat_order, vec!["1", "2", "3"]);
+    }
+
+    #[test]
+    fn seat_order_empty_array_and_missing_both_yield_empty() {
+        let from_array: Session = serde_json::from_str(&session_json("[]")).unwrap();
+        assert!(from_array.seat_order.is_empty());
+
+        // Field absent entirely → `#[serde(default)]`.
+        let no_field = r#"{"code":"ABC123","host_player_id":"1","gamemode":"extended",
+            "player_count":4,"joiners":[],"status":"waiting"}"#;
+        let from_missing: Session = serde_json::from_str(no_field).unwrap();
+        assert!(from_missing.seat_order.is_empty());
+    }
 }

@@ -5,6 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.18.1] — 2026-06-22
+
+Fixes a **critical regression from 0.17.0**: joining a freshly created session
+returned `500 internal server error`, so no one could join a game.
+
+### Fixed
+
+- **Joining a Waiting session no longer 500s.** The `seat_order` roster added in
+  0.17.0 is empty for the entire Waiting phase, and Redis's lua-cjson re-encodes
+  an empty Lua table as the JSON object `{}` (not `[]`) whenever the join script
+  round-trips the session. The Rust `Session` then failed to deserialize `{}`
+  into `seat_order: Vec<String>`, surfacing as an internal error on `/join`.
+  `Session::seat_order` now deserializes tolerantly — an array reads normally, and
+  the cjson empty-object (or null) reads as an empty roster — so every path that
+  reads a session is immune and a session already stored with `"seat_order":{}`
+  self-heals. (The same lua-cjson pitfall is handled for `joiners` with a
+  per-script `string.gsub`; this newer field was missed, which is what broke
+  joins. The Rust-side guard covers all read paths at once instead.) Adds
+  regression tests for the `{}`, `[]`, populated, and missing cases.
+
+---
+
 ## [0.18.0] — 2026-06-20
 
 Tightens the username cap from 32 to **20 characters**, sources it from a single
