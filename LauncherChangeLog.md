@@ -5,6 +5,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.16.0] — 2026-06-21
+
+Replaces the cross-restart running-game PID file with a **socket rendezvous** and
+adds **launcher single-instance**. Each holder binds an ephemeral `127.0.0.1:0`
+port (the OS guarantees it is free, so it can never collide with unrelated
+software), records the port in a discovery file, and proves its identity with a
+handshake banner — fixing the false "already running" a fixed port would hit.
+Pairs with **game v0.15.0**, whose new `SingleInstance` autoload owns the game's
+side of the same protocol.
+
+### Added
+
+- **Launcher single-instance.** A second launcher detects the first via the
+  rendezvous (bind `127.0.0.1:0` → atomic `create_new` claim of
+  `launcher_instance.json` → connect + banner check) and exits cleanly; one
+  window. Runs in `main()` before the stale-update-artifact cleanup so a
+  duplicate never disturbs the live instance. Fail-safe throughout: any
+  inconclusive error logs and lets the launcher run normally. See
+  `launcher/src/rendezvous.rs`.
+- **Game liveness probe** (`rendezvous::game_is_running`) — a no-bind, no-claim
+  read+connect of the game's `game_instance.json` banner. Drives cross-restart
+  recovery: a one-shot probe on boot plus the existing 2 s poll while a recovered
+  game is tracked. Correctly distinguishes a **crashed** game (connect refused →
+  not running) from a live one, which the old start-time heuristic only
+  approximated.
+- **`data_dir` handoff field** — the launcher tells the game which per-user
+  directory to write `game_instance.json` into (the same one the launcher
+  probes), avoiding any cross-language path drift.
+- **Clean-exit cleanup** — the launcher removes `launcher_instance.json` on a
+  clean exit, but only when it actually won the claim (a crash leaves it for the
+  next probe to self-correct).
+
+### Changed
+
+- Cross-restart game detection now uses the game's `game_instance.json` socket
+  (probe on boot, re-probe each poll tick) instead of a recorded PID. The
+  `game_running` UI gate and button behaviour (Play / Change Name / Uninstall)
+  are unchanged; the normal launch path still drives running→not-running via the
+  in-memory child handle + `GameExited`.
+
+### Removed
+
+- `running_game.rs` and the `running_game.json` PID memory file (PID + spawn
+  time + exe heuristic), superseded by the socket probe.
+- The `sysinfo` dependency, now unused.
+
+---
+
 ## [0.15.0] — 2026-06-20
 
 Adds a 20-character username cap (hard-blocked in the UI, enforced server-side as

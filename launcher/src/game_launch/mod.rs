@@ -15,7 +15,9 @@
 //! and the version gate (`server/src/middleware/version.rs`) checks
 //! `X-Launcher-Version` too — which the game has no way to know on its
 //! own. The `channel` lets the client assert it wasn't handed credentials
-//! for a different channel than the one it was built for.
+//! for a different channel than the one it was built for. The `data_dir`
+//! tells the game which per-user directory to write its `game_instance.json`
+//! single-instance file into — the same one the launcher probes for liveness.
 //!
 //! `spawn_and_wait` is the single public entry point: writes the file,
 //! spawns the binary, awaits exit, returns the exit code. Errors at any
@@ -38,6 +40,13 @@ struct Handoff<'a> {
     secret_token: &'a str,
     launcher_version: &'a str,
     channel: Channel,
+    /// Per-user data dir the launcher reads/writes (`paths::data_dir()`), passed
+    /// explicitly so the game writes its `game_instance.json` single-instance
+    /// file into the exact directory the launcher probes — avoiding any
+    /// cross-language path drift. Empty when the launcher couldn't resolve it;
+    /// the game then computes the same per-user dir itself (see
+    /// `client/src/core/SingleInstance.cs`).
+    data_dir: &'a str,
 }
 
 /// Spawn the channel's installed game, wait for it to exit. The handoff
@@ -72,12 +81,21 @@ pub async fn spawn_and_wait(
         ));
     }
 
+    // Pass the launcher's per-user data dir so the game writes its
+    // single-instance file (game_instance.json) into the exact directory the
+    // launcher probes. On failure pass "" — the game falls back to computing the
+    // same dir itself, so a missing value never blocks launch.
+    let data_dir = crate::paths::data_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
     let handoff_path = write_handoff(&Handoff {
         username: &username,
         player_id: &player_id,
         secret_token: &secret_token,
         launcher_version: &launcher_version,
         channel,
+        data_dir: &data_dir,
     })
     .await?;
     // RAII guard — removes the handoff file on scope exit (including the
@@ -109,22 +127,10 @@ pub async fn spawn_and_wait(
         .spawn()
         .map_err(|e| format!("spawn {}: {e}", exe_path.display()))?;
 
-    // Record the running game so a launcher restart mid-game can recover it and
-    // keep the game-gated buttons locked. The PID only exists post-spawn. This is
-    // best-effort: losing it only costs the cross-restart recovery, never the
-    // running session (the in-memory child handle below is authoritative). The
-    // file is removed by the `GameExited` handler once `wait()` returns; it is
-    // deliberately left behind if the *launcher* dies first — that is the case
-    // boot recovery exists for.
-    match child.id() {
-        Some(pid) => crate::running_game::write(&crate::running_game::RunningGame::now(
-            pid,
-            exe_path.clone(),
-            channel,
-        )),
-        None => tracing::warn!("spawned game has no pid — skipping running_game memory file"),
-    }
-
+    // The in-memory `Child` handle below is authoritative for a launcher-spawned
+    // session: awaiting it drives `GameExited`. Cross-restart liveness (when this
+    // launcher is closed and reopened mid-game) is handled separately by the
+    // game's own `game_instance.json` socket, which the launcher probes on boot.
     let status = child
         .wait()
         .await
@@ -220,6 +226,7 @@ mod tests {
             secret_token: "deadbeefcafef00d",
             launcher_version: "0.10.0",
             channel: Channel::Dev,
+            data_dir: "/home/player/.local/share/briskablast",
         }
     }
 
@@ -233,6 +240,7 @@ mod tests {
         assert_eq!(v["secret_token"], "deadbeefcafef00d");
         assert_eq!(v["launcher_version"], "0.10.0");
         assert_eq!(v["channel"], "dev");
+        assert_eq!(v["data_dir"], "/home/player/.local/share/briskablast");
         let _ = tokio::fs::remove_file(&path).await;
     }
 

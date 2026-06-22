@@ -19,14 +19,14 @@ pub struct AppState {
     pub self_update_in_flight: bool,
     pub last_self_update_error: Option<String>,
     pub game_running: bool,
-    /// Set when boot recovered a still-running game from `running_game.json` —
-    /// the launcher was closed and reopened while a game it spawned is still
-    /// open, so there is no in-memory child handle / `spawn_and_wait` task to
-    /// drive `GameExited`. Its presence switches on the poll subscription
-    /// (`super::subscription`) that watches the recorded PID and clears
-    /// `game_running` once that process finally exits. `None` in the normal
-    /// case. See `crate::running_game`.
-    pub recovered_game: Option<crate::running_game::RunningGame>,
+    /// True when boot's liveness probe found a game already running — the
+    /// launcher was closed and reopened while a game (it or a previous launcher
+    /// spawned) is still open, so there is no in-memory child handle /
+    /// `spawn_and_wait` task to drive `GameExited`. Switches on the poll
+    /// subscription (`super::subscription`) that re-probes the game's
+    /// `game_instance.json` socket and clears `game_running` once that process
+    /// finally exits. `false` in the normal launch case. See `crate::rendezvous`.
+    pub recovered_game_running: bool,
     /// Transient one-line notice shown under the name in the right-rail username
     /// box — currently used when the server rejected a username change and the
     /// launcher reverted to the stored value. Cleared when the user starts the
@@ -152,7 +152,7 @@ impl Default for AppState {
             self_update_in_flight: false,
             last_self_update_error: None,
             game_running: false,
-            recovered_game: None,
+            recovered_game_running: false,
             username_notice: None,
             dev_flag: false,
             awaiting_username: false,
@@ -211,5 +211,12 @@ mod tests {
             ChannelUpdateStatus::from_check(Some(&inst), None),
             ChannelUpdateStatus::UpToDate(inst),
         );
+    }
+
+    /// A fresh launcher must not believe a game is running until the boot probe
+    /// says so — the poll subscription is gated on this flag.
+    #[test]
+    fn recovered_game_running_defaults_false() {
+        assert!(!super::AppState::default().recovered_game_running);
     }
 }

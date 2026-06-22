@@ -109,15 +109,6 @@ pub fn ratelimit_path() -> io::Result<PathBuf> {
     Ok(data_dir()?.join("ratelimits.json"))
 }
 
-/// `<data_dir>/running_game.json` — the launcher's memory of a game it spawned
-/// that may still be open. Records the PID + spawn time + exe + channel so a
-/// launcher that was closed and reopened mid-game can tell the game is still
-/// running and keep the game-gated buttons (Play, Change Name, …) locked. Sits
-/// next to `identity.json` and `ratelimits.json`. See `running_game.rs`.
-pub fn running_game_path() -> io::Result<PathBuf> {
-    Ok(data_dir()?.join("running_game.json"))
-}
-
 /// `<data_dir>/saves/<channel>/`. Created on first call. Reserved for the
 /// existing `Settings → Game Channel Management → Game Save` button row once
 /// it gets a real implementation; exposing the path here is in scope so

@@ -131,25 +131,21 @@ pub fn boot() -> (AppState, Task<Message>) {
         state.identity = id;
     }
 
-    // Cross-restart recovery: if a game this launcher spawned is still running
-    // (the launcher was closed and reopened mid-game, so the in-memory child
-    // handle is gone), reflect that so the game-gated buttons (Play, Change
-    // Name, …) stay locked. The poll subscription clears it once that externally
-    // owned process exits. A stale / crashed-game file is removed by `recover`.
-    if let Some(rec) = crate::running_game::recover() {
-        tracing::info!(
-            channel = %rec.channel,
-            pid = rec.pid,
-            "recovered a still-running game on boot"
-        );
-        state.game_running = true;
-        state.recovered_game = Some(rec);
-    }
-
     let mut tasks: Vec<Task<Message>> = vec![Task::perform(
         updater::check_for_update(),
         Message::LauncherUpdateCheckDone,
     )];
+
+    // Cross-restart recovery: probe whether a game is already running (the
+    // launcher was closed and reopened mid-game, so the in-memory child handle is
+    // gone). On `true`, BootGameProbe locks the game-gated buttons and starts the
+    // poll subscription that clears them once that externally owned process exits.
+    // A crashed game leaves a stale `game_instance.json`, but the probe's connect
+    // fails, so it reports not-running — no false lock.
+    tasks.push(Task::perform(
+        crate::rendezvous::game_is_running(),
+        Message::BootGameProbe,
+    ));
 
     if state.identity.username.trim().is_empty() {
         // Gate the entire identity flow behind the welcome screen so the
@@ -222,7 +218,9 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         // ---- play / game launch ----
         Message::PlayPressed => play::play_pressed(state),
         Message::GameExited { channel, result } => play::game_exited(state, channel, result),
+        Message::BootGameProbe(running) => play::boot_game_probe(state, running),
         Message::RecoveredGamePoll => play::recovered_game_poll(state),
+        Message::RecoveredGameProbe(running) => play::recovered_game_probe(state, running),
         Message::PlayFirewallResolved {
             channel,
             status,
@@ -318,14 +316,14 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
 }
 
 /// The only background subscription: a slow poll active **only** while a game
-/// was recovered from `running_game.json` on boot (launcher restarted mid-game).
-/// It drives `RecoveredGamePoll` so the launcher notices when that externally
-/// owned process finally exits and can re-enable the game-gated buttons. In the
-/// normal case — and whenever idle — this is `Subscription::none()`, so there is
-/// no recurring timer cost; the normal launch path reports exit via the
+/// was recovered by the boot liveness probe (launcher restarted mid-game). It
+/// drives `RecoveredGamePoll` so the launcher notices when that externally owned
+/// process finally exits and can re-enable the game-gated buttons. In the normal
+/// case — and whenever idle — this is `Subscription::none()`, so there is no
+/// recurring timer cost; the normal launch path reports exit via the
 /// `spawn_and_wait` task's `GameExited` instead.
 pub fn subscription(state: &AppState) -> iced::Subscription<Message> {
-    if state.recovered_game.is_some() {
+    if state.recovered_game_running {
         iced::time::every(std::time::Duration::from_secs(2)).map(|_| Message::RecoveredGamePoll)
     } else {
         iced::Subscription::none()
