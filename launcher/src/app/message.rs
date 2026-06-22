@@ -142,13 +142,21 @@ pub enum Message {
         channel: Channel,
         result: Result<Option<i32>, String>,
     },
-    /// Periodic tick from the poll subscription that is active only while a
-    /// game was **recovered** from `running_game.json` on boot (the launcher was
-    /// restarted mid-game, so there is no `spawn_and_wait` task to report exit).
-    /// Each tick re-checks whether the recorded PID is still alive; when it has
-    /// exited, `game_running` is cleared and the file removed. See
-    /// `crate::running_game` and `super::subscription`.
+    /// Result of the one-shot boot liveness probe (`rendezvous::game_is_running`):
+    /// `true` means a game was already running when this launcher started (it was
+    /// restarted mid-game). Sets `game_running` + `recovered_game_running`, which
+    /// turns on the poll subscription. See `super::handlers::play::boot_game_probe`.
+    BootGameProbe(bool),
+    /// Periodic tick from the poll subscription that is active only while a game
+    /// was **recovered** by the boot probe (the launcher was restarted mid-game,
+    /// so there is no `spawn_and_wait` task to report exit). Each tick fires a
+    /// fresh liveness probe; its result arrives as `RecoveredGameProbe`. See
+    /// `crate::rendezvous` and `super::subscription`.
     RecoveredGamePoll,
+    /// Result of a poll-tick liveness probe. When `false`, the recovered game has
+    /// exited: `game_running` + `recovered_game_running` are cleared, which stops
+    /// the subscription. See `super::handlers::play::recovered_game_probe`.
+    RecoveredGameProbe(bool),
     // ---- Stage 7: uninstall / verify / game save ----
     /// Toggle the Keep-saves radio inside the uninstall confirmation prompt.
     UninstallKeepSavesToggled(bool),

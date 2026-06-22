@@ -17,8 +17,9 @@ fn username_box(state: &AppState) -> Element<'_, Message> {
     // Drop the on_press while a game is running so the button renders
     // non-pressable (Iced's idiom for disabled — same pattern as Play/Update in
     // the bottom bar). The username must not change mid-session; the lock holds
-    // even across a launcher restart because `game_running` is recovered from the
-    // running-game memory file. The handler re-checks `game_running` too.
+    // even across a launcher restart because `game_running` is recovered by
+    // probing the game's liveness socket (`game_instance.json`) on boot. The
+    // handler re-checks `game_running` too.
     let mut change_btn = button(text("Change Name"));
     if !state.game_running {
         change_btn = change_btn.on_press(Message::ChangeNamePressed);

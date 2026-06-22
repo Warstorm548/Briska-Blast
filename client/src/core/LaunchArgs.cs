@@ -17,14 +17,17 @@ public static class LaunchArgs
     /// options. <see cref="PlayerId"/>/<see cref="SecretToken"/> authenticate
     /// the client to the server; <see cref="LauncherVersion"/> feeds the
     /// version gate; <see cref="Channel"/> lets the client assert it wasn't
-    /// handed cross-channel credentials.
+    /// handed cross-channel credentials; <see cref="DataDir"/> is the launcher's
+    /// per-user data dir, so the game writes its single-instance file
+    /// (<c>game_instance.json</c>) into the directory the launcher probes.
     /// </summary>
     public sealed record Handoff(
         string? Username,
         [property: JsonPropertyName("player_id")] string? PlayerId,
         [property: JsonPropertyName("secret_token")] string? SecretToken,
         [property: JsonPropertyName("launcher_version")] string? LauncherVersion,
-        string? Channel);
+        string? Channel,
+        [property: JsonPropertyName("data_dir")] string? DataDir);
 
     private static Handoff? _cached;
     private static bool _loaded;
@@ -55,7 +58,7 @@ public static class LaunchArgs
                 json,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
-            consumed = parsed ?? new Handoff(null, null, null, null, null);
+            consumed = parsed ?? new Handoff(null, null, null, null, null, null);
         }
         catch (Exception e)
         {

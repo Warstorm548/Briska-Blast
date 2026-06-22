@@ -93,10 +93,10 @@ pub(crate) fn game_exited(
     result: Result<Option<i32>, String>,
 ) -> Task<Message> {
     state.game_running = false;
-    // Single clear point for the normal (launcher-alive) path: the tracked child
-    // exited, so drop the cross-restart memory file. The recovered-game path
-    // clears it from `recovered_game_poll` instead.
-    crate::running_game::clear();
+    // The tracked child exited — that is authoritative for a launcher-spawned
+    // session. Nothing to clean up here: cross-restart liveness lives entirely in
+    // the game's own `game_instance.json` socket, which the game removes on its
+    // own clean exit (and which the probe self-corrects on a crash).
     match result {
         Ok(Some(code)) => tracing::info!(?channel, code, "game exited"),
         Ok(None) => tracing::info!(?channel, "game exited (signal)"),
@@ -105,24 +105,49 @@ pub(crate) fn game_exited(
     Task::none()
 }
 
-/// Tick handler for the recovered-game poll subscription. Active only when boot
-/// recovered a still-running game from `running_game.json` (the launcher was
-/// restarted mid-game, so there is no `spawn_and_wait` task to report exit).
-/// Each tick re-checks the recorded PID; once it has exited, clear the running
-/// state + file and drop `recovered_game`, which also stops the subscription.
+/// Handle the one-shot boot liveness probe. When a game is already running (the
+/// launcher was restarted mid-game), reflect it: lock the game-gated buttons and
+/// flip `recovered_game_running` on, which starts the poll subscription that
+/// watches for that externally owned process to exit. A `false` result is the
+/// normal case and leaves state untouched.
+pub(crate) fn boot_game_probe(state: &mut AppState, running: bool) -> Task<Message> {
+    if running {
+        tracing::info!("boot probe found a game already running — locking game-gated buttons");
+        state.game_running = true;
+        state.recovered_game_running = true;
+    }
+    Task::none()
+}
+
+/// Tick handler for the recovered-game poll subscription. Active only when the
+/// boot probe recovered a still-running game (the launcher was restarted
+/// mid-game, so there is no `spawn_and_wait` task to report exit). Each tick
+/// fires a fresh liveness probe; the result returns as `RecoveredGameProbe`.
 pub(crate) fn recovered_game_poll(state: &mut AppState) -> Task<Message> {
     // Only meaningful while a recovered game is actually being tracked. The poll
-    // subscription only fires in that state, but guard explicitly so the clearing
-    // block can never run — and wrongly drop `game_running` — without a recorded
-    // game to confirm dead (e.g. a `game_running` set by a normal launch).
-    let Some(rec) = state.recovered_game.as_ref() else {
+    // subscription only fires in that state, but guard explicitly so a stray tick
+    // can never spawn a probe that might clear a normal-launch `game_running`.
+    if !state.recovered_game_running {
         return Task::none();
-    };
-    if !crate::running_game::is_alive(rec) {
+    }
+    Task::perform(
+        crate::rendezvous::game_is_running(),
+        Message::RecoveredGameProbe,
+    )
+}
+
+/// Handle a poll-tick liveness probe result. Gated on `recovered_game_running`
+/// so it can only ever clear a *recovered* session — never a `game_running` set
+/// by a normal launch (whose authority is the in-memory child handle). When the
+/// recovered game has exited, drop both flags, which stops the subscription.
+pub(crate) fn recovered_game_probe(state: &mut AppState, running: bool) -> Task<Message> {
+    if !state.recovered_game_running {
+        return Task::none();
+    }
+    if !running {
         tracing::info!("recovered game is no longer running — clearing running state");
         state.game_running = false;
-        state.recovered_game = None;
-        crate::running_game::clear();
+        state.recovered_game_running = false;
     }
     Task::none()
 }

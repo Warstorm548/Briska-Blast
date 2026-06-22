@@ -9,6 +9,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.15.0] — 2026-06-21
+
+Adds **game single-instance** and **one-game-channel-at-a-time** enforcement via
+the same socket rendezvous the launcher uses (**launcher v0.16.0**). A new
+`SingleInstance` autoload binds an ephemeral `127.0.0.1:0` port, claims a single
+shared `game_instance.json` (one file across all channels), and serves a
+handshake banner so a second game — of any channel — detects the live one and
+quits.
+
+### Added
+
+- **`SingleInstance` autoload** (`src/core/SingleInstance.cs`), registered above
+  `SessionContext` so it runs first. On `_EnterTree` it binds `127.0.0.1:0`,
+  atomically `create-new`s `game_instance.json` with the chosen port, and runs a
+  background accept loop serving `BRISKA-BLAST\t1\tGAME\n`. A duplicate (a live
+  GAME banner already answers) sets a static `IsDuplicate` flag and quits via a
+  deferred `GetTree().Quit()`; `MainMenu` also checks `IsDuplicate` at the top of
+  `_Ready` as belt-and-braces. Defence-in-depth alongside the launcher's
+  `game_running` gate. Fail-safe: any error logs and lets the game run normally.
+- **Clean-exit cleanup** — the claim-winner removes `game_instance.json` in
+  `_ExitTree`; a duplicate never deletes the live holder's file, and a crash
+  leaves it for the launcher's probe to self-correct.
+- The game now reads the launcher handoff's **`data_dir`** so it writes
+  `game_instance.json` into the exact directory the launcher probes; with no
+  handoff (editor / standalone) it computes the same per-user dir itself,
+  mirroring the launcher's `directories`-crate layout.
+
+---
+
 ## [0.14.2] — 2026-06-20
 
 Seats Extended-mode players by **join order** (who entered the lobby first)
