@@ -9,6 +9,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.15.1] — 2026-06-22
+
+Fixes a regression from **0.15.0**: the new `SingleInstance` guard ran in the
+editor too, so the second of two editor instances detected the first's banner,
+flagged itself a duplicate, and quit before it could join — breaking the
+documented two-editor-instance host/join test flow (`SessionContext`'s
+`SelfRegisterAsync` self-provisions throwaway identities for exactly that).
+
+### Fixed
+
+- **`SingleInstance` now skips the guard in the editor** (`OS.HasFeature("editor")`),
+  mirroring the editor escape hatches already in `SessionContext`. Two editor
+  instances can host/join on one machine again. Exported release builds report
+  `editor=false` and remain single-instanced for real users — the guard is
+  unchanged for them.
+
+---
+
 ## [0.15.0] — 2026-06-21
 
 Adds **game single-instance** and **one-game-channel-at-a-time** enforcement via

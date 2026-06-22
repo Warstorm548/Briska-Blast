@@ -80,6 +80,19 @@ public partial class SingleInstance : Node
 
     private void Acquire()
     {
+        // Editor exemption: the documented local test flow runs two editor
+        // instances to host/join on one machine (see
+        // SessionContext.SelfRegisterAsync, which self-provisions throwaway
+        // identities for exactly this). Single-instance would make the second
+        // instance see the first's banner, flag itself a duplicate, and quit —
+        // so never guard in the editor. Exported release builds report
+        // editor=false and are still single-instanced for real users.
+        if (OS.HasFeature("editor"))
+        {
+            GD.Print("SingleInstance: editor run — skipping single-instance guard.");
+            return;
+        }
+
         var dir = ResolveDataDir();
         Directory.CreateDirectory(dir);
         _filePath = Path.Combine(dir, FileName);
