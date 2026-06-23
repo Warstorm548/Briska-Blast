@@ -28,8 +28,8 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Component | Status |
 |---|---|
 | Server foundation | ✓ Complete (v0.12.0) — see `ServerChangeLog.md` |
-| Shared crate | ✓ Complete (v0.3.0 — protocol types, player/session types, shared `MAX_USERNAME_LEN` cap + `UpdateUsernameResponse`) |
-| Game client | In progress (v0.15.0) — multiplayer lobby (bordered, responsive panels + server-relayed lobby chat) + WebRTC mesh behind `IPeerTransport` + a playable **Extended-mode** round (per-screen sim, ball handoff between screens, server-relayed scoring, **seat-relative portal layout** seated by join order from a server-frozen roster, matching the canonical seating diagram) + server-authoritative host promotion with a reconnect grace window + **usernames** in the lobby roster and scoreboard (server-resolved, `player_id` stays internal) + **single-instance / one-channel-at-a-time** via a socket-rendezvous autoload (`SingleInstance`, shared `game_instance.json`). See `GameChangeLog.md`, `docs/architecture/extended-mode.md`, and `docs/planning/multiplayer-client-stages.md` |
+| Shared crate | ✓ Complete (v0.4.0 — protocol types, player/session types, shared `MAX_USERNAME_LEN` cap + `UpdateUsernameResponse` + `WinCondition` ("Set Score" target, range 10–50, default 11)) |
+| Game client | In progress (v0.16.0) — multiplayer lobby (bordered, responsive panels + server-relayed lobby chat) + WebRTC mesh behind `IPeerTransport` + a playable **Extended-mode** round (per-screen sim, ball handoff between screens, server-relayed scoring, **seat-relative portal layout** seated by join order from a server-frozen roster, matching the canonical seating diagram) + server-authoritative host promotion with a reconnect grace window + **usernames** in the lobby roster and scoreboard (server-resolved, `player_id` stays internal) + **single-instance / one-channel-at-a-time** via a socket-rendezvous autoload (`SingleInstance`, shared `game_instance.json`) + a **"Set Score" win condition** (host-configured in Advanced Settings → Match Rules, default 11) with a server-driven `GameOver` end-game leaderboard screen that freezes the sim. See `GameChangeLog.md`, `docs/architecture/extended-mode.md`, and `docs/planning/multiplayer-client-stages.md` |
 | Launcher | In progress (v0.16.0) — identity (+ game handoff with a `data_dir` field), multi-channel install/update (install locations inside the launcher's own folder are refused), self-update, Windows firewall prompt, manual per-channel update check under the channel selector, GitHub rate-limit back-off safety net (+ `per_page=100` discovery), **20-char username cap** (hard-blocked in UI + server-enforced trust boundary, with a server-reverts-tampered-clients path), **username changes locked while a game is running**, and **socket-rendezvous single-instance** — ephemeral `127.0.0.1:0` bind + discovery file + handshake banner (`launcher_instance.json`); cross-restart game liveness now probes the game's `game_instance.json` socket (replacing the old `running_game.json` PID file / `sysinfo`); see `LauncherChangeLog.md` |
 
 **Build order:** Server → Game → Launcher (each depends on the previous).
@@ -48,9 +48,10 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Launcher UI layout, identity file, channel gating, state variants | [`docs/launcher/launcher-foundation.md`](docs/launcher/launcher-foundation.md) |
 | Dev branch and release channel rules | [`docs/dev/devtools.md`](docs/dev/devtools.md) |
 | Release tag namespaces (server / launcher / game) | [`docs/dev/release-tagging.md`](docs/dev/release-tagging.md) |
-| Server change history | [`ServerChangeLog.md`](../ServerChangeLog.md) |
+| Shared crate change history | [`SharedChangeLog.md`](SharedChangeLog.md) |
+| Server change history | [`ServerChangeLog.md`](ServerChangeLog.md) |
 | Game change history | [`GameChangeLog.md`](GameChangeLog.md) |
-| Launcher change history | [`LauncherChangeLog.md`](../LauncherChangeLog.md) |
+| Launcher change history | [`LauncherChangeLog.md`](LauncherChangeLog.md) |
 | Deferred work and post-deployment follow-ups | [`docs/planning/roadmap.md`](docs/planning/roadmap.md) |
 | Known bugs in current builds | [`docs/planning/known-bugs.md`](docs/planning/known-bugs.md) |
 | Multiplayer client staged build order (lobby → WebRTC → gameplay) | [`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md) |

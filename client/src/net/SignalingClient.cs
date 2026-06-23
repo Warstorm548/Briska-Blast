@@ -39,12 +39,19 @@ public partial class SignalingClient : Node
     public event Action<string, string>? PeerJoined;
     public event Action<string, string>? PeerLeft;
     public event Action<string>? HostChanged;
-    public event Action<string, int, string[]>? StartSignaling;
+    /// <summary>Match starting. Carries (gamemode, winCondition, playerCount, peers).
+    /// <c>winCondition</c> is the host-chosen match-end rule the client applies.</summary>
+    public event Action<string, WinConditionDto, int, string[]>? StartSignaling;
     public event Action<string>? SessionEnded;
     public event Action<string>? Kicked;
     /// <summary>Authoritative per-session score tally (player_id → points)
     /// broadcast by the server after a score report. Overwrite, don't add.</summary>
     public event Action<Dictionary<string, int>>? ScoreUpdate;
+    /// <summary>The win condition was met — the match is over. Carries
+    /// (winnerPlayerId, finalScores). A pure UI signal: freeze the sim and show the
+    /// end-game leaderboard. The server tears the session down via a following
+    /// <see cref="SessionEnded"/>, which the game scene ignores once game-over.</summary>
+    public event Action<string, Dictionary<string, int>>? GameOver;
     /// <summary>A lobby chat message arrived. Carries (from, username, text):
     /// <c>from</c> is the server-attested sender id and <c>username</c> their
     /// display name (empty when none — fall back to <c>Player &lt;id&gt;</c>). The
@@ -409,6 +416,7 @@ public partial class SignalingClient : Node
                 case "start_signaling":
                     StartSignaling?.Invoke(
                         Str(root, "gamemode"),
+                        ReadWinCondition(root, "win_condition"),
                         root.GetProperty("player_count").GetInt32(),
                         ReadStrings(root, "peers"));
                     break;
@@ -420,6 +428,9 @@ public partial class SignalingClient : Node
                     break;
                 case "score_update":
                     ScoreUpdate?.Invoke(ReadIntMap(root, "scores"));
+                    break;
+                case "game_over":
+                    GameOver?.Invoke(Str(root, "winner_player_id"), ReadIntMap(root, "scores"));
                     break;
                 case "chat_message":
                     ChatMessage?.Invoke(Str(root, "from"), Str(root, "username"), Str(root, "text"));
@@ -485,6 +496,24 @@ public partial class SignalingClient : Node
                 if (prop.Value.ValueKind == JsonValueKind.String)
                     map[prop.Name] = prop.Value.GetString() ?? "";
         return map;
+    }
+
+    /// <summary>Read a <c>win_condition</c> object (<c>{kind,target}</c>) into a
+    /// DTO. A missing/malformed field degrades to the default so a client talking
+    /// to a server that predates the field still has a usable rule.</summary>
+    private static WinConditionDto ReadWinCondition(JsonElement obj, string name)
+    {
+        if (obj.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.Object)
+        {
+            string kind = el.TryGetProperty("kind", out var k) && k.ValueKind == JsonValueKind.String
+                ? k.GetString() ?? WinConditionDto.SetScoreKind
+                : WinConditionDto.SetScoreKind;
+            int target = el.TryGetProperty("target", out var t) && t.TryGetInt32(out var v)
+                ? v
+                : WinConditionDto.ScoreDefault;
+            return new WinConditionDto(kind, target);
+        }
+        return WinConditionDto.Default;
     }
 
     private static string[] ReadStrings(JsonElement obj, string name)

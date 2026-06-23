@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::gamemode::GameMode;
 use crate::types::session::SessionStatus;
+use crate::types::win_condition::WinCondition;
 
 /// Maximum username length, in Unicode scalar values (`char`s, not bytes).
 /// Single source of truth shared by the launcher's input cap and the server's
@@ -56,6 +57,10 @@ pub struct HostRequest {
     pub secret_token: String,
     pub gamemode: GameMode,
     pub player_count: u8,
+    /// Required: the server refuses to host without a win condition. An omitted
+    /// field is a serde deserialize error (422 naming the field); an out-of-range
+    /// value is rejected with `invalid_win_condition` (see `WinCondition::validate`).
+    pub win_condition: WinCondition,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -78,6 +83,7 @@ pub struct JoinedPeer {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct JoinResponse {
     pub gamemode: GameMode,
+    pub win_condition: WinCondition,
     pub player_count: u8,
     pub current_player_count: u8,
     pub joiners: Vec<JoinedPeer>,
@@ -87,6 +93,7 @@ pub struct JoinResponse {
 pub struct SessionPollResponse {
     pub status: SessionStatus,
     pub gamemode: GameMode,
+    pub win_condition: WinCondition,
     pub player_count: u8,
     pub current_player_count: u8,
     pub joiner_player_ids: Vec<String>,

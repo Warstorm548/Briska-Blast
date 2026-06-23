@@ -19,6 +19,19 @@ public partial class SessionContext : Node
     public string GameMode { get; set; } = "";
     public int MaxPlayers { get; set; }
 
+    /// <summary>The match-end rule for this session (kind + target score), learned
+    /// from host setup, the join/poll response, or the <c>start_signaling</c> frame.
+    /// Mirrors the server's <c>win_condition</c>. <see cref="WinConditionDisplay"/>
+    /// formats it for UI (e.g. the end-game screen).</summary>
+    public string WinConditionKind { get; set; } = WinConditionDto.SetScoreKind;
+    public int WinScoreTarget { get; set; } = WinConditionDto.ScoreDefault;
+
+    /// <summary>Human-readable win condition for menus, e.g. "First to 11".</summary>
+    public string WinConditionDisplay =>
+        WinConditionKind == WinConditionDto.SetScoreKind
+            ? $"First to {WinScoreTarget}"
+            : WinConditionKind;
+
     /// <summary>Roster as server player_ids, host first. Drives the lobby.</summary>
     public List<string> PlayerIds { get; } = new();
     /// <summary>Frozen Extended-mode seating roster — `[host, …joiners]` in join
@@ -147,11 +160,12 @@ public partial class SessionContext : Node
 #endif
 
     /// <summary>Set up local state after a successful POST /host.</summary>
-    public void StartHostSession(string code, string mode, int maxPlayers)
+    public void StartHostSession(string code, string mode, int maxPlayers, WinConditionDto winCondition)
     {
         SessionCode = code;
         GameMode = mode;
         MaxPlayers = maxPlayers;
+        ApplyWinCondition(winCondition);
         PlayerIds.Clear();
         SeatOrder.Clear();
         _usernames.Clear();
@@ -160,11 +174,13 @@ public partial class SessionContext : Node
     }
 
     /// <summary>Set up local state after a successful POST /join.</summary>
-    public void StartJoinSession(string code, string mode, int maxPlayers, IEnumerable<string> roster)
+    public void StartJoinSession(string code, string mode, int maxPlayers,
+        WinConditionDto winCondition, IEnumerable<string> roster)
     {
         SessionCode = code;
         GameMode = mode;
         MaxPlayers = maxPlayers;
+        ApplyWinCondition(winCondition);
         PlayerIds.Clear();
         SeatOrder.Clear();
         _usernames.Clear();
@@ -178,11 +194,12 @@ public partial class SessionContext : Node
     /// <summary>Set up local state for rejoining a live match by code (process-
     /// death recovery). The roster and host arrive authoritatively in the WS
     /// <c>Identified</c> frame, so they start empty here.</summary>
-    public void StartRejoinSession(string code, string mode, int maxPlayers)
+    public void StartRejoinSession(string code, string mode, int maxPlayers, WinConditionDto winCondition)
     {
         SessionCode = code;
         GameMode = mode;
         MaxPlayers = maxPlayers;
+        ApplyWinCondition(winCondition);
         PlayerIds.Clear();
         SeatOrder.Clear();
         _usernames.Clear();
@@ -199,6 +216,28 @@ public partial class SessionContext : Node
         SeatOrder.AddRange(order);
     }
 
+    /// <summary>Adopt a win condition from a wire DTO (host/join/poll). A null DTO
+    /// (a server predating the field) falls back to the default so the game still
+    /// has a usable rule.</summary>
+    public void ApplyWinCondition(WinConditionDto? winCondition)
+    {
+        var wc = winCondition ?? WinConditionDto.Default;
+        ApplyWinCondition(wc.Kind, wc.Target);
+    }
+
+    /// <summary>Adopt a win condition by its parsed fields (used by the
+    /// <c>start_signaling</c> frame). An empty kind falls back to the default, and a
+    /// target outside the shared bounds (a server predating the field, or an
+    /// out-of-range value) falls back to the default rather than displaying a
+    /// nonsense score.</summary>
+    public void ApplyWinCondition(string kind, int target)
+    {
+        WinConditionKind = string.IsNullOrEmpty(kind) ? WinConditionDto.SetScoreKind : kind;
+        WinScoreTarget = target >= WinConditionDto.ScoreMin && target <= WinConditionDto.ScoreMax
+            ? target
+            : WinConditionDto.ScoreDefault;
+    }
+
     /// <summary>Reset all per-session state (code, mode, roster, seating, usernames,
     /// host, rejoin flag) back to empty — called when a match ends or is left.</summary>
     public void ClearSession()
@@ -206,6 +245,8 @@ public partial class SessionContext : Node
         SessionCode = "";
         GameMode = "";
         MaxPlayers = 0;
+        WinConditionKind = WinConditionDto.SetScoreKind;
+        WinScoreTarget = WinConditionDto.ScoreDefault;
         PlayerIds.Clear();
         SeatOrder.Clear();
         _usernames.Clear();

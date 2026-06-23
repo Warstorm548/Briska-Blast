@@ -69,6 +69,12 @@ public partial class GameScene : Node2D
     private PauseMenu? _pauseMenu;
     private bool _paused;
 
+    // End-game overlay, shown on the server's GameOver. Once `_gameOver` is set the
+    // simulation is frozen and the EndGameMenu owns navigation; the following
+    // SessionEnded teardown is ignored so it can't yank the player off the board.
+    private EndGameMenu? _endGameMenu;
+    private bool _gameOver;
+
     // Reconnect grace overlay. A client shows at most one message at a time:
     // its own socket dropped (self), the host's (host), or a peer's (peer).
     private CanvasLayer _overlayLayer = null!;
@@ -123,6 +129,7 @@ public partial class GameScene : Node2D
         if (_signaling != null)
         {
             _signaling.SessionEnded += OnSessionEnded;
+            _signaling.GameOver += OnGameOver;
             _signaling.Kicked += OnKicked;
             _signaling.Closed += OnClosed;
             _signaling.HostChanged += OnHostChangedInGame;
@@ -161,6 +168,7 @@ public partial class GameScene : Node2D
         if (_signaling != null)
         {
             _signaling.SessionEnded -= OnSessionEnded;
+            _signaling.GameOver -= OnGameOver;
             _signaling.Kicked -= OnKicked;
             _signaling.Closed -= OnClosed;
             _signaling.HostChanged -= OnHostChangedInGame;
@@ -173,9 +181,60 @@ public partial class GameScene : Node2D
         }
     }
 
-    private void OnSessionEnded(string reason) => LeaveToMenu($"Session ended ({reason}).");
+    private void OnSessionEnded(string reason)
+    {
+        // After a win the server hands cleanup to SessionEnded right behind the
+        // GameOver frame. Once the end screen is up it owns navigation — don't let
+        // this auto-leave tear it down. Every other reason behaves as before.
+        if (_gameOver)
+            return;
+        LeaveToMenu($"Session ended ({reason}).");
+    }
 
     private void OnKicked(string reason) => LeaveToMenu($"Removed from session ({reason}).");
+
+    // ---- end-of-match (server GameOver) ----
+
+    private void OnGameOver(string winnerPlayerId, Dictionary<string, int> scores)
+    {
+        if (_gameOver || _leaving)
+            return;
+        _gameOver = true;
+
+        // Adopt the server's final tally so the frozen board and the leaderboard
+        // are exact even if the preceding ScoreUpdate was missed.
+        _state.Scores.Clear();
+        foreach (var (pid, pts) in scores)
+            _state.Scores[pid] = pts;
+        _view.Render(_state); // one last paint, then the sim freezes (_PhysicsProcess early-returns)
+
+        // The match is over: drop the pause overlay if it was open, then show the
+        // end screen on top of the frozen game.
+        if (_pauseMenu != null)
+            ClosePauseMenu();
+
+        _endGameMenu = GD.Load<PackedScene>("res://src/ui/menus/EndGameMenu.tscn")
+            .Instantiate<EndGameMenu>();
+        _endGameMenu.MainMenuRequested += OnEndGameMainMenu;
+        _endGameMenu.HostRequested += OnEndGameHost;
+        AddChild(_endGameMenu);
+        _endGameMenu.Populate(winnerPlayerId, scores);
+    }
+
+    // "Return to Main Menu": same clean teardown as any leave.
+    private void OnEndGameMainMenu() => LeaveToMenu("");
+
+    // "Host Game": tear the finished session down, then go set up a new one.
+    private void OnEndGameHost()
+    {
+        if (_leaving)
+            return;
+        _leaving = true;
+        var ctx = SessionContext.Instance;
+        ctx?.TeardownNet();
+        ctx?.ClearSession();
+        GetTree().ChangeSceneToFile("res://src/ui/menus/HostSetupMenu.tscn");
+    }
 
     private void OnClosed(int code, string reason) => LeaveToMenu(
         code == 1000 ? "Disconnected from session." : $"Connection closed ({code}).");
@@ -391,6 +450,11 @@ public partial class GameScene : Node2D
 
     public override void _PhysicsProcess(double delta)
     {
+        // Match over: the simulation is frozen behind the end screen. Step nothing,
+        // accept no input — the last paint in OnGameOver stays on screen.
+        if (_gameOver)
+            return;
+
         var dt = (float)delta;
 
         // Auto-hide the "a player is reconnecting…" hint once its window elapses.

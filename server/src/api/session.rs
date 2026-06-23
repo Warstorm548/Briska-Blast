@@ -55,6 +55,7 @@ pub async fn get_session(
     Ok(Json(SessionPollResponse {
         status: session.status,
         gamemode: session.gamemode,
+        win_condition: session.win_condition,
         player_count: session.player_count,
         current_player_count,
         joiner_player_ids,

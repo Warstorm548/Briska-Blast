@@ -126,6 +126,24 @@ All collisions use trigonometric angle reflection:
   desync). The server credits only players currently in the room. This is the
   hook for later server-side trajectory validation.
 
+## Win condition & game over
+
+- The host picks a **win condition** during setup (Advanced → Match Rules),
+  mirroring `gamemode`: currently **"Set Score"** — first player to a target score
+  (range 10–50, **default 11**) wins. It is required, range-validated server-side
+  (`invalid_win_condition`), broadcast to joiners (join/poll responses +
+  `start_signaling`), and seeded into the room's in-memory tally at `/start`.
+- When an accepted `ReportScore` first makes a player's tally reach the target, the
+  server broadcasts a dedicated **`GameOver { winner_player_id, scores }`** frame.
+  This is a **pure UI signal**: every client freezes its simulation and shows the
+  end-game leaderboard (all players, winner highlighted) with *Return to Main Menu*
+  / *Host Game*. Win detection latches, so a late/duplicate report can't re-fire it.
+- **Cleanup reuses the existing `SessionEnded` path** rather than a parallel one:
+  right after `GameOver`, the server calls the shared `end_session(code, "game_over")`
+  (Redis `DEL` + broadcast `SessionEnded`). The frames ride the same ordered
+  channel, so each client latches game-over before the `SessionEnded` arrives and
+  suppresses its usual auto-leave — the end screen owns navigation from then on.
+
 ## Serve
 
 - **First serve:** at game start, **only the host** spawns a ball resting on its

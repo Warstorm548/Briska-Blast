@@ -167,7 +167,7 @@ public partial class SessionLobby : Control
     /// <summary>Handle <c>start_signaling</c>: freeze the seating roster, bring up
     /// the WebRTC mesh, hand the live net to <see cref="SessionContext"/>, and enter
     /// the game scene. One-shot — guards against a duplicate frame.</summary>
-    private void OnStartSignaling(string gamemode, int playerCount, string[] peers)
+    private void OnStartSignaling(string gamemode, WinConditionDto winCondition, int playerCount, string[] peers)
     {
         // One-shot transition: guard against a duplicate start_signaling and
         // against firing while we're already leaving.
@@ -178,6 +178,11 @@ public partial class SessionLobby : Control
         ShowStatus("Starting…");
 
         var ctx = SessionContext.Instance;
+
+        // Adopt the authoritative win condition from the start frame (the host's
+        // own already matches; a joiner learns it here) so the game scene applies
+        // the same rule the server enforces.
+        ctx.ApplyWinCondition(winCondition);
 
         // Freeze the seating roster for Extended-mode portal layout. `peers` here
         // is the server's authoritative, self-inclusive start-time roster

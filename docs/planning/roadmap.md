@@ -167,6 +167,14 @@ Two findings from the review of the `signaling/ws.rs` → `ws/` module split (PR
 - **Trigger to start**: A WS reconnect-hardening / error-observability pass, OR user reports of mid-game players announced gone that correlate with Redis hiccups, OR clients receiving `session_gone` (4404) when the real cause was a transient backend fault.
 - **Related**: `server/src/signaling/ws/disconnect.rs::session_status_is_active`, `server/src/signaling/ws/identify.rs::peer_roster`, and their shared caller `server/src/signaling/ws/mod.rs::handle_socket`.
 
+### Server-side validation of score reports (anti-forgery for match-end)
+
+- **What**: Verify that a `ReportScore` reflects a legitimate goal before crediting it — server-side trajectory/state validation, or server-attested scoring — so a connected member can't forge score events to pad the tally or **trigger match-end** prematurely. Today `frame.rs::handle_client_frame` (the `ReportScore` arm) trusts any session member's report at face value; `SignalHub::record_score` only guards that the credited id is a *current room member*, not that the goal actually happened.
+- **Why deferred**: The "trust any member's score report" model is **pre-existing and documented** — the `// Trusted for now` comment in `frame.rs`, the `ReportScore` doc in `signaling/protocol.rs`, and the Scoring section of `extended-mode.md` all already name trajectory validation as the later hook. The win-condition work (PR #78) did **not** introduce the forge-ability; it only **raised the impact** (a forged report can now end the match, not just inflate the scoreboard). A naive `reporter == scorer` guard does **not** fit this mode — by design the *scored-on* player reports a *different* player as the scorer — so there is no minimal authz patch; the real fix is the substantial trajectory-validation feature.
+- **Source**: Flagged by **CodeRabbit** review on PR #78 (Set Score win condition).
+- **Trigger to start**: An anti-cheat / trajectory-validation pass, OR reports of matches ending prematurely that correlate with a misbehaving / modified client.
+- **Related**: `server/src/signaling/ws/frame.rs` (`ReportScore` arm), `server/src/signaling/mod.rs::record_score`, `server/src/signaling/protocol.rs` (`ReportScore` doc); overlaps with the **Score / replay / audit persistence** entry (an audit trail would feed validation).
+
 ### Game reserve fuction
 
 Ball-loss watchdog — if the single ball died with the crashed process, the rejoined match has no ball until a watchdog re-serves it. Designed in the plan: ball holder broadcasts a BallAlive heartbeat; lowest-id connected player serves after a gap. Fast-follow.
