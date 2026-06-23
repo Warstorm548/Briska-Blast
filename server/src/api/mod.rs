@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shared::types::gamemode::GameMode;
 use shared::types::session::SessionStatus;
+use shared::types::win_condition::WinCondition;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 
@@ -28,6 +29,13 @@ pub struct Session {
     pub code: String,
     pub host_player_id: String,
     pub gamemode: GameMode,
+    /// Match-end rule chosen by the host (set after host setup, like `gamemode`),
+    /// broadcast to joiners and enforced server-side. `#[serde(default)]` keeps a
+    /// session written before this field existed readable across a deploy (the
+    /// object round-trips cleanly through the lua `cjson` scripts — only empty
+    /// arrays hit the `seat_order`/`joiners` `{}` re-encode quirk, not objects).
+    #[serde(default)]
+    pub win_condition: WinCondition,
     pub player_count: u8,
     pub joiners: Vec<JoinerEntry>,
     pub status: SessionStatus,

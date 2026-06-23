@@ -97,12 +97,63 @@ theme_override_constants/margin_top = 48
 theme_override_constants/margin_right = 48
 theme_override_constants/margin_bottom = 48
 
-[node name="Placeholder" type="Label" parent="TabContainer/Advanced"]
+[node name="Content" type="VBoxContainer" parent="TabContainer/Advanced"]
 layout_mode = 2
-text = "Advanced options coming later."
-horizontal_alignment = 1
+theme_override_constants/separation = 24
+
+[node name="MatchRulesHeading" type="Label" parent="TabContainer/Advanced/Content"]
+layout_mode = 2
+text = "Match Rules"
+theme_override_colors/font_color = Color(0.5, 0.75, 1, 1)
+theme_override_font_sizes/font_size = 36
+
+[node name="MatchRulesSeparator" type="HSeparator" parent="TabContainer/Advanced/Content"]
+layout_mode = 2
+
+[node name="WinConditionRow" type="HBoxContainer" parent="TabContainer/Advanced/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="WinConditionLabel" type="Label" parent="TabContainer/Advanced/Content/WinConditionRow"]
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+size_flags_vertical = 1
+text = "Win Condition"
 vertical_alignment = 1
 theme_override_font_sizes/font_size = 28
+
+[node name="WinCondition" type="OptionButton" parent="TabContainer/Advanced/Content/WinConditionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 56)
+layout_mode = 2
+size_flags_vertical = 1
+
+[node name="WinScore" type="SpinBox" parent="TabContainer/Advanced/Content/WinConditionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 56)
+layout_mode = 2
+size_flags_vertical = 1
+min_value = 10.0
+max_value = 50.0
+value = 11.0
+
+[node name="WinDescription" type="Label" parent="TabContainer/Advanced/Content/WinConditionRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 1
+autowrap_mode = 2
+vertical_alignment = 1
+text = "First player to reach the target score wins the match."
+theme_override_colors/font_color = Color(0.7, 0.78, 0.9, 1)
+theme_override_font_sizes/font_size = 22
+
+[node name="Hint" type="Label" parent="TabContainer/Advanced/Content"]
+layout_mode = 2
+text = "More options will appear here as game modes are added."
+autowrap_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.62, 0.75, 1)
+theme_override_font_sizes/font_size = 20
 
 [node name="ReturnButton" type="Button" parent="."]
 unique_name_in_owner = true

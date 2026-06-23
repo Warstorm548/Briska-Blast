@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use shared::types::gamemode::GameMode;
+use shared::types::win_condition::WinCondition;
 
 /// Client → server signaling frames. JSON-tagged on `type`. Receive-only,
 /// so Deserialize but not Serialize. The server attests `from` on relays
@@ -120,8 +121,11 @@ pub enum ServerMsg {
     HostReconnected { player_id: String },
     /// Broadcast when the host calls /start. Clients begin WebRTC negotiation
     /// on receipt. `peers` is the authoritative roster at start time.
+    /// `win_condition` is the host-chosen match-end rule (mirrors `gamemode`), so
+    /// every joiner applies the same rule when the server signals game over.
     StartSignaling {
         gamemode: GameMode,
+        win_condition: WinCondition,
         player_count: u8,
         peers: Vec<String>,
     },
@@ -139,6 +143,17 @@ pub enum ServerMsg {
     },
     /// Sent to every member just before the WS closes when the session ends.
     SessionEnded { reason: &'static str },
+    /// Broadcast once the win condition is met: the match is over. A **pure UI
+    /// signal** — clients freeze the simulation and show the end-game leaderboard
+    /// with Return-to-Menu / Host-Game actions. It carries no cleanup semantics;
+    /// the server hands actual session teardown to the existing `SessionEnded`
+    /// path immediately after (see `frame.rs`). `winner_player_id` is the player
+    /// who reached the target; `scores` is the final authoritative tally so the
+    /// leaderboard is exact even if a `ScoreUpdate` was missed.
+    GameOver {
+        winner_player_id: String,
+        scores: HashMap<String, i64>,
+    },
     /// Sent to a single player when the server is removing them from the
     /// session (symmetric-NAT failure, duplicate identify, etc.).
     Kicked { reason: &'static str },

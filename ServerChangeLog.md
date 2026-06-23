@@ -5,6 +5,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.19.0] — 2026-06-22
+
+Adds the game's first **win condition** — "Set Score": first player to a
+host-chosen target (10–50, default 11) wins — enforced server-side, plus a new
+`GameOver` signaling frame that ends the match.
+
+### Added
+
+- **`win_condition` on a session.** `HostRequest` now requires a `WinCondition`
+  (shared crate, wire shape `{"kind":"set_score","target":N}`), set after host
+  setup like `gamemode` and echoed to joiners in `JoinResponse` /
+  `SessionPollResponse` / the `StartSignaling` broadcast. The `Session` carries it
+  (`#[serde(default)]` keeps pre-existing sessions readable across the deploy).
+- **`GameOver` server frame** — `{ winner_player_id, scores }`. Broadcast the
+  instant the authoritative tally first reaches the target. It is a pure UI signal
+  (clients freeze the sim and show the end-game leaderboard); the server hands the
+  actual session teardown to the existing `SessionEnded` path right after, via a
+  new shared `end_session(code, reason)` helper (DEL + `SessionEnded`), so there's
+  one cleanup mechanism rather than a parallel one. Win detection latches, so a
+  late/duplicate score report can't fire a second `GameOver`.
+
+### Changed
+
+- **`POST /host` validates the win condition (defense in depth).** Out-of-range
+  targets are refused with `400 invalid_win_condition` (`{min,max,requested}`),
+  mirroring `invalid_player_count`; a missing field is the usual deserialize `422`
+  naming it. The client UI caps the same range — this guards a tampered client.
+- `SignalHub` rooms now hold the win target (seeded at `/start`) and `record_score`
+  returns the winner alongside the tally.
+
+---
+
 ## [0.18.1] — 2026-06-22
 
 Fixes a **critical regression from 0.17.0**: joining a freshly created session

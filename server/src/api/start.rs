@@ -157,6 +157,15 @@ pub async fn start_session(
 
         match outcome {
             StartOutcome::Ok => {
+                // Seed the in-memory room with the win target so the scoring path
+                // can detect game over. Every member is WS-ready here (checked
+                // above), so the room exists. Lost on a server restart along with
+                // the in-memory tally, same as the score state itself.
+                state
+                    .signal_hub
+                    .set_win_target(&code, session.win_condition.target() as i64)
+                    .await;
+
                 // Best-effort broadcast. Clients that miss it can re-poll
                 // /session/:code to discover the new Starting status.
                 state
@@ -165,6 +174,7 @@ pub async fn start_session(
                         &code,
                         ServerMsg::StartSignaling {
                             gamemode: session.gamemode,
+                            win_condition: session.win_condition,
                             player_count: session.player_count,
                             peers: session_members,
                         },

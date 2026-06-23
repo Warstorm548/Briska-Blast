@@ -14,6 +14,7 @@ pub enum AppError {
     TooManyRequests,
     UpgradeRequired { component: String, minimum: String, current: String },
     InvalidPlayerCount { min: u8, max: u8, requested: u8 },
+    InvalidWinCondition { min: u8, max: u8, requested: u8 },
     SessionFull { capacity: u8 },
     SessionNotStartable { reason: &'static str },
     Internal(String),
@@ -41,6 +42,15 @@ impl IntoResponse for AppError {
                 StatusCode::BAD_REQUEST,
                 json!({
                     "error": "invalid_player_count",
+                    "min": min,
+                    "max": max,
+                    "requested": requested,
+                }),
+            ),
+            AppError::InvalidWinCondition { min, max, requested } => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid_win_condition",
                     "min": min,
                     "max": max,
                     "requested": requested,
@@ -90,6 +100,17 @@ mod tests {
         assert_eq!(body["min"], 2);
         assert_eq!(body["max"], 4);
         assert_eq!(body["requested"], 5);
+    }
+
+    #[tokio::test]
+    async fn invalid_win_condition_returns_400_with_bounds() {
+        let (status, body) =
+            body_json(AppError::InvalidWinCondition { min: 10, max: 50, requested: 9 }).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_win_condition");
+        assert_eq!(body["min"], 10);
+        assert_eq!(body["max"], 50);
+        assert_eq!(body["requested"], 9);
     }
 
     #[tokio::test]

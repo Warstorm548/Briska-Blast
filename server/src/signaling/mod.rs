@@ -54,6 +54,14 @@ struct Room {
     /// the senders map above). Cleared implicitly when the room is dropped
     /// once empty.
     scores: HashMap<String, i64>,
+    /// The score that ends the match (the win condition's target), seeded at
+    /// `/start` via [`SignalHub::set_win_target`]. 0 means "no limit / unset"
+    /// (win detection is skipped). In-memory like `scores`, so a server restart
+    /// drops it along with the live match.
+    win_target: i64,
+    /// Latches true the instant the target is first reached, so a late or
+    /// duplicate `ReportScore` after the win can't fire a second `GameOver`.
+    game_over: bool,
 }
 
 impl SignalHub {
@@ -123,16 +131,29 @@ impl SignalHub {
         }
     }
 
-    /// Credit `scoring_player_id` one point in `code`'s room and return the
-    /// full updated tally to broadcast. Returns `None` if the room doesn't
-    /// exist (e.g. the session already ended) so the caller skips the
-    /// broadcast. Idempotency is the caller's concern — each accepted
-    /// `ReportScore` is one point.
+    /// Seed (or reseed) the win target for `code`'s room — the score that ends the
+    /// match. Called by `/start`. A target of 0 disables win detection. Clears any
+    /// stale `game_over` latch. Creates the room if it somehow doesn't exist yet
+    /// (it normally does: every member identified before `/start`).
+    pub async fn set_win_target(&self, code: &str, target: i64) {
+        let mut rooms = self.rooms.write().await;
+        let room = rooms.entry(code.to_string()).or_default();
+        room.win_target = target;
+        room.game_over = false;
+    }
+
+    /// Credit `scoring_player_id` one point in `code`'s room and return the full
+    /// updated tally to broadcast, plus the winner's id iff this point first met
+    /// the win target. Returns `None` if the room doesn't exist (e.g. the session
+    /// already ended) so the caller skips the broadcast. Win detection latches via
+    /// `game_over`, so a late/duplicate report after the win updates the tally but
+    /// never re-announces a winner. Idempotency of a single report is the caller's
+    /// concern — each accepted `ReportScore` is one point.
     pub async fn record_score(
         &self,
         code: &str,
         scoring_player_id: &str,
-    ) -> Option<HashMap<String, i64>> {
+    ) -> Option<(HashMap<String, i64>, Option<String>)> {
         let mut rooms = self.rooms.write().await;
         let room = rooms.get_mut(code)?;
         // Only credit players currently in the room — don't let a report mint a
@@ -141,8 +162,18 @@ impl SignalHub {
         if !room.senders.contains_key(scoring_player_id) {
             return None;
         }
-        *room.scores.entry(scoring_player_id.to_string()).or_insert(0) += 1;
-        Some(room.scores.clone())
+        let new_total = {
+            let points = room.scores.entry(scoring_player_id.to_string()).or_insert(0);
+            *points += 1;
+            *points
+        };
+        let winner = if !room.game_over && room.win_target > 0 && new_total >= room.win_target {
+            room.game_over = true;
+            Some(scoring_player_id.to_string())
+        } else {
+            None
+        };
+        Some((room.scores.clone(), winner))
     }
 
     /// Snapshot of player_ids currently identified in the room. Used by
@@ -351,8 +382,10 @@ mod tests {
         let hub = SignalHub::default();
         let (_, _rx) = hub.join_room("ABC", "0000001").await;
 
-        let tally = hub.record_score("ABC", "0000001").await.unwrap();
+        let (tally, winner) = hub.record_score("ABC", "0000001").await.unwrap();
         assert_eq!(tally.get("0000001"), Some(&1));
+        // No win target set → never a winner.
+        assert!(winner.is_none());
     }
 
     #[tokio::test]
@@ -363,7 +396,7 @@ mod tests {
 
         hub.record_score("ABC", "0000001").await.unwrap();
         hub.record_score("ABC", "0000002").await.unwrap();
-        let tally = hub.record_score("ABC", "0000001").await.unwrap();
+        let (tally, _) = hub.record_score("ABC", "0000001").await.unwrap();
 
         assert_eq!(tally.get("0000001"), Some(&2));
         assert_eq!(tally.get("0000002"), Some(&1));
@@ -375,18 +408,45 @@ mod tests {
         let (_, _rx) = hub.join_room("ABC", "0000001").await;
         // 0000002 never joined — its report mints no tally entry.
         assert!(hub.record_score("ABC", "0000002").await.is_none());
-        assert!(hub
-            .record_score("ABC", "0000001")
-            .await
-            .unwrap()
-            .get("0000002")
-            .is_none());
+        let (tally, _) = hub.record_score("ABC", "0000001").await.unwrap();
+        assert!(tally.get("0000002").is_none());
     }
 
     #[tokio::test]
     async fn record_score_for_unknown_room_returns_none() {
         let hub = SignalHub::default();
         assert!(hub.record_score("NOPE", "0000001").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn record_score_announces_winner_when_target_reached() {
+        let hub = SignalHub::default();
+        let (_, _rx) = hub.join_room("ABC", "0000001").await;
+        hub.set_win_target("ABC", 2).await;
+
+        // First point: below target, no winner.
+        let (_, winner) = hub.record_score("ABC", "0000001").await.unwrap();
+        assert!(winner.is_none());
+
+        // Second point: meets target → winner announced once.
+        let (tally, winner) = hub.record_score("ABC", "0000001").await.unwrap();
+        assert_eq!(tally.get("0000001"), Some(&2));
+        assert_eq!(winner.as_deref(), Some("0000001"));
+    }
+
+    #[tokio::test]
+    async fn record_score_announces_winner_only_once() {
+        let hub = SignalHub::default();
+        let (_, _rx) = hub.join_room("ABC", "0000001").await;
+        hub.set_win_target("ABC", 1).await;
+
+        let (_, winner) = hub.record_score("ABC", "0000001").await.unwrap();
+        assert_eq!(winner.as_deref(), Some("0000001"));
+
+        // A late report after game over still tallies but never re-announces.
+        let (tally, winner) = hub.record_score("ABC", "0000001").await.unwrap();
+        assert_eq!(tally.get("0000001"), Some(&2));
+        assert!(winner.is_none());
     }
 
     #[tokio::test]

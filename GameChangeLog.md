@@ -9,9 +9,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [0.15.1] — 2026-06-22
+## [0.16.0] — 2026-06-22
 
-Fixes a regression from **0.15.0**: the new `SingleInstance` guard ran in the
+Adds the game's first **win condition** — "Set Score": first player to a
+host-chosen target (10–50, default 11) wins — with an end-game leaderboard screen
+and a new advanced-settings layout in Host Setup.
+
+### Added
+
+- **Win condition "Set Score".** The match ends the instant a player reaches the
+  target. Configured in Host Setup's **Advanced → Match Rules** tab: a segment
+  heading, a `Win Condition` label beside its dropdown, an inline score input
+  (10–50) shown only for score-based kinds, and a live description that updates with
+  the selection/value. Defaults to Set Score / 11, so a host who never opens the tab
+  still sends a valid rule. Carried through host/join/poll and the `start_signaling`
+  frame so every player applies the rule the server enforces.
+- **End-game screen.** On the server's new `GameOver` frame the simulation freezes
+  (no background ticking) and an overlay — styled like the pause menu, with the
+  frozen game dimmed behind it — shows the winner, a **leaderboard of every player**
+  in the session (0-point players included, winner highlighted), and **Return to
+  Main Menu** / **Host Game** buttons.
+
+### Changed
+
+- The game scene ignores the post-win `SessionEnded` teardown while the end screen
+  is up, so the leaderboard owns navigation (the server reuses `SessionEnded` for
+  cleanup rather than a parallel path).
+- Out-of-range host score input is refused by the server (`invalid_win_condition`);
+  the Host Setup screen surfaces it as "Score must be 10–50."
 editor too, so the second of two editor instances detected the first's banner,
 flagged itself a duplicate, and quit before it could join — breaking the
 documented two-editor-instance host/join test flow (`SessionContext`'s

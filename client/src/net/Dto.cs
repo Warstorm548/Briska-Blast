@@ -34,11 +34,30 @@ public sealed record RegisterResponse(
     string Username,
     bool DevFlag);
 
+/// <summary>
+/// Mirror of the Rust <c>WinCondition</c> enum (internally tagged on <c>kind</c>).
+/// Serializes flat as <c>{"kind":"set_score","target":N}</c> under the snake_case
+/// policy. Range constants are hand-mirrored from
+/// <c>shared/src/types/win_condition.rs</c> (same single-source convention as the
+/// username cap) so the UI input cap and the server's check can't drift.
+/// </summary>
+public sealed record WinConditionDto(string Kind, int Target)
+{
+    public const string SetScoreKind = "set_score";
+    public const int ScoreMin = 10;
+    public const int ScoreMax = 50;
+    public const int ScoreDefault = 11;
+
+    public static WinConditionDto SetScore(int target) => new(SetScoreKind, target);
+    public static WinConditionDto Default => SetScore(ScoreDefault);
+}
+
 public sealed record HostRequest(
     string PlayerId,
     string SecretToken,
     string Gamemode,
-    int PlayerCount);
+    int PlayerCount,
+    WinConditionDto WinCondition);
 
 public sealed record HostResponse(string SessionCode);
 
@@ -51,6 +70,7 @@ public sealed record JoinedPeer(string PlayerId);
 
 public sealed record JoinResponse(
     string Gamemode,
+    WinConditionDto WinCondition,
     int PlayerCount,
     int CurrentPlayerCount,
     List<JoinedPeer> Joiners);
@@ -58,6 +78,7 @@ public sealed record JoinResponse(
 public sealed record SessionPollResponse(
     string Status,
     string Gamemode,
+    WinConditionDto WinCondition,
     int PlayerCount,
     int CurrentPlayerCount,
     List<string> JoinerPlayerIds);

@@ -40,6 +40,12 @@ pub async fn host(
 
     gamemode::validate_player_count(body.gamemode, body.player_count)?;
 
+    // Defense in depth: the client UI caps the score input to the same range, but
+    // a tampered client could send anything — refuse out-of-range here too.
+    body.win_condition
+        .validate()
+        .map_err(|(min, max, requested)| AppError::InvalidWinCondition { min, max, requested })?;
+
     let mut conn = state
         .redis
         .get()
@@ -63,6 +69,7 @@ pub async fn host(
         code: session_code.clone(),
         host_player_id: body.player_id.clone(),
         gamemode: body.gamemode,
+        win_condition: body.win_condition,
         player_count: body.player_count,
         joiners: Vec::new(),
         status: SessionStatus::Waiting,

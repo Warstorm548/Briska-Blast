@@ -4,8 +4,36 @@
 //! Used by the disconnect cleanup in [`super`] and [`super::disconnect`].
 
 use chrono::Utc;
+use deadpool_redis::redis::AsyncCommands;
 
 use crate::{signaling::protocol::ServerMsg, state::AppState};
+
+/// The single, shared "this session is over" teardown: delete the session from
+/// Redis (idempotent) and broadcast `SessionEnded { reason }` to the room. The
+/// win path calls this with `reason = "game_over"` right after its `GameOver` UI
+/// signal — it performs the same DEL-then-`SessionEnded` shape the host-loss and
+/// last-player-left branches do below, so the win path reuses the one cleanup
+/// concept rather than introducing a parallel teardown. A later WS-close then
+/// finds the session gone and no-ops, so no spurious host promotion fires.
+///
+/// Unlike `end_session_if_waiting` / `remove_joiner_on_leave`, this needs no
+/// atomic status-checked Lua: the match is already active and decided over, so
+/// there's no concurrent `/start` transition to race.
+pub(super) async fn end_session(state: &AppState, code: &str, reason: &'static str) {
+    match state.redis.get().await {
+        Ok(mut conn) => {
+            if let Err(e) = conn.del::<_, ()>(format!("session:{}", code)).await {
+                tracing::warn!("ws: end_session DEL failed for {}: {}", code, e);
+            }
+        }
+        Err(e) => tracing::warn!("ws: end_session could not reach Redis for {}: {}", code, e),
+    }
+    state
+        .signal_hub
+        .broadcast(code, ServerMsg::SessionEnded { reason }, None)
+        .await;
+    tracing::info!("ws: session {} ended ({})", code, reason);
+}
 
 /// What the host's disconnect cleanup found, so the caller knows whether to
 /// promote. `end_session_if_waiting` both *acts* (ends the lobby if Waiting)

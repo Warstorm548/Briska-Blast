@@ -41,10 +41,11 @@ public sealed class ServerApi
             HttpMethod.Post, "register", new RegisterRequest(username, null, null));
 
     public Task<ApiResult<HostResponse>> HostAsync(
-        string playerId, string secretToken, string gamemode, int playerCount) =>
+        string playerId, string secretToken, string gamemode, int playerCount,
+        WinConditionDto winCondition) =>
         SendJson<HostRequest, HostResponse>(
             HttpMethod.Post, "host",
-            new HostRequest(playerId, secretToken, gamemode, playerCount));
+            new HostRequest(playerId, secretToken, gamemode, playerCount, winCondition));
 
     public Task<ApiResult<JoinResponse>> JoinAsync(
         string code, string playerId, string secretToken) =>

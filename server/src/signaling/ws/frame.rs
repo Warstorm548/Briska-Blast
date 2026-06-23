@@ -87,11 +87,27 @@ pub(super) async fn handle_client_frame(
             // validation is the documented later hook. Broadcast to
             // everyone (including the reporter) so all clients converge on
             // the server's authoritative tally rather than a local guess.
-            if let Some(scores) = state.signal_hub.record_score(code, &scoring_player_id).await {
+            if let Some((scores, winner)) =
+                state.signal_hub.record_score(code, &scoring_player_id).await
+            {
                 state
                     .signal_hub
-                    .broadcast(code, ServerMsg::ScoreUpdate { scores }, None)
+                    .broadcast(code, ServerMsg::ScoreUpdate { scores: scores.clone() }, None)
                     .await;
+
+                // Win condition met. GameOver is a pure UI signal (freeze + show
+                // the leaderboard); send it FIRST so every client latches its
+                // game-over state, THEN hand the actual session teardown to the
+                // shared SessionEnded path. Same per-client ordered channel, so
+                // GameOver always lands before the SessionEnded auto-leave (which
+                // the client suppresses once it's in game-over).
+                if let Some(winner_player_id) = winner {
+                    state
+                        .signal_hub
+                        .broadcast(code, ServerMsg::GameOver { winner_player_id, scores }, None)
+                        .await;
+                    super::session_ops::end_session(state, code, "game_over").await;
+                }
             }
         }
         ClientMsg::TimeSync { client_send_ms } => {
