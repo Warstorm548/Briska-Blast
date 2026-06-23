@@ -87,6 +87,13 @@ pub(super) async fn handle_client_frame(
             // validation is the documented later hook. Broadcast to
             // everyone (including the reporter) so all clients converge on
             // the server's authoritative tally rather than a local guess.
+            //
+            // CodeRabbit (PR #78) flagged that the win condition now lets a
+            // forged report *end* the match, not just pad the score. Deferred:
+            // this mode has the scored-on player report a *different* scorer, so
+            // there's no minimal authz check — the fix is the trajectory
+            // validation tracked in docs/planning/roadmap.md ("Server-side
+            // validation of score reports").
             if let Some((scores, winner)) =
                 state.signal_hub.record_score(code, &scoring_player_id).await
             {
