@@ -49,9 +49,9 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Dev branch and release channel rules | [`docs/dev/devtools.md`](docs/dev/devtools.md) |
 | Release tag namespaces (server / launcher / game) | [`docs/dev/release-tagging.md`](docs/dev/release-tagging.md) |
 | Shared crate change history | [`SharedChangeLog.md`](SharedChangeLog.md) |
-| Server change history | [`ServerChangeLog.md`](../ServerChangeLog.md) |
+| Server change history | [`ServerChangeLog.md`](ServerChangeLog.md) |
 | Game change history | [`GameChangeLog.md`](GameChangeLog.md) |
-| Launcher change history | [`LauncherChangeLog.md`](../LauncherChangeLog.md) |
+| Launcher change history | [`LauncherChangeLog.md`](LauncherChangeLog.md) |
 | Deferred work and post-deployment follow-ups | [`docs/planning/roadmap.md`](docs/planning/roadmap.md) |
 | Known bugs in current builds | [`docs/planning/known-bugs.md`](docs/planning/known-bugs.md) |
 | Multiplayer client staged build order (lobby → WebRTC → gameplay) | [`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md) |

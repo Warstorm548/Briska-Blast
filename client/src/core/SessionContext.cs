@@ -226,11 +226,16 @@ public partial class SessionContext : Node
     }
 
     /// <summary>Adopt a win condition by its parsed fields (used by the
-    /// <c>start_signaling</c> frame). An empty kind falls back to the default.</summary>
+    /// <c>start_signaling</c> frame). An empty kind falls back to the default, and a
+    /// target outside the shared bounds (a server predating the field, or an
+    /// out-of-range value) falls back to the default rather than displaying a
+    /// nonsense score.</summary>
     public void ApplyWinCondition(string kind, int target)
     {
         WinConditionKind = string.IsNullOrEmpty(kind) ? WinConditionDto.SetScoreKind : kind;
-        WinScoreTarget = target > 0 ? target : WinConditionDto.ScoreDefault;
+        WinScoreTarget = target >= WinConditionDto.ScoreMin && target <= WinConditionDto.ScoreMax
+            ? target
+            : WinConditionDto.ScoreDefault;
     }
 
     /// <summary>Reset all per-session state (code, mode, roster, seating, usernames,
