@@ -164,8 +164,15 @@ jobs:
       # what the editor does locally.
       - name: Generate solution file (Godot export plugin requires .sln)
         run: |
-          dotnet new sln --name BriskaBlast
-          dotnet sln BriskaBlast.sln add BriskaBlast.csproj
+          # Godot looks for <assembly_name>.sln (get_csharp_project_name() →
+          # dotnet/project/assembly_name; see modules/mono/.../ExportPlugin.cs
+          # and path_utils.cpp). Since assembly_name is now per channel, the
+          # solution MUST be named to match (CACHE_BASENAME) — a BriskaBlast.sln
+          # against assembly_name=BriskaBlastDev makes the export report "no
+          # solution file" and ship a C#-less .pck. The csproj filename stays
+          # BriskaBlast.csproj; only the .sln name tracks the channel.
+          dotnet new sln --name "$CACHE_BASENAME"
+          dotnet sln "$CACHE_BASENAME.sln" add BriskaBlast.csproj
         working-directory: client
 
       - name: dotnet restore (warm NuGet cache)
