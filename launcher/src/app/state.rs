@@ -67,8 +67,13 @@ pub struct AppState {
     /// Channel whose Verify task is currently running. The deep sha256 pass can
     /// take seconds on the multi-hundred-MB `.pck`, so the status cell shows
     /// "Verifying…" and the Verify button is disabled meanwhile. `None` when
-    /// idle. Not persisted.
+    /// idle. Not persisted. Treated as a **global** single-flight: any active
+    /// verify disables Verify/Repair/Uninstall across all channels.
     pub verify_in_progress: Option<Channel>,
+    /// Channel whose Reset Runtime Cache delete is currently running. Disables
+    /// the confirm-prompt button so a double-click can't spawn overlapping
+    /// `remove_dir_all` tasks against the same folder. `None` when idle.
+    pub reset_cache_in_progress: Option<Channel>,
     /// Set while a per-channel uninstall is running. Prevents a fast
     /// double-press of Confirm from spawning two destructive tasks
     /// against the same install dir.
@@ -168,6 +173,7 @@ impl Default for AppState {
             download_progress: None,
             verify_results: BTreeMap::new(),
             verify_in_progress: None,
+            reset_cache_in_progress: None,
             uninstall_in_progress: None,
             firewall_status: BTreeMap::new(),
             firewall_prompt_dismissed: HashSet::new(),

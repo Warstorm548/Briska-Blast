@@ -42,6 +42,10 @@ pub struct InstalledManifest {
 
 pub const FILES_MANIFEST_FILENAME: &str = "files.json";
 
+/// The only `files.json` schema version this launcher understands. CI writes
+/// `"schema": 1`; `files_manifest` rejects anything else.
+pub const FILES_MANIFEST_SCHEMA: u32 = 1;
+
 /// Build-time per-file integrity manifest, generated in CI and shipped *inside*
 /// the release archive as `files.json`. Read by `verify_install` to confirm
 /// every shipped file is present, the right size, and (deep pass) the right
@@ -545,12 +549,35 @@ pub async fn installed_manifest(install_dir: &Path) -> Result<Option<InstalledMa
 pub async fn files_manifest(install_dir: &Path) -> Result<Option<FilesManifest>, String> {
     let path = install_dir.join(FILES_MANIFEST_FILENAME);
     match tokio::fs::read_to_string(&path).await {
-        Ok(s) => serde_json::from_str(&s)
-            .map(Some)
-            .map_err(|e| format!("files manifest parse: {e}")),
+        Ok(s) => {
+            let m: FilesManifest =
+                serde_json::from_str(&s).map_err(|e| format!("files manifest parse: {e}"))?;
+            // Compatibility gate: refuse a manifest written by a future,
+            // incompatible schema rather than silently trusting fields whose
+            // meaning may have changed.
+            if m.schema != FILES_MANIFEST_SCHEMA {
+                return Err(format!(
+                    "files manifest schema {} is unsupported (this launcher understands {})",
+                    m.schema, FILES_MANIFEST_SCHEMA
+                ));
+            }
+            Ok(Some(m))
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("files manifest read: {e}")),
     }
+}
+
+/// True only for a strictly-relative path with no root, drive prefix, or `..`
+/// components — so joining it onto the install dir can never escape the tree.
+/// Guards `verify_files` against a tampered `files.json` pointing it at files
+/// outside the install (e.g. `../../etc/passwd` or `/etc/shadow`).
+fn is_safe_relpath(rel: &str) -> bool {
+    use std::path::Component;
+    !rel.is_empty()
+        && Path::new(rel)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)))
 }
 
 /// Subdirectory of the install_root (the parent of the install_dir) where
@@ -637,6 +664,12 @@ async fn verify_files(install_dir: &Path, files: &FilesManifest, version: &str) 
     // Pass 1: presence + size.
     let mut missing: Vec<String> = Vec::new();
     for (rel, entry) in &files.files {
+        // Reject unsafe entries (absolute / `..` / drive-prefix) before touching
+        // the filesystem — a tampered manifest must not escape the install tree.
+        if !is_safe_relpath(rel) {
+            missing.push(rel.clone());
+            continue;
+        }
         let path = install_dir.join(rel);
         let ok = matches!(tokio::fs::metadata(&path).await, Ok(m) if m.len() == entry.size);
         if !ok {
@@ -658,6 +691,11 @@ async fn verify_files(install_dir: &Path, files: &FilesManifest, version: &str) 
     let corrupted = match tokio::task::spawn_blocking(move || {
         let mut bad: Vec<String> = Vec::new();
         for (rel, entry) in &files.files {
+            // Same containment guard as pass 1, applied before hashing.
+            if !is_safe_relpath(rel) {
+                bad.push(rel.clone());
+                continue;
+            }
             let hashed = hash_file_blocking(&dir.join(rel));
             let ok = matches!(hashed, Ok(ref hex) if hex.eq_ignore_ascii_case(&entry.sha256));
             if !ok {
@@ -971,5 +1009,65 @@ mod tests {
             verify_install(dir.to_path_buf()).await,
             VerifyOutcome::ExecutableMissing { .. }
         ));
+    }
+
+    /// A files.json from a future, incompatible schema is rejected rather than
+    /// trusted (compatibility gate).
+    #[tokio::test]
+    async fn files_manifest_rejects_unknown_schema() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(FILES_MANIFEST_FILENAME),
+            br#"{"schema": 2, "files": {}}"#,
+        )
+        .unwrap();
+        assert!(files_manifest(tmp.path()).await.is_err());
+    }
+
+    /// A manifest entry with a traversal path must be rejected (reported as a
+    /// failure), never followed outside the install dir.
+    #[tokio::test]
+    async fn verify_rejects_path_traversal_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("BriskaBlast.x86_64"), b"bin").unwrap();
+        let installed = InstalledManifest {
+            version: "0.17.0".into(),
+            channel: "dev".into(),
+            installed_at: "2026-06-25T00:00:00Z".into(),
+            executable: "BriskaBlast.x86_64".into(),
+        };
+        std::fs::write(
+            dir.join(MANIFEST_FILENAME),
+            serde_json::to_vec(&installed).unwrap(),
+        )
+        .unwrap();
+        let mut files = BTreeMap::new();
+        files.insert(
+            "../escape.txt".to_string(),
+            FileEntry {
+                size: 1,
+                sha256: "00".into(),
+            },
+        );
+        std::fs::write(
+            dir.join(FILES_MANIFEST_FILENAME),
+            serde_json::to_vec(&FilesManifest { schema: 1, files }).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_install(dir.to_path_buf()).await,
+            VerifyOutcome::FilesMissing { count: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn is_safe_relpath_rejects_escapes() {
+        assert!(is_safe_relpath("a/b/c.dll"));
+        assert!(is_safe_relpath("BriskaBlast.pck"));
+        assert!(!is_safe_relpath("../escape"));
+        assert!(!is_safe_relpath("a/../../b"));
+        assert!(!is_safe_relpath("/abs/path"));
+        assert!(!is_safe_relpath(""));
     }
 }

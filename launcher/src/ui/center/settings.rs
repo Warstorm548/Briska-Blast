@@ -94,9 +94,12 @@ fn channels_section(state: &AppState) -> Element<'_, Message> {
     // Buttons are disabled when no install is on record for the channel,
     // or when an install / play action is already in flight. Stage 7
     // change — Stage 3-6's settings tab unconditionally enabled them.
+    // An in-flight verify (global single-flight, possibly multi-second) counts
+    // as busy too, so Verify/Repair/Uninstall are all disabled while one runs.
     let busy = state.install_in_progress.is_some()
         || state.uninstall_in_progress.is_some()
-        || state.game_running;
+        || state.game_running
+        || state.verify_in_progress.is_some();
     for c in &state.visible_channels {
         let c = *c;
         let installed = state
@@ -106,9 +109,6 @@ fn channels_section(state: &AppState) -> Element<'_, Message> {
             .map(|creds| creds.install_location.is_some() && creds.installed_version.is_some())
             .unwrap_or(false);
         let actionable = installed && !busy;
-        // Verify is additionally disabled while its own (possibly multi-second)
-        // hash pass is running for this channel.
-        let verify_actionable = actionable && state.verify_in_progress != Some(c);
         col = col.push(
             row![
                 bordered_cell(c.label(), 120.0),
@@ -116,7 +116,7 @@ fn channels_section(state: &AppState) -> Element<'_, Message> {
                 cell_button_maybe(
                     "Verify File Integrity",
                     Message::VerifyChannel(c),
-                    verify_actionable,
+                    actionable,
                 ),
                 cell_button_maybe("Repair", Message::RepairChannel(c), actionable),
                 verify_status_cell(state, c),

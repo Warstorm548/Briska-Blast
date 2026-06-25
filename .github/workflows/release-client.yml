@@ -351,24 +351,36 @@ jobs:
               print(f"{base}/files.json: {len(files)} files")
           PY
 
+      # The three packaging steps read CHANNEL/VERSION from `env:` (mapped from
+      # the step outputs) rather than interpolating ${{ … }} directly into the
+      # shell, so the values are passed as data, not spliced into the script.
       - name: Package Linux tar.gz
+        env:
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           cd client/export/linux
-          tar czf "../../../briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}-linux.tar.gz" .
+          tar czf "../../../briskablast-client-${CHANNEL}-${VERSION}-linux.tar.gz" .
 
       - name: Package Windows zip
+        env:
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           cd client/export/windows
-          zip -qr "../../../briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}-windows.zip" .
+          zip -qr "../../../briskablast-client-${CHANNEL}-${VERSION}-windows.zip" .
 
       - name: Package macOS tar.gz
+        env:
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           # tar (not zip) preserves the .app bundle's symlinks + exec bits.
           # files.json sits BESIDE the .app (not inside) so it doesn't break the
           # ad-hoc signature; the launcher reads it from the extracted install dir.
           cd client/export/macos
           tar czf \
-            "../../../briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}-macos.tar.gz" \
+            "../../../briskablast-client-${CHANNEL}-${VERSION}-macos.tar.gz" \
             BriskaBlast.app files.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

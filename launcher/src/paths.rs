@@ -166,13 +166,17 @@ pub async fn clear_runtime_cache(channel: Channel) -> Result<(), String> {
             dir.display()
         ));
     }
+    // Require an EXACT match against this channel's expected folder name (not
+    // just a `data_BriskaBlast` prefix), so only the intended runtime cache can
+    // ever be removed.
+    let expected = format!("data_{}_windows_x86_64", channel.cache_basename());
     let name_ok = dir
         .file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|n| n.starts_with("data_BriskaBlast"));
+        .is_some_and(|n| n == expected);
     if !name_ok {
         return Err(format!(
-            "refusing to delete {} — unexpected folder name",
+            "refusing to delete {} — does not match expected {expected}",
             dir.display()
         ));
     }

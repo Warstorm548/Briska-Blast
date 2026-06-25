@@ -16,6 +16,7 @@ pub(crate) fn uninstall_channel(state: &mut AppState, channel: Channel) -> Task<
     if state.install_in_progress.is_some()
         || state.uninstall_in_progress.is_some()
         || state.game_running
+        || state.verify_in_progress.is_some()
     {
         tracing::debug!(?channel, "UninstallChannel refused — busy");
         return Task::none();
@@ -135,8 +136,10 @@ pub(crate) fn verify_channel(state: &mut AppState, channel: Channel) -> Task<Mes
         tracing::warn!("VerifyChannel for Dev without dev_flag — refusing");
         return Task::none();
     }
-    // Don't stack a second verify on a channel that's already hashing.
-    if state.verify_in_progress == Some(channel) {
+    // Global single-flight: only one verify at a time (any channel). A second
+    // verify can't be allowed to overwrite another's `verify_in_progress` slot
+    // or have a late completion clear the wrong row's "Verifying…" state.
+    if state.verify_in_progress.is_some() {
         return Task::none();
     }
     let Some(creds) = state.identity.channels.get(&channel) else {
@@ -177,6 +180,7 @@ pub(crate) fn repair_channel(state: &mut AppState, channel: Channel) -> Task<Mes
     if state.install_in_progress.is_some()
         || state.uninstall_in_progress.is_some()
         || state.game_running
+        || state.verify_in_progress.is_some()
     {
         tracing::debug!(?channel, "RepairChannel refused — busy");
         return Task::none();
@@ -235,6 +239,12 @@ pub(crate) fn reset_runtime_cache_confirmed(state: &mut AppState) -> Task<Messag
         }
         return Task::none();
     }
+    // Block a double-press: a second delete racing the first against the same
+    // folder can spuriously fail. Cleared by RuntimeCacheResetComplete.
+    if state.reset_cache_in_progress.is_some() {
+        return Task::none();
+    }
+    state.reset_cache_in_progress = Some(channel);
     tracing::info!(?channel, "resetting runtime cache");
     Task::perform(crate::paths::clear_runtime_cache(channel), move |result| {
         Message::RuntimeCacheResetComplete { channel, result }
@@ -248,6 +258,9 @@ pub(crate) fn reset_runtime_cache_complete(
     channel: Channel,
     result: Result<(), String>,
 ) -> Task<Message> {
+    if state.reset_cache_in_progress == Some(channel) {
+        state.reset_cache_in_progress = None;
+    }
     match result {
         Ok(()) => {
             tracing::info!(?channel, "runtime cache reset — game will rebuild it on next launch");

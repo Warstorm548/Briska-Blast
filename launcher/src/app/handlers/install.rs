@@ -393,6 +393,9 @@ fn apply_install_success(
     state.firewall_status.remove(&channel);
     // Version changed → a stale "Update available" verdict would mislead.
     state.channel_update_status.remove(&channel);
+    // The files on disk just changed, so any cached verify verdict is stale —
+    // drop it so Settings can't show an old "✓ Verified" for the new install.
+    state.verify_results.remove(&channel);
 }
 
 /// User confirmed Repair — reinstall the *installed* version (fetch-by-tag) via
@@ -412,10 +415,13 @@ pub(crate) fn repair_confirmed(state: &mut AppState) -> Task<Message> {
         return Task::none();
     }
     // Re-check the busy gates (defence-in-depth against a press that raced a
-    // state change after the prompt opened).
+    // state change after the prompt opened). An in-flight verify is included:
+    // it hashes the install dir, which the reinstall's staging-swap would rename
+    // out from under it, racing and poisoning `verify_results`.
     if state.install_in_progress.is_some()
         || state.uninstall_in_progress.is_some()
         || state.game_running
+        || state.verify_in_progress.is_some()
     {
         return Task::none();
     }
@@ -439,6 +445,18 @@ pub(crate) fn repair_confirmed(state: &mut AppState) -> Task<Message> {
             return Task::none();
         }
     };
+    // Re-validate the (possibly hand-edited) install_location the same way a
+    // fresh install does, so stale/tampered identity.json can't redirect the
+    // reinstall's destructive staging-swap into the launcher's own folder.
+    if crate::paths::install_location_collides(&install_root, channel.dir_name()) {
+        tracing::warn!(
+            ?channel,
+            root = %install_root.display(),
+            "refusing repair — install location collides with launcher dir"
+        );
+        set_repair_error(state, channel, INVALID_INSTALL_LOCATION_MSG);
+        return Task::none();
+    }
     let target = match semver::Version::parse(&version) {
         Ok(v) => v,
         Err(e) => {
