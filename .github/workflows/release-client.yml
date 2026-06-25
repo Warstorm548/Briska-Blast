@@ -143,8 +143,18 @@ jobs:
             *) echo "::error::unknown RELEASE_CHANNEL '$RELEASE_CHANNEL'"; exit 1 ;;
           esac
           sed -i "s|^project/assembly_name=.*|project/assembly_name=\"$NAME\"|" client/project.godot
+          # Godot derives BOTH <assembly_name>.sln and <assembly_name>.csproj
+          # from assembly_name (it runs `dotnet publish <name>.csproj`). Rename
+          # the project file to match so the publish finds it; the filename also
+          # becomes the default AssemblyName, so the output DLL and the
+          # data_<name>_<platform> runtime cache folder all align. No-op for
+          # stable (already BriskaBlast).
+          if [ "$NAME" != "BriskaBlast" ]; then
+            mv "client/BriskaBlast.csproj" "client/$NAME.csproj"
+          fi
           echo "CACHE_BASENAME=$NAME" >> "$GITHUB_ENV"
           echo "assembly_name now:"; grep '^project/assembly_name' client/project.godot
+          echo "project file:"; ls client/*.csproj
 
       # Godot's GodotTools.Export.ExportPlugin hard-requires `<assembly>.sln`
       # next to the project root. On a desktop, the editor auto-creates it
@@ -172,7 +182,7 @@ jobs:
           # solution file" and ship a C#-less .pck. The csproj filename stays
           # BriskaBlast.csproj; only the .sln name tracks the channel.
           dotnet new sln --name "$CACHE_BASENAME"
-          dotnet sln "$CACHE_BASENAME.sln" add BriskaBlast.csproj
+          dotnet sln "$CACHE_BASENAME.sln" add "$CACHE_BASENAME.csproj"
         working-directory: client
 
       - name: dotnet restore (warm NuGet cache)
