@@ -11,6 +11,30 @@ resurfaces unintentionally later.
 
 ---
 
+## Game closes before the main menu (missing `.NET` runtime DLLs / AV quarantine)
+
+- **Status:** open — **mitigation + triage shipped** in game/launcher 0.17.0
+  (Reset Runtime Cache); the durable fix (code-signing the Windows build) is still
+  pending. Confirmed via a desktop-vs-laptop folder diff 2026-06-23.
+- **Affects:** Windows, some machines only (aggressive antivirus). Not all installs.
+- **Symptom:** the game exits before the main menu; logs show "Failed to load hostfxr".
+- **Suspected cause:** the self-contained `.NET` runtime extracts to
+  `%LOCALAPPDATA%\data_<name>_windows_x86_64` on first launch. On affected machines the
+  **native** runtime DLLs (`hostfxr` / `coreclr` / `clrjit`) are absent while the managed
+  ones are present — the signature of **antivirus quarantining the unsigned extracted
+  binaries**. GPU/resolution/single-instance/missing-system-`.NET` were all ruled out.
+- **Mitigation (0.17.0):** Settings → Game Channel Management → **Reset Runtime Cache**
+  (Windows) deletes the cache so the game re-extracts a clean copy on next launch. If the
+  AV re-quarantines, the user must add an **AV exclusion** for the game folder themselves
+  (the launcher never touches AV). See
+  [`runtime-cache-and-integrity.md`](../architecture/runtime-cache-and-integrity.md).
+- **Fix direction (durable):** **code-sign the Windows build** so AV stops quarantining
+  the extracted binaries in the first place. Reset + exclusion only paper over it per-machine.
+- **Workaround:** restore the quarantined files (or add the AV exclusion) and use Reset
+  Runtime Cache; or run on a machine without aggressive AV.
+
+---
+
 ## Ball appears partway down the screen on non-16:9 displays
 
 - **Status:** ✅ resolved 2026-05-29 (game v0.7.1). Fixed with **percentage/relative

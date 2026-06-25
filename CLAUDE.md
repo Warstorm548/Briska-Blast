@@ -44,6 +44,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Server endpoint design and WebRTC signaling flow | [`docs/architecture/protocol.md`](docs/architecture/protocol.md) |
 | Full networking, identity, and game design | [`docs/architecture/game-architecture-summary.md`](docs/architecture/game-architecture-summary.md) |
 | Extended game mode — rules, ball handoff, scoring | [`docs/architecture/extended-mode.md`](docs/architecture/extended-mode.md) |
+| File integrity, repair & per-channel runtime cache (Verify/Repair/Reset, `files.json`, the Godot assembly-rename gotcha) | [`docs/architecture/runtime-cache-and-integrity.md`](docs/architecture/runtime-cache-and-integrity.md) |
 | Launcher self-update and version enforcement | [`docs/launcher/launcher-update-and-version-validation.md`](docs/launcher/launcher-update-and-version-validation.md) |
 | Launcher UI layout, identity file, channel gating, state variants | [`docs/launcher/launcher-foundation.md`](docs/launcher/launcher-foundation.md) |
 | Dev branch and release channel rules | [`docs/dev/devtools.md`](docs/dev/devtools.md) |

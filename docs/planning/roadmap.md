@@ -114,12 +114,23 @@ Work intentionally deferred until after the initial production deployment of the
 - **Trigger to start**: Hardening before a public/**stable** release where users may double-click the game exe directly, OR reports of players launching the game outside the launcher and hitting auth/version failures.
 - **Related**: handoff producer/consumer in `launcher/src/game_launch/mod.rs` (`Handoff`) ↔ `client/src/core/LaunchArgs.cs` (`Handoff`, `FromLauncher`); editor self-register in `client/src/core/SessionContext.cs` (`SelfRegisterAsync`, DEBUG-only) and standalone fallback in `client/src/core/SingleInstance.cs` (`FallbackDataDir`) — both must stay for editor dev; channel is compile-time baked (`client/src/core/BuildConfig.cs`).
 
-### Per-file hash manifest + deep Verify File Integrity
+### Per-file hash manifest + deep Verify File Integrity — ✅ SHIPPED (game + launcher 0.17.0)
 
-- **What**: Extend `<install>/installed.json` to record a `files: { "<relpath>": "sha256:<hex>" }` map written at install time. Stage 7's `Verify File Integrity` button currently just re-reads the manifest and checks the executable exists; with per-file hashes the same button could re-hash the on-disk tree and report which files are missing or corrupted. Would also enable "Re-download corrupted files only" rather than a full reinstall.
-- **Why deferred**: The Stage 7 cheap check (exe + manifest exists) catches the realistic breakage modes today — user deletes the exe by hand, install dir gets moved. Per-file hashing is a meaningfully bigger change: extends the installer's write path, the manifest schema, the verify task (sync hashing of potentially-GB of game files needs spawn_blocking + chunked I/O), and the UI to surface per-file failures. Wait until disk-corruption / partial-extraction reports actually appear in user feedback.
-- **Trigger to start**: First real user report of a partially-extracted install OR the move to A/B install slots (foundation §7), where per-slot hashes would also serve the rollback decision.
-- **Related**: `launcher/src/updater/branches/installer.rs::VerifyOutcome` — current minimal variants (`Ok`, `ManifestMissing`, `ManifestUnreadable`, `ExecutableMissing`) would gain `FilesMissing { paths }` / `FilesChanged { paths }` variants.
+Shipped via a build-time `files.json` manifest (size + sha256 per file) and a two-pass deep Verify (presence+size, then sha256 on `spawn_blocking`), plus a **Repair** button (full reinstall of the installed version) and a Windows **Reset Runtime Cache** button. `VerifyOutcome` gained `FilesMissing` / `FilesCorrupted`. See [`docs/architecture/runtime-cache-and-integrity.md`](../architecture/runtime-cache-and-integrity.md) and the 0.17.0 changelogs.
+
+- **Still deferred — "Re-download corrupted files only"**: Repair currently does a *full* reinstall, not surgical per-file re-download. GitHub Releases serves whole archive assets, so per-file fetch would need each file as its own asset (rate-limit cost) or range requests into the archive (impossible for `.tar.gz`). Wait for A/B install slots or real demand.
+
+### Reset Runtime Cache on Linux / macOS
+
+- **What**: Extend the Windows-only Reset Runtime Cache button to Linux/macOS once the on-disk runtime-cache location is confirmed there. On Windows the `.NET` runtime extracts to `%LOCALAPPDATA%\data_<name>_windows_x86_64`; on Linux/macOS it most likely lives inside the install dir / `.app` (where Verify/Repair already cover it), in which case Reset stays correctly N/A.
+- **Why deferred**: No Linux/macOS tester to confirm the location — the launcher must not guess a path and risk deleting the wrong dir. `paths::runtime_cache_dir` returns `None` off Windows and the button isn't rendered there.
+- **Trigger to start**: A tester runs `find ~ -type d -name 'data_BriskaBlast*'` on an installed+launched build; wire the confirmed path + `<platform>` suffix into `runtime_cache_dir`, or confirm N/A is final.
+
+### One-time cleanup of the legacy un-suffixed runtime cache
+
+- **What**: Auto-remove the orphaned `data_BriskaBlast_windows_x86_64` left on machines upgrading from a pre-0.17.0 **dev/ea** build (the old shared cache name).
+- **Why deferred**: `data_BriskaBlast` is also **stable's** live cache name, so a blind delete during a dev/ea reset would nuke stable's cache. Must be gated on "no stable install on record" (stable recreates it on next launch if needed). Harmless ~80 MB orphan today; manual deletion for now.
+- **Trigger to start**: Enough upgraded users accumulate orphans to matter, or a stable channel ships (raising the collision stakes).
 
 ### Settings "Add Firewall Rule" button (second entry point)
 
