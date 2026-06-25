@@ -61,13 +61,24 @@ fn tab_button(
 
 fn body<'a>(state: &'a AppState, active: SettingsTab) -> Element<'a, Message> {
     match active {
-        SettingsTab::ChannelManagement => column![
-            channels_section(state),
-            important_files_section(state),
-            firewall_section(state),
-        ]
-        .spacing(ZONE_GAP * 4)
-        .into(),
+        SettingsTab::ChannelManagement => {
+            // `mut` is only exercised by the Windows-gated push below.
+            #[allow(unused_mut)]
+            let mut col = column![
+                channels_section(state),
+                important_files_section(state),
+                firewall_section(state),
+            ]
+            .spacing(ZONE_GAP * 4);
+            // Reset Runtime Cache is Windows-only this ship — the cache only
+            // lives outside the install dir on Windows (Linux/macOS keep it
+            // where Verify/Repair already cover it).
+            #[cfg(target_os = "windows")]
+            {
+                col = col.push(runtime_cache_section(state));
+            }
+            col.into()
+        }
         SettingsTab::Graphics => container(text("Coming soon.").size(16))
             .center_x(Length::Fill)
             .center_y(Length::Fill)
@@ -83,9 +94,12 @@ fn channels_section(state: &AppState) -> Element<'_, Message> {
     // Buttons are disabled when no install is on record for the channel,
     // or when an install / play action is already in flight. Stage 7
     // change — Stage 3-6's settings tab unconditionally enabled them.
+    // An in-flight verify (global single-flight, possibly multi-second) counts
+    // as busy too, so Verify/Repair/Uninstall are all disabled while one runs.
     let busy = state.install_in_progress.is_some()
         || state.uninstall_in_progress.is_some()
-        || state.game_running;
+        || state.game_running
+        || state.verify_in_progress.is_some();
     for c in &state.visible_channels {
         let c = *c;
         let installed = state
@@ -104,6 +118,7 @@ fn channels_section(state: &AppState) -> Element<'_, Message> {
                     Message::VerifyChannel(c),
                     actionable,
                 ),
+                cell_button_maybe("Repair", Message::RepairChannel(c), actionable),
                 verify_status_cell(state, c),
             ]
             .spacing(ZONE_GAP),
@@ -141,12 +156,24 @@ fn important_files_section(state: &AppState) -> Element<'_, Message> {
 }
 
 fn verify_status_cell(state: &AppState, channel: Channel) -> Element<'_, Message> {
-    let label = match state.verify_results.get(&channel) {
-        None => "\u{2014}".to_string(), // em dash — not yet verified this launch
-        Some(VerifyOutcome::Ok { version }) => format!("\u{2713} Verified v{version}"),
-        Some(VerifyOutcome::ManifestMissing) => "\u{2717} Manifest missing".to_string(),
-        Some(VerifyOutcome::ManifestUnreadable(_)) => "\u{2717} Manifest unreadable".to_string(),
-        Some(VerifyOutcome::ExecutableMissing { .. }) => "\u{2717} Executable missing".to_string(),
+    let label = if state.verify_in_progress == Some(channel) {
+        "\u{2026} Verifying\u{2026}".to_string()
+    } else {
+        match state.verify_results.get(&channel) {
+            None => "\u{2014}".to_string(), // em dash — not yet verified this launch
+            Some(VerifyOutcome::Ok { version }) => format!("\u{2713} Verified v{version}"),
+            Some(VerifyOutcome::ManifestMissing) => "\u{2717} Manifest missing".to_string(),
+            Some(VerifyOutcome::ManifestUnreadable(_)) => "\u{2717} Manifest unreadable".to_string(),
+            Some(VerifyOutcome::ExecutableMissing { .. }) => {
+                "\u{2717} Executable missing".to_string()
+            }
+            Some(VerifyOutcome::FilesMissing { count, .. }) => {
+                format!("\u{2717} {count} file(s) missing")
+            }
+            Some(VerifyOutcome::FilesCorrupted { count, .. }) => {
+                format!("\u{2717} {count} file(s) corrupted")
+            }
+        }
     };
     container(text(label).size(13))
         .style(theme::bordered)
@@ -211,6 +238,53 @@ fn firewall_status_cell(state: &AppState, channel: Channel) -> Element<'_, Messa
         .width(Length::Fill)
         .height(Length::Fixed(36.0))
         .into()
+}
+
+/// Reset Runtime Cache rows (Windows only). Mirrors the firewall section's
+/// shape: a short explainer plus a per-channel button. Deleting the cache lets
+/// the game rebuild its .NET runtime on next launch — the fix for "Verify
+/// passed but the game still won't start". Never touches antivirus.
+#[cfg(target_os = "windows")]
+fn runtime_cache_section(state: &AppState) -> Element<'_, Message> {
+    let mut col = column![
+        text("Game Runtime").size(20),
+        text(
+            "If the game won't start even though Verify File Integrity passed, \
+             reset its runtime cache — the game rebuilds it cleanly on the next \
+             launch. If the problem keeps coming back, your antivirus may be \
+             removing the game's files; add an exclusion for the game folder."
+        )
+        .size(13),
+    ]
+    .spacing(ZONE_GAP);
+    let busy = state.install_in_progress.is_some()
+        || state.uninstall_in_progress.is_some()
+        || state.game_running;
+    for c in &state.visible_channels {
+        let c = *c;
+        let installed = state
+            .identity
+            .channels
+            .get(&c)
+            .map(|creds| creds.install_location.is_some() && creds.installed_version.is_some())
+            .unwrap_or(false);
+        col = col.push(
+            row![
+                bordered_cell(c.label(), 120.0),
+                cell_button_maybe(
+                    "Reset Runtime Cache",
+                    Message::ResetRuntimeCache(c),
+                    installed && !busy,
+                ),
+                container(Space::new().width(Length::Fill))
+                    .style(theme::bordered)
+                    .width(Length::Fill)
+                    .height(Length::Fixed(36.0)),
+            ]
+            .spacing(ZONE_GAP),
+        );
+    }
+    col.into()
 }
 
 fn bordered_cell(label: &'static str, width: f32) -> Element<'static, Message> {

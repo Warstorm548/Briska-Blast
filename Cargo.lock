@@ -2427,7 +2427,7 @@ dependencies = [
 
 [[package]]
 name = "launcher"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "directories",
@@ -2443,6 +2443,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2",
  "shared",
  "tar",
  "tempfile",

@@ -46,6 +46,26 @@ pub enum CenterView {
         keep_saves: bool,
         error: Option<String>,
     },
+    /// Per-channel repair confirmation. Repair = reinstall the *installed*
+    /// version (fetch-by-tag), reusing the transactional install pipeline so a
+    /// failed repair leaves the prior install intact. `version` is the version
+    /// being reinstalled; `error` surfaces a fetch/reinstall failure without
+    /// closing the prompt.
+    RepairConfirm {
+        channel: Channel,
+        version: String,
+        error: Option<String>,
+    },
+    /// Reset Runtime Cache confirmation (Windows). Deletes the game's .NET
+    /// runtime-extraction cache so it rebuilds on next launch — for when Verify
+    /// passes but the game still won't start. `error` surfaces a delete failure
+    /// without closing the prompt. Constructed only on Windows (the button is
+    /// Windows-gated), so allow it to read as dead elsewhere.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    ResetCacheConfirm {
+        channel: Channel,
+        error: Option<String>,
+    },
     /// First-Play firewall prompt (Windows). Shown when a Play is requested for
     /// a channel that has no inbound rule yet (option A). Carries the resolved
     /// `exe` (rule target + display) plus the `install_dir`/`username` needed to
@@ -173,6 +193,32 @@ pub enum Message {
     VerifyComplete {
         channel: Channel,
         outcome: crate::updater::branches::VerifyOutcome,
+    },
+    /// User pressed "Repair" on a channel row — opens the RepairConfirm prompt.
+    RepairChannel(Channel),
+    /// User confirmed Repair — kicks off the fetch-by-tag reinstall through the
+    /// shared install pipeline (drives the existing DownloadProgress bar).
+    RepairConfirmed,
+    /// Repair reinstall finished. On success: persist + auto re-verify and
+    /// return to the channel-management view; on failure: keep the prompt open
+    /// with an error.
+    RepairComplete {
+        channel: Channel,
+        result: Result<crate::updater::branches::InstallResult, String>,
+    },
+    /// User pressed "Reset Runtime Cache" on a channel row (Windows only) —
+    /// opens the ResetCacheConfirm prompt. Constructed only by the Windows-gated
+    /// Settings button, so it reads as dead on other targets.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    ResetRuntimeCache(Channel),
+    /// User confirmed Reset Runtime Cache — deletes the cache via
+    /// `paths::clear_runtime_cache`.
+    ResetRuntimeCacheConfirmed,
+    /// Runtime-cache delete finished. On success: return to channel management;
+    /// on failure: keep the prompt open with the error.
+    RuntimeCacheResetComplete {
+        channel: Channel,
+        result: Result<(), String>,
     },
     /// Result of the platform `open` call for the Game Save button. Only
     /// logged for now; the button itself doesn't surface failures in the UI.

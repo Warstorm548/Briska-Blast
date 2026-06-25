@@ -240,6 +240,16 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         Message::VerifyComplete { channel, outcome } => {
             maintenance::verify_complete(state, channel, outcome)
         }
+        Message::RepairChannel(channel) => maintenance::repair_channel(state, channel),
+        Message::RepairConfirmed => install::repair_confirmed(state),
+        Message::RepairComplete { channel, result } => {
+            install::repair_complete(state, channel, result)
+        }
+        Message::ResetRuntimeCache(channel) => maintenance::reset_cache_channel(state, channel),
+        Message::ResetRuntimeCacheConfirmed => maintenance::reset_runtime_cache_confirmed(state),
+        Message::RuntimeCacheResetComplete { channel, result } => {
+            maintenance::reset_runtime_cache_complete(state, channel, result)
+        }
         Message::GameSavePressed(channel) => maintenance::game_save_pressed(state, channel),
         Message::GameSaveOpenDone { channel, result } => {
             maintenance::game_save_open_done(channel, result)

@@ -9,6 +9,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.17.0] — 2026-06-25
+
+Isolates each release channel's self-contained **.NET runtime cache** and ships
+**per-file integrity manifests** so the launcher can deep-verify and repair installs.
+
+### Added
+
+- **Per-channel runtime-cache isolation.** Each channel now exports with a distinct
+  .NET assembly identity (`BriskaBlast` / `BriskaBlastEA` / `BriskaBlastDev`), so the
+  game's self-contained runtime extracts to a channel-specific
+  `data_<name>_<platform>` folder instead of a shared one — no cross-channel cache
+  collision once more than one channel is installed. Driven entirely at build time in
+  `release-client.yml`: it renames `project/assembly_name` plus the `<name>.sln` and
+  `<name>.csproj` Godot derives from it (confirmed against Godot's source —
+  `ExportPlugin.cs` / `path_utils.cpp`). The committed project files are unchanged and
+  the export binary stays `BriskaBlast.*`, so the launcher's install/launch path is
+  untouched. Matches the launcher's `Channel::cache_basename()`.
+- **`files.json` integrity manifests.** Every release archive now carries a build-time
+  manifest recording each shipped file's size + sha256, generated after signing and
+  packaged inside the archive (beside the `.app` on macOS to preserve the ad-hoc
+  signature). Consumed by the launcher's new deep Verify File Integrity.
+
+### Changed
+
+- The macOS "verify embedded C#" CI gate now asserts the per-channel
+  `data_<name>_macos_<arch>/<name>.dll`, doubling as confirmation that the rename hit
+  the folder + DLL in lockstep (a mismatch fails the build before any release publish).
+
 ## [0.16.0] — 2026-06-22
 
 Adds the game's first **win condition** — "Set Score": first player to a
