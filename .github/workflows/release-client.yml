@@ -176,7 +176,11 @@ jobs:
         working-directory: client
 
       - name: dotnet restore (warm NuGet cache)
-        run: dotnet restore
+        # Target the solution explicitly: the per-channel .sln (BriskaBlastDev.sln)
+        # and BriskaBlast.csproj now have different base names, so a bare
+        # `dotnet restore` errors with MSB1011 ("more than one project or
+        # solution file"). Restoring the .sln covers the csproj it references.
+        run: dotnet restore "$CACHE_BASENAME.sln"
         working-directory: client
 
       - name: Fetch WebRTC GDExtension
