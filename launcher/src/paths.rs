@@ -120,6 +120,69 @@ pub fn saves_dir(channel: Channel) -> io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Resolve the game's .NET runtime-extraction cache directory for `channel` on
+/// **Windows**: `%LOCALAPPDATA%\data_<cache_basename>_windows_x86_64`. This is
+/// the folder Godot extracts the self-contained .NET runtime into on first
+/// launch (confirmed on-device). Returns `None` on other platforms — the Reset
+/// Runtime Cache button is Windows-only this ship, since Linux/macOS keep the
+/// runtime in the install dir where Verify/Repair already cover it.
+pub fn runtime_cache_dir(channel: Channel) -> Option<PathBuf> {
+    // Computed on every platform so `cache_basename` stays a live reference,
+    // but only meaningful (and returned) on Windows.
+    let folder = format!("data_{}_windows_x86_64", channel.cache_basename());
+    #[cfg(target_os = "windows")]
+    {
+        let local = directories::BaseDirs::new()?.data_local_dir().to_path_buf();
+        Some(local.join(folder))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = folder;
+        None
+    }
+}
+
+/// Delete `channel`'s runtime cache so the game re-extracts a clean copy on the
+/// next launch (the Reset Runtime Cache action). No-op success on platforms /
+/// configs with no such cache. **Never touches antivirus.** Validates the
+/// resolved path before the recursive delete — it must sit under
+/// `%LOCALAPPDATA%` AND its final component must start with `data_BriskaBlast`
+/// — so a future bug or tampered resolution can't turn this into a delete of an
+/// unrelated directory (defence-in-depth, mirroring `uninstall_install`).
+pub async fn clear_runtime_cache(channel: Channel) -> Result<(), String> {
+    let Some(dir) = runtime_cache_dir(channel) else {
+        return Ok(()); // No runtime cache on this platform.
+    };
+    if !dir.exists() {
+        return Ok(()); // Already absent — next launch (re)creates it.
+    }
+    // Re-derive the local-data root and assert containment + name shape.
+    let local = directories::BaseDirs::new()
+        .map(|b| b.data_local_dir().to_path_buf())
+        .ok_or_else(|| "could not resolve the local data directory".to_string())?;
+    if !dir.starts_with(&local) {
+        return Err(format!(
+            "refusing to delete {} — not under the local data dir",
+            dir.display()
+        ));
+    }
+    let name_ok = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("data_BriskaBlast"));
+    if !name_ok {
+        return Err(format!(
+            "refusing to delete {} — unexpected folder name",
+            dir.display()
+        ));
+    }
+    tokio::fs::remove_dir_all(&dir)
+        .await
+        .map_err(|e| format!("remove runtime cache {}: {e}", dir.display()))?;
+    tracing::info!(path = %dir.display(), "runtime cache cleared");
+    Ok(())
+}
+
 /// Resolve the `directories` project dirs. Returns an `io::Error` rather than
 /// panicking so a headless / no-home environment surfaces as a normal error
 /// at the call boundary (matching the rest of this module's `io::Result`).

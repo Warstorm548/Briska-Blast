@@ -64,6 +64,11 @@ pub struct AppState {
     /// the inline status cell in Settings → Game Channel Management. Not
     /// persisted — fresh on every launcher launch.
     pub verify_results: BTreeMap<Channel, crate::updater::branches::VerifyOutcome>,
+    /// Channel whose Verify task is currently running. The deep sha256 pass can
+    /// take seconds on the multi-hundred-MB `.pck`, so the status cell shows
+    /// "Verifying…" and the Verify button is disabled meanwhile. `None` when
+    /// idle. Not persisted.
+    pub verify_in_progress: Option<Channel>,
     /// Set while a per-channel uninstall is running. Prevents a fast
     /// double-press of Confirm from spawning two destructive tasks
     /// against the same install dir.
@@ -162,6 +167,7 @@ impl Default for AppState {
             available_versions: BTreeMap::new(),
             download_progress: None,
             verify_results: BTreeMap::new(),
+            verify_in_progress: None,
             uninstall_in_progress: None,
             firewall_status: BTreeMap::new(),
             firewall_prompt_dismissed: HashSet::new(),

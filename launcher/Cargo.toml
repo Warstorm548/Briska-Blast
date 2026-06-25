@@ -26,6 +26,9 @@ self_update        = { version = "0.41", default-features = false, features = ["
 # the bottom progress bar can fill smoothly (Stage 6).
 reqwest            = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 semver             = "1"
+# SHA-256 for deep Verify File Integrity — re-hashes installed files against the
+# build-time `files.json` manifest. RustCrypto, pure-Rust, no OpenSSL path.
+sha2               = "0.10"
 tokio              = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs", "process", "net", "time"] }
 # Per-channel game-files install pipeline: download from GitHub Releases,
 # extract to <install_root>/<channel>/, write installed.json manifest.

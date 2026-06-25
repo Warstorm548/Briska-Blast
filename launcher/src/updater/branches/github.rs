@@ -81,6 +81,44 @@ pub async fn latest_release(channel: Channel) -> Result<Option<GameRelease>, Str
     Ok(best)
 }
 
+/// Fetch the release for a **specific** version on `channel`. Used by Repair,
+/// which reinstalls the currently-installed version rather than upgrading to
+/// latest, so a "repair" never becomes a stealth update. Returns `Ok(None)`
+/// when no release with that exact version still exists for the channel (e.g.
+/// it was deleted from GitHub) so the caller can surface a clean message.
+pub async fn release_for_version(
+    channel: Channel,
+    target: &Version,
+) -> Result<Option<GameRelease>, String> {
+    let releases = github_client::fetch_releases(REPO_OWNER, REPO_NAME)
+        .await
+        .map_err(|e| e.to_user_string())?;
+    for r in releases {
+        let Some(stripped) = r.tag_name.strip_prefix(TAG_PREFIX) else {
+            continue;
+        };
+        let Some(v) = parse_for_channel(stripped, channel) else {
+            continue;
+        };
+        if &v == target {
+            return Ok(Some(GameRelease {
+                version: v,
+                tag: r.tag_name.clone(),
+                body: r.body.unwrap_or_default(),
+                assets: r
+                    .assets
+                    .into_iter()
+                    .map(|a| ReleaseAsset {
+                        name: a.name,
+                        download_url: a.url,
+                    })
+                    .collect(),
+            }));
+        }
+    }
+    Ok(None)
+}
+
 /// Anchored channel match. The stripped form (no `game-v` prefix) is:
 ///   stable -> "1.2.3"           (no prerelease at all)
 ///   ea     -> "1.2.3-ea.4"      (prerelease == "ea.<N>")

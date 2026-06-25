@@ -10,6 +10,7 @@ use crate::updater::branches::github::{GameRelease, ReleaseAsset};
 use chrono::Utc;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -37,6 +38,31 @@ pub struct InstalledManifest {
     /// export drops the binary either at the top level or nested one
     /// directory deep depending on how the artifact was packaged.
     pub executable: String,
+}
+
+pub const FILES_MANIFEST_FILENAME: &str = "files.json";
+
+/// Build-time per-file integrity manifest, generated in CI and shipped *inside*
+/// the release archive as `files.json`. Read by `verify_install` to confirm
+/// every shipped file is present, the right size, and (deep pass) the right
+/// bytes. Distinct from `installed.json` (which the launcher writes post-extract
+/// and records version/channel/exe). The CI generator emits `files.json` last,
+/// so it never lists itself; `installed.json` and `saves/` are likewise absent
+/// from the map and therefore ignored by verify.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilesManifest {
+    /// Schema version so a future shape change is detectable. Currently `1`.
+    pub schema: u32,
+    /// Relative path (forward-slash separated, relative to the install dir) →
+    /// expected size + sha256.
+    pub files: BTreeMap<String, FileEntry>,
+}
+
+/// One file's expected size and lowercase-hex SHA-256, as recorded at build time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileEntry {
+    pub size: u64,
+    pub sha256: String,
 }
 
 /// Stream-of-progress emitted by `download_and_install`. The fraction is
@@ -512,6 +538,21 @@ pub async fn installed_manifest(install_dir: &Path) -> Result<Option<InstalledMa
     }
 }
 
+/// Read `<install_dir>/files.json`. `Ok(None)` when absent — an older install
+/// packaged before per-file manifests existed, in which case `verify_install`
+/// falls back to the cheap exe-exists check. Parse errors bubble up so a
+/// corrupted manifest is reported rather than silently treated as "no manifest".
+pub async fn files_manifest(install_dir: &Path) -> Result<Option<FilesManifest>, String> {
+    let path = install_dir.join(FILES_MANIFEST_FILENAME);
+    match tokio::fs::read_to_string(&path).await {
+        Ok(s) => serde_json::from_str(&s)
+            .map(Some)
+            .map_err(|e| format!("files manifest parse: {e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("files manifest read: {e}")),
+    }
+}
+
 /// Subdirectory of the install_root (the parent of the install_dir) where
 /// saves are moved when the user picks "Keep saves" during uninstall. Per
 /// the Stage 7 design: backups are timestamped so a re-install / re-uninstall
@@ -535,25 +576,136 @@ pub enum VerifyOutcome {
         #[allow(dead_code)]
         expected: PathBuf,
     },
+    /// Deep verify (cheap pass): files listed in `files.json` that are absent or
+    /// the wrong size on disk. `count` is the total; `sample` holds up to a few
+    /// relpaths for the `?outcome` tracing log / a future hover tooltip.
+    FilesMissing {
+        count: usize,
+        #[allow(dead_code)]
+        sample: Vec<String>,
+    },
+    /// Deep verify (hash pass): files present and the right size, but whose
+    /// sha256 doesn't match the manifest — corruption or tampering.
+    FilesCorrupted {
+        count: usize,
+        #[allow(dead_code)]
+        sample: Vec<String>,
+    },
 }
 
-/// Cheap integrity check — read the install manifest and confirm the
-/// executable file it names actually exists on disk. Catches the common
-/// breakage (user deleted the exe by hand, install dir moved). Per-file
-/// hashing is deferred (roadmap).
+/// Integrity check. Reads `installed.json` for the version, then — when the
+/// build shipped a `files.json` — verifies every listed file is present, the
+/// right size (cheap pass), and the right bytes (deep sha256 pass on a blocking
+/// thread, since the `.pck` is hundreds of MB). Falls back to the historic
+/// exe-exists check when `files.json` is absent (installs packaged before
+/// per-file manifests).
 pub async fn verify_install(install_dir: PathBuf) -> VerifyOutcome {
     let manifest = match installed_manifest(&install_dir).await {
         Ok(Some(m)) => m,
         Ok(None) => return VerifyOutcome::ManifestMissing,
         Err(e) => return VerifyOutcome::ManifestUnreadable(e),
     };
-    let exe = install_dir.join(&manifest.executable);
-    match tokio::fs::metadata(&exe).await {
-        Ok(_) => VerifyOutcome::Ok {
-            version: manifest.version,
-        },
-        Err(_) => VerifyOutcome::ExecutableMissing { expected: exe },
+
+    match files_manifest(&install_dir).await {
+        Ok(Some(files)) => verify_files(&install_dir, &files, &manifest.version).await,
+        Ok(None) => {
+            // Legacy install (no files.json) — fall back to the cheap exe check.
+            let exe = install_dir.join(&manifest.executable);
+            match tokio::fs::metadata(&exe).await {
+                Ok(_) => VerifyOutcome::Ok {
+                    version: manifest.version,
+                },
+                Err(_) => VerifyOutcome::ExecutableMissing { expected: exe },
+            }
+        }
+        Err(e) => VerifyOutcome::ManifestUnreadable(e),
     }
+}
+
+/// Two-pass per-file verify against `files.json`. Pass 1 (cheap, async): every
+/// listed file is present and its size matches — catches the common breakage
+/// (deleted / truncated / half-extracted files) instantly without reading bytes.
+/// Pass 2 (deep): sha256 of each survivor matches, run on a blocking thread with
+/// chunked reads so a multi-hundred-MB `.pck` doesn't stall the async runtime.
+/// Files on disk that aren't in the manifest (e.g. `installed.json`, `saves/`)
+/// are ignored — verify only asserts the *manifest's* files.
+async fn verify_files(install_dir: &Path, files: &FilesManifest, version: &str) -> VerifyOutcome {
+    /// How many failing relpaths to retain for diagnostics (the full count is
+    /// always reported; the sample bounds the log/tooltip size).
+    const SAMPLE_MAX: usize = 5;
+
+    // Pass 1: presence + size.
+    let mut missing: Vec<String> = Vec::new();
+    for (rel, entry) in &files.files {
+        let path = install_dir.join(rel);
+        let ok = matches!(tokio::fs::metadata(&path).await, Ok(m) if m.len() == entry.size);
+        if !ok {
+            missing.push(rel.clone());
+        }
+    }
+    if !missing.is_empty() {
+        let count = missing.len();
+        missing.truncate(SAMPLE_MAX);
+        return VerifyOutcome::FilesMissing {
+            count,
+            sample: missing,
+        };
+    }
+
+    // Pass 2: sha256. Offloaded to a blocking thread (chunked I/O over GBs).
+    let dir = install_dir.to_path_buf();
+    let files = files.clone();
+    let corrupted = match tokio::task::spawn_blocking(move || {
+        let mut bad: Vec<String> = Vec::new();
+        for (rel, entry) in &files.files {
+            let hashed = hash_file_blocking(&dir.join(rel));
+            let ok = matches!(hashed, Ok(ref hex) if hex.eq_ignore_ascii_case(&entry.sha256));
+            if !ok {
+                bad.push(rel.clone());
+            }
+        }
+        bad
+    })
+    .await
+    {
+        Ok(bad) => bad,
+        Err(e) => {
+            // A join failure means we couldn't confirm integrity — report it as
+            // corruption rather than silently passing.
+            tracing::warn!(error = %e, "verify hash task failed to join");
+            vec!["<hash task failed>".to_string()]
+        }
+    };
+
+    if corrupted.is_empty() {
+        VerifyOutcome::Ok {
+            version: version.to_string(),
+        }
+    } else {
+        let count = corrupted.len();
+        let mut sample = corrupted;
+        sample.truncate(SAMPLE_MAX);
+        VerifyOutcome::FilesCorrupted { count, sample }
+    }
+}
+
+/// SHA-256 a file with a fixed-size buffer (never reads the whole file into
+/// memory — the `.pck` can be ~1 GB). Returns lowercase hex. Blocking; call
+/// only inside `spawn_blocking`.
+fn hash_file_blocking(path: &Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// Tear down a channel's installation. `install_dir` is the resolved
@@ -718,5 +870,106 @@ mod tests {
         assert!(picked.name.ends_with("windows.zip"));
         #[cfg(target_os = "macos")]
         assert!(picked.name.ends_with("macos.tar.gz"));
+    }
+
+    /// Mirror of `hash_file_blocking` for computing the test's expected digests.
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(bytes);
+        format!("{:x}", h.finalize())
+    }
+
+    /// Deep verify against a `files.json`: a clean tree passes; a same-size byte
+    /// change is caught by the hash pass; a deleted file is caught by the cheap
+    /// presence/size pass (before any hashing). Exercises the whole
+    /// `verify_install` → `verify_files` path on every platform.
+    #[tokio::test]
+    async fn verify_install_deep_pass_detects_corruption_and_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        std::fs::write(dir.join("BriskaBlast.x86_64"), b"the-binary-bytes").unwrap();
+        std::fs::write(dir.join("game.pck"), b"pack-contents").unwrap();
+
+        let installed = InstalledManifest {
+            version: "0.17.0".into(),
+            channel: "dev".into(),
+            installed_at: "2026-06-24T00:00:00Z".into(),
+            executable: "BriskaBlast.x86_64".into(),
+        };
+        std::fs::write(
+            dir.join(MANIFEST_FILENAME),
+            serde_json::to_vec(&installed).unwrap(),
+        )
+        .unwrap();
+
+        let mut files = BTreeMap::new();
+        for name in ["BriskaBlast.x86_64", "game.pck"] {
+            let bytes = std::fs::read(dir.join(name)).unwrap();
+            files.insert(
+                name.to_string(),
+                FileEntry {
+                    size: bytes.len() as u64,
+                    sha256: sha256_hex(&bytes),
+                },
+            );
+        }
+        std::fs::write(
+            dir.join(FILES_MANIFEST_FILENAME),
+            serde_json::to_vec(&FilesManifest { schema: 1, files }).unwrap(),
+        )
+        .unwrap();
+
+        // Clean tree → Ok. (Extra unlisted files like installed.json are ignored.)
+        assert!(matches!(
+            verify_install(dir.to_path_buf()).await,
+            VerifyOutcome::Ok { .. }
+        ));
+
+        // Same-length byte change → passes the size pass, fails the hash pass.
+        std::fs::write(dir.join("game.pck"), b"pack-CONTENTS").unwrap();
+        assert!(matches!(
+            verify_install(dir.to_path_buf()).await,
+            VerifyOutcome::FilesCorrupted { count: 1, .. }
+        ));
+
+        // Deleted file → caught by the cheap pass before any hashing.
+        std::fs::remove_file(dir.join("game.pck")).unwrap();
+        assert!(matches!(
+            verify_install(dir.to_path_buf()).await,
+            VerifyOutcome::FilesMissing { count: 1, .. }
+        ));
+    }
+
+    /// No `files.json` (an install packaged before per-file manifests) falls
+    /// back to the historic exe-exists check rather than erroring.
+    #[tokio::test]
+    async fn verify_install_without_files_manifest_falls_back_to_exe_check() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("BriskaBlast.x86_64"), b"bin").unwrap();
+        let installed = InstalledManifest {
+            version: "0.16.0".into(),
+            channel: "dev".into(),
+            installed_at: "2026-06-24T00:00:00Z".into(),
+            executable: "BriskaBlast.x86_64".into(),
+        };
+        std::fs::write(
+            dir.join(MANIFEST_FILENAME),
+            serde_json::to_vec(&installed).unwrap(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            verify_install(dir.to_path_buf()).await,
+            VerifyOutcome::Ok { .. }
+        ));
+
+        std::fs::remove_file(dir.join("BriskaBlast.x86_64")).unwrap();
+        assert!(matches!(
+            verify_install(dir.to_path_buf()).await,
+            VerifyOutcome::ExecutableMissing { .. }
+        ));
     }
 }

@@ -49,10 +49,53 @@ impl Channel {
             Channel::Dev => "dev",
         }
     }
+
+    /// Identity baked into the game's .NET runtime-cache folder name
+    /// (`%LOCALAPPDATA%\data_<cache_basename>_windows_x86_64`). Each channel
+    /// gets a distinct value so their runtime caches never collide once more
+    /// than one channel is installed. **MUST stay in lockstep with the client
+    /// export's per-channel project identity** — the game build sets the
+    /// matching name at export time, and `paths::runtime_cache_dir` /
+    /// `clear_runtime_cache` (the Reset Runtime Cache button) derive the folder
+    /// from this. Stable keeps the bare `BriskaBlast` (unchanged on disk).
+    pub const fn cache_basename(self) -> &'static str {
+        match self {
+            Channel::Stable => "BriskaBlast",
+            Channel::Ea => "BriskaBlastEA",
+            Channel::Dev => "BriskaBlastDev",
+        }
+    }
 }
 
 impl fmt::Display for Channel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Channel;
+
+    /// The runtime-cache basenames are the contract with the client export's
+    /// per-channel project identity. If these change, the game build's export
+    /// step must change in lockstep or the Reset Runtime Cache button will look
+    /// for the wrong folder. Stable stays the bare name (unchanged on disk).
+    #[test]
+    fn cache_basenames_are_distinct_and_stable_is_unsuffixed() {
+        assert_eq!(Channel::Stable.cache_basename(), "BriskaBlast");
+        assert_eq!(Channel::Ea.cache_basename(), "BriskaBlastEA");
+        assert_eq!(Channel::Dev.cache_basename(), "BriskaBlastDev");
+        // All distinct → no cross-channel cache collision.
+        let names = [
+            Channel::Stable.cache_basename(),
+            Channel::Ea.cache_basename(),
+            Channel::Dev.cache_basename(),
+        ];
+        for (i, a) in names.iter().enumerate() {
+            for b in &names[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
     }
 }

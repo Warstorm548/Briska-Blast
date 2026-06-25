@@ -247,63 +247,75 @@ pub(crate) fn install_confirmed(state: &mut AppState) -> Task<Message> {
     };
     state.install_in_progress = Some(channel);
     state.download_progress = None;
-    // Drive the install with two channels: a tokio::spawn task that
-    // owns the download (and produces Progress events into an mpsc
-    // sender as it streams), and a Task::stream that consumes the
-    // matching receiver and emits Messages into the Iced runtime.
-    // The same Sender is cloned for the closure callback; the
-    // outer clone fires the final Complete event once the .await
-    // on download_and_install resolves.
-    //
-    // Bounded channel — Progress has latest-state semantics so we
-    // try_send and drop on full (the next chunk's event arrives
-    // shortly anyway). Complete is one-shot and must not be
-    // dropped, so it uses the awaited send. Capacity 32 covers
-    // ~half a second of progress events at a 64ms Iced frame and
-    // a multi-MB/s download.
+    // Resolve the release at install time: re-fetch latest, guarding against it
+    // vanishing or drifting version between the check and now. Then hand off to
+    // the shared streamed-download helper (also used by Repair).
+    let resolve = async move {
+        let fresh = crate::updater::branches::latest_release(channel).await?;
+        let Some(release) = fresh else {
+            return Err("release disappeared from GitHub between check and install".to_string());
+        };
+        if let Some(expected) = expected_version.as_ref() {
+            if &release.version != expected {
+                tracing::warn!(
+                    expected = %expected,
+                    actual = %release.version,
+                    "release version changed between check and install"
+                );
+            }
+        }
+        Ok(release)
+    };
+    stream_install(channel, install_root, resolve, |channel, result| {
+        Message::InstallComplete { channel, result }
+    })
+}
+
+/// Spawn the streamed download+extract of a resolved `GameRelease` into
+/// `install_root`, returning the Iced `Task::stream` that emits
+/// `DownloadProgress` events and finally `make_complete(channel, result)`.
+/// Centralises the mpsc ⇆ `Task::stream` wiring shared by fresh install/update
+/// (`install_confirmed`) and Repair (`repair_confirmed`). `resolve_release`
+/// produces the release to install (latest for install, fetch-by-tag for
+/// repair); its `Err` short-circuits straight to the completion message.
+///
+/// Bounded channel: Progress has latest-state semantics so we `try_send` and
+/// drop on full (the next chunk corrects the fraction); Complete is one-shot
+/// and uses the awaited send so it is never dropped. Capacity 32 ≈ half a
+/// second of progress at a 64ms Iced frame on a multi-MB/s download.
+fn stream_install<Fut>(
+    channel: Channel,
+    install_root: std::path::PathBuf,
+    resolve_release: Fut,
+    make_complete: fn(Channel, Result<crate::updater::branches::InstallResult, String>) -> Message,
+) -> Task<Message>
+where
+    Fut: std::future::Future<Output = Result<crate::updater::branches::GameRelease, String>>
+        + Send
+        + 'static,
+{
     const INSTALL_STREAM_CAPACITY: usize = 32;
     let (tx, rx) = tokio::sync::mpsc::channel::<InstallStreamEvent>(INSTALL_STREAM_CAPACITY);
     let tx_progress = tx.clone();
     tokio::spawn(async move {
         let result: Result<crate::updater::branches::InstallResult, String> = async {
-            let fresh = crate::updater::branches::latest_release(channel).await?;
-            let Some(release) = fresh else {
-                return Err(
-                    "release disappeared from GitHub between check and install".to_string(),
-                );
-            };
-            if let Some(expected) = expected_version.as_ref() {
-                if &release.version != expected {
-                    tracing::warn!(
-                        expected = %expected,
-                        actual = %release.version,
-                        "release version changed between check and install"
-                    );
-                }
-            }
+            let release = resolve_release.await?;
             crate::updater::branches::download_and_install(
                 channel,
                 release,
                 install_root,
                 move |progress| {
-                    // Drop on full / receiver-dropped — progress is
-                    // safe to skip (the next event corrects the
-                    // displayed fraction); blocking the callback
-                    // would stall the actual download loop.
                     let _ = tx_progress.try_send(InstallStreamEvent::Progress(progress));
                 },
             )
             .await
         }
         .await;
-        // Completion must not be dropped — `send().await` waits
-        // for capacity. If the receiver has been dropped we don't
-        // care (no UI to update); the `let _ =` absorbs that.
         let _ = tx.send(InstallStreamEvent::Complete(result)).await;
     });
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(move |ev| match ev {
         InstallStreamEvent::Progress(progress) => Message::DownloadProgress { channel, progress },
-        InstallStreamEvent::Complete(result) => Message::InstallComplete { channel, result },
+        InstallStreamEvent::Complete(result) => make_complete(channel, result),
     });
     Task::stream(stream)
 }
@@ -332,17 +344,7 @@ pub(crate) fn install_complete(
     state.download_progress = None;
     match result {
         Ok(info) => {
-            if let Some(creds) = state.identity.channels.get_mut(&channel) {
-                creds.install_location = Some(info.install_dir.clone());
-                creds.installed_version = Some(info.version.clone());
-            }
-            if let Err(e) = identity::save(&state.identity) {
-                tracing::warn!(
-                    error = %e,
-                    ?channel,
-                    "failed to persist identity after install"
-                );
-            }
+            apply_install_success(state, channel, &info);
             tracing::info!(
                 ?channel,
                 version = %info.version,
@@ -350,17 +352,6 @@ pub(crate) fn install_complete(
                 install_dir = %info.install_dir.display(),
                 "game install complete"
             );
-            // installed_version just changed — refresh the derived
-            // top-bar banner so this channel falls out of the
-            // "Updates available" list.
-            recompute_branch_updates_available(state);
-            // A (re)install can change the resolved game exe path, so
-            // any firewall result cached against the old install is no
-            // longer trustworthy — clear it and let the user re-check.
-            state.firewall_status.remove(&channel);
-            // Same for the manual update-check verdict: the version just
-            // changed, so a stale "Update available" would be misleading.
-            state.channel_update_status.remove(&channel);
             state.center_view = CenterView::Default;
         }
         Err(e) => {
@@ -378,6 +369,136 @@ pub(crate) fn install_complete(
         }
     }
     Task::none()
+}
+
+/// Persist a successful install/repair into identity.json and refresh derived
+/// UI state (the top-bar update banner, plus the now-stale firewall and
+/// update-check verdicts for this channel). Shared by `install_complete` and
+/// `repair_complete` so the post-install bookkeeping lives in one place.
+fn apply_install_success(
+    state: &mut AppState,
+    channel: Channel,
+    info: &crate::updater::branches::InstallResult,
+) {
+    if let Some(creds) = state.identity.channels.get_mut(&channel) {
+        creds.install_location = Some(info.install_dir.clone());
+        creds.installed_version = Some(info.version.clone());
+    }
+    if let Err(e) = identity::save(&state.identity) {
+        tracing::warn!(error = %e, ?channel, "failed to persist identity after install");
+    }
+    // installed_version just changed — drop this channel from the banner.
+    recompute_branch_updates_available(state);
+    // A (re)install can change the resolved exe path → stale firewall result.
+    state.firewall_status.remove(&channel);
+    // Version changed → a stale "Update available" verdict would mislead.
+    state.channel_update_status.remove(&channel);
+}
+
+/// User confirmed Repair — reinstall the *installed* version (fetch-by-tag) via
+/// the shared streamed-download pipeline. Reuses the transactional installer, so
+/// a failed repair leaves the existing install untouched. Routes completion to
+/// `RepairComplete`.
+pub(crate) fn repair_confirmed(state: &mut AppState) -> Task<Message> {
+    let (channel, version) =
+        if let CenterView::RepairConfirm { channel, version, .. } = &state.center_view {
+            (*channel, version.clone())
+        } else {
+            tracing::warn!("RepairConfirmed without an active RepairConfirm view");
+            return Task::none();
+        };
+    if channel == Channel::Dev && !state.dev_flag {
+        tracing::warn!("RepairConfirmed for Dev without dev_flag — refusing");
+        return Task::none();
+    }
+    // Re-check the busy gates (defence-in-depth against a press that raced a
+    // state change after the prompt opened).
+    if state.install_in_progress.is_some()
+        || state.uninstall_in_progress.is_some()
+        || state.game_running
+    {
+        return Task::none();
+    }
+    // Repair reinstalls into the same place — derive the install_root (parent of
+    // the recorded install dir, since download_and_install rejoins the channel).
+    let install_root = match state
+        .identity
+        .channels
+        .get(&channel)
+        .and_then(|c| c.install_location.clone())
+    {
+        Some(dir) => match dir.parent() {
+            Some(p) => p.to_path_buf(),
+            None => {
+                set_repair_error(state, channel, "Could not resolve the install location.");
+                return Task::none();
+            }
+        },
+        None => {
+            tracing::warn!(?channel, "RepairConfirmed with no install on record");
+            return Task::none();
+        }
+    };
+    let target = match semver::Version::parse(&version) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, version, "installed version is not valid semver");
+            set_repair_error(state, channel, &format!("Recorded version '{version}' is not valid."));
+            return Task::none();
+        }
+    };
+    state.install_in_progress = Some(channel);
+    state.download_progress = None;
+    tracing::info!(?channel, %version, "starting repair reinstall");
+    let resolve = async move {
+        match crate::updater::branches::release_for_version(channel, &target).await? {
+            Some(release) => Ok(release),
+            None => Err(format!(
+                "v{target} is no longer available for this channel on GitHub — \
+                 use Update to install the latest version instead."
+            )),
+        }
+    };
+    stream_install(channel, install_root, resolve, |channel, result| {
+        Message::RepairComplete { channel, result }
+    })
+}
+
+/// Set the inline error on the open RepairConfirm prompt (no-op if the prompt
+/// moved on). Keeps the prompt open so the user can read the failure and retry.
+fn set_repair_error(state: &mut AppState, channel: Channel, msg: &str) {
+    if let CenterView::RepairConfirm { channel: pc, error, .. } = &mut state.center_view {
+        if *pc == channel {
+            *error = Some(msg.to_string());
+        }
+    }
+}
+
+/// Repair reinstall finished. On success: persist, return to channel management,
+/// and auto re-verify so the user sees the install is healed. On failure: keep
+/// the prompt open with the error (the prior install is untouched).
+pub(crate) fn repair_complete(
+    state: &mut AppState,
+    channel: Channel,
+    result: Result<crate::updater::branches::InstallResult, String>,
+) -> Task<Message> {
+    state.install_in_progress = None;
+    state.download_progress = None;
+    match result {
+        Ok(info) => {
+            apply_install_success(state, channel, &info);
+            tracing::info!(?channel, version = %info.version, "repair complete — re-verifying");
+            state.center_view = CenterView::Settings {
+                tab: crate::app::SettingsTab::ChannelManagement,
+            };
+            super::maintenance::verify_channel(state, channel)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, ?channel, "repair failed");
+            set_repair_error(state, channel, &format!("Repair failed: {e}"));
+            Task::none()
+        }
+    }
 }
 
 pub(crate) fn latest_release_fetched(
