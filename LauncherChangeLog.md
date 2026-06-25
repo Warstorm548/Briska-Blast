@@ -5,6 +5,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.17.0] — 2026-06-25
+
+Adds a **file-integrity / repair toolkit** to Settings → Game Channel Management,
+scoped to corrupted or partial installs. Pairs with **game v0.17.0**, which ships the
+`files.json` manifests this consumes and the per-channel runtime-cache names it targets.
+
+### Added
+
+- **Deep Verify File Integrity.** Reads the build-time `files.json` and checks every
+  shipped file is present and the right size (instant), then re-hashes each (sha256, on
+  a blocking thread so the multi-hundred-MB `.pck` doesn't stall the UI) — new
+  `✗ N file(s) missing` / `✗ N file(s) corrupted` results plus a "Verifying…"
+  indicator. Falls back to the old exe-exists check for installs packaged before
+  manifests existed. See `installer.rs::verify_install`.
+- **Repair.** Reinstalls the *installed* version (fetch-by-tag via
+  `release_for_version`) through the existing transactional download pipeline, then
+  auto re-verifies. A failed repair leaves the prior install untouched; saves are
+  unaffected.
+- **Reset Runtime Cache (Windows).** Deletes the game's .NET runtime extraction cache
+  (`%LOCALAPPDATA%\data_BriskaBlast…_windows_x86_64`) so the game rebuilds it on next
+  launch — for when the game won't start even though Verify passed. The resolved path
+  is validated (under `%LOCALAPPDATA%`, name starts `data_BriskaBlast`) before
+  `remove_dir_all`, and it **never touches antivirus**. Its own Settings section, with
+  guidance to add an AV exclusion yourself if the problem recurs.
+
+### Changed
+
+- The install pipeline's download/stream (mpsc ⇆ `Task::stream`) wiring is factored
+  into a shared `stream_install` helper used by both fresh install/update and Repair.
+
 ## [0.16.0] — 2026-06-21
 
 Replaces the cross-restart running-game PID file with a **socket rendezvous** and
