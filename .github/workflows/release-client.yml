@@ -128,6 +128,24 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Building Briska Blast client v$v"
 
+      - name: Set per-channel .NET assembly name (runtime-cache isolation)
+        run: |
+          # The game's self-contained .NET runtime extracts to a folder named
+          # data_<assembly_name>_<platform> (confirmed on-device for Windows, and
+          # visible in the macOS .app under Contents/Resources/). Give each channel
+          # a distinct assembly_name so their runtime caches never collide once
+          # more than one channel is installed. Stable keeps the bare "BriskaBlast".
+          # MUST match the launcher's Channel::cache_basename().
+          case "$RELEASE_CHANNEL" in
+            stable) NAME=BriskaBlast ;;
+            ea)     NAME=BriskaBlastEA ;;
+            dev)    NAME=BriskaBlastDev ;;
+            *) echo "::error::unknown RELEASE_CHANNEL '$RELEASE_CHANNEL'"; exit 1 ;;
+          esac
+          sed -i "s|^project/assembly_name=.*|project/assembly_name=\"$NAME\"|" client/project.godot
+          echo "CACHE_BASENAME=$NAME" >> "$GITHUB_ENV"
+          echo "assembly_name now:"; grep '^project/assembly_name' client/project.godot
+
       # Godot's GodotTools.Export.ExportPlugin hard-requires `<assembly>.sln`
       # next to the project root. On a desktop, the editor auto-creates it
       # the first time the project opens; in headless CI nothing ever does.
@@ -218,19 +236,26 @@ jobs:
       - name: Verify macOS export embedded C#
         # Unlike Linux/Windows (managed DLLs embedded INSIDE the .pck), Godot's
         # .NET macOS export lays the assemblies out as loose files under
-        # Contents/Resources/data_BriskaBlast_macos_<arch>/. A universal build
-        # has both arm64 and x86_64 dirs — assert the main BriskaBlast.dll in
-        # each, which proves Godot's internal dotnet publish ran for both arches.
+        # Contents/Resources/data_<assembly_name>_macos_<arch>/. This is the one
+        # platform where the data folder is visible at BUILD time, so it doubles
+        # as the confirmation that the per-channel assembly_name rename (above)
+        # actually renamed BOTH the folder and the assembly DLL in lockstep:
+        # we require data_${CACHE_BASENAME}_macos_<arch>/${CACHE_BASENAME}.dll.
+        # A mismatch (folder or DLL keeping the old name) fails here — listing
+        # what IS present — so a broken rename can never publish a release.
         run: |
           APP="export/macos/BriskaBlast.app"
           test -d "$APP"
+          echo "data_ dirs present:"; ls -1d "$APP/Contents/Resources/data_"* 2>/dev/null || true
           for arch in arm64 x86_64; do
-            dll="$APP/Contents/Resources/data_BriskaBlast_macos_${arch}/BriskaBlast.dll"
+            datadir="$APP/Contents/Resources/data_${CACHE_BASENAME}_macos_${arch}"
+            dll="$datadir/${CACHE_BASENAME}.dll"
             if [ ! -f "$dll" ]; then
-              echo "::error::Missing managed assembly $dll — C# not embedded for $arch? Check Godot's internal dotnet publish step."
+              echo "::error::Expected $dll not found — per-channel assembly_name rename mismatch (folder and/or DLL name differs from '${CACHE_BASENAME}')."
+              echo "Contents of $datadir (if any):"; ls -1 "$datadir" 2>/dev/null || echo "(folder does not exist)"
               exit 1
             fi
-            echo "macOS $arch BriskaBlast.dll: $(stat -c%s "$dll") bytes"
+            echo "macOS $arch: data_${CACHE_BASENAME}_macos_${arch}/${CACHE_BASENAME}.dll = $(stat -c%s "$dll") bytes"
           done
         working-directory: client
 
@@ -276,6 +301,35 @@ jobs:
           test -f export/macos/BriskaBlast.app/Contents/_CodeSignature/CodeResources
         working-directory: client
 
+      - name: Generate per-file integrity manifests (files.json)
+        run: |
+          # Record size + sha256 for every file in each platform's export tree so
+          # the launcher's deep Verify File Integrity can detect missing/corrupt
+          # files. Written into each export dir (for macOS it sits BESIDE the .app
+          # so it doesn't invalidate the ad-hoc signature) and packaged below.
+          # Run AFTER signing so the signed Mach-O + _CodeSignature hashes are the
+          # ones recorded; the walk skips files.json itself so it never lists its
+          # own (changing) hash. Schema mirrors launcher installer.rs::FilesManifest.
+          python3 - <<'PY'
+          import hashlib, json, os
+          for base in ["client/export/linux", "client/export/windows", "client/export/macos"]:
+              files = {}
+              for dirpath, _dirs, names in os.walk(base):
+                  for n in names:
+                      p = os.path.join(dirpath, n)
+                      rel = os.path.relpath(p, base).replace(os.sep, "/")
+                      if rel == "files.json":
+                          continue
+                      h = hashlib.sha256()
+                      with open(p, "rb") as f:
+                          for chunk in iter(lambda: f.read(1 << 20), b""):
+                              h.update(chunk)
+                      files[rel] = {"size": os.path.getsize(p), "sha256": h.hexdigest()}
+              with open(os.path.join(base, "files.json"), "w") as f:
+                  json.dump({"schema": 1, "files": files}, f, sort_keys=True)
+              print(f"{base}/files.json: {len(files)} files")
+          PY
+
       - name: Package Linux tar.gz
         run: |
           cd client/export/linux
@@ -289,10 +343,12 @@ jobs:
       - name: Package macOS tar.gz
         run: |
           # tar (not zip) preserves the .app bundle's symlinks + exec bits.
+          # files.json sits BESIDE the .app (not inside) so it doesn't break the
+          # ad-hoc signature; the launcher reads it from the extracted install dir.
           cd client/export/macos
           tar czf \
             "../../../briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}-macos.tar.gz" \
-            BriskaBlast.app
+            BriskaBlast.app files.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
