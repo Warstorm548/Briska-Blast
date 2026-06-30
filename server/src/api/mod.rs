@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shared::types::gamemode::GameMode;
 use shared::types::session::SessionStatus;
+use shared::types::spawn_settings::SpawnSettings;
 use shared::types::win_condition::WinCondition;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -36,6 +37,11 @@ pub struct Session {
     /// arrays hit the `seat_order`/`joiners` `{}` re-encode quirk, not objects).
     #[serde(default)]
     pub win_condition: WinCondition,
+    /// Random-spawn rules chosen by the host (BallSpliter cadence + chain-split).
+    /// `#[serde(default)]` keeps a session written before this field existed
+    /// readable across a deploy.
+    #[serde(default)]
+    pub spawn_settings: SpawnSettings,
     pub player_count: u8,
     pub joiners: Vec<JoinerEntry>,
     pub status: SessionStatus,

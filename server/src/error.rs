@@ -15,6 +15,7 @@ pub enum AppError {
     UpgradeRequired { component: String, minimum: String, current: String },
     InvalidPlayerCount { min: u8, max: u8, requested: u8 },
     InvalidWinCondition { min: u8, max: u8, requested: u8 },
+    InvalidSpawnSettings { min: u8, max: u8, requested: u8 },
     SessionFull { capacity: u8 },
     SessionNotStartable { reason: &'static str },
     Internal(String),
@@ -51,6 +52,15 @@ impl IntoResponse for AppError {
                 StatusCode::BAD_REQUEST,
                 json!({
                     "error": "invalid_win_condition",
+                    "min": min,
+                    "max": max,
+                    "requested": requested,
+                }),
+            ),
+            AppError::InvalidSpawnSettings { min, max, requested } => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid_spawn_settings",
                     "min": min,
                     "max": max,
                     "requested": requested,
@@ -111,6 +121,17 @@ mod tests {
         assert_eq!(body["min"], 10);
         assert_eq!(body["max"], 50);
         assert_eq!(body["requested"], 9);
+    }
+
+    #[tokio::test]
+    async fn invalid_spawn_settings_returns_400_with_bounds() {
+        let (status, body) =
+            body_json(AppError::InvalidSpawnSettings { min: 5, max: 60, requested: 99 }).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_spawn_settings");
+        assert_eq!(body["min"], 5);
+        assert_eq!(body["max"], 60);
+        assert_eq!(body["requested"], 99);
     }
 
     #[tokio::test]

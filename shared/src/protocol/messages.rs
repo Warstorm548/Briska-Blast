@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::gamemode::GameMode;
 use crate::types::session::SessionStatus;
+use crate::types::spawn_settings::SpawnSettings;
 use crate::types::win_condition::WinCondition;
 
 /// Maximum username length, in Unicode scalar values (`char`s, not bytes).
@@ -61,6 +62,11 @@ pub struct HostRequest {
     /// field is a serde deserialize error (422 naming the field); an out-of-range
     /// value is rejected with `invalid_win_condition` (see `WinCondition::validate`).
     pub win_condition: WinCondition,
+    /// Random-spawn rules (BallSpliter cadence + chain-split). Optional on the wire
+    /// (`#[serde(default)]`) so an older client that omits it still hosts with the
+    /// defaults; an out-of-range value is rejected with `invalid_spawn_settings`.
+    #[serde(default)]
+    pub spawn_settings: SpawnSettings,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -84,6 +90,8 @@ pub struct JoinedPeer {
 pub struct JoinResponse {
     pub gamemode: GameMode,
     pub win_condition: WinCondition,
+    #[serde(default)]
+    pub spawn_settings: SpawnSettings,
     pub player_count: u8,
     pub current_player_count: u8,
     pub joiners: Vec<JoinedPeer>,
@@ -94,6 +102,8 @@ pub struct SessionPollResponse {
     pub status: SessionStatus,
     pub gamemode: GameMode,
     pub win_condition: WinCondition,
+    #[serde(default)]
+    pub spawn_settings: SpawnSettings,
     pub player_count: u8,
     pub current_player_count: u8,
     pub joiner_player_ids: Vec<String>,

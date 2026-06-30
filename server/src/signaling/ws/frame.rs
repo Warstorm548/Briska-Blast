@@ -81,7 +81,7 @@ pub(super) async fn handle_client_frame(
                 from_player, peer, reason
             );
         }
-        ClientMsg::ReportScore { scoring_player_id } => {
+        ClientMsg::ReportScore { scoring_player_id, points } => {
             // Trusted for now: any member may report, and the reported
             // scorer is taken at face value. Server-side trajectory
             // validation is the documented later hook. Broadcast to
@@ -95,7 +95,7 @@ pub(super) async fn handle_client_frame(
             // validation tracked in docs/planning/roadmap.md ("Server-side
             // validation of score reports").
             if let Some((scores, winner)) =
-                state.signal_hub.record_score(code, &scoring_player_id).await
+                state.signal_hub.record_score(code, &scoring_player_id, points).await
             {
                 state
                     .signal_hub

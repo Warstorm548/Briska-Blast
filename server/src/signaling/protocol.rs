@@ -2,7 +2,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use shared::types::gamemode::GameMode;
+use shared::types::spawn_settings::SpawnSettings;
 use shared::types::win_condition::WinCondition;
+
+/// Default points credited by a `ReportScore` that omits the field (older clients
+/// send a single point). The server clamps the accepted value to a sane maximum.
+fn default_score_points() -> i64 {
+    1
+}
 
 /// Client → server signaling frames. JSON-tagged on `type`. Receive-only,
 /// so Deserialize but not Serialize. The server attests `from` on relays
@@ -41,10 +48,16 @@ pub enum ClientMsg {
     Leave,
     /// Reports that a ball got past a player's paddle into their goal and
     /// `scoring_player_id` (the last player to have hit the ball) should be
-    /// credited a point. Scores are server-relayed rather than P2P so the
-    /// server owns the canonical tally — a hook for later trajectory
-    /// validation. The server currently trusts any session member's report.
-    ReportScore { scoring_player_id: String },
+    /// credited `points` (1 for the master ball, 2 for a BallBT split ball).
+    /// Scores are server-relayed rather than P2P so the server owns the canonical
+    /// tally — a hook for later trajectory validation. The server currently trusts
+    /// any session member's report but clamps `points` to a sane range. The field
+    /// is optional on the wire so an older client (no `points`) still credits 1.
+    ReportScore {
+        scoring_player_id: String,
+        #[serde(default = "default_score_points")]
+        points: i64,
+    },
     /// Clock-sync probe. `client_send_ms` is the client's own monotonic send
     /// time, echoed back unchanged in the `TimeSync` reply so the client can
     /// compute round-trip delay and its offset to the server clock without the
@@ -126,6 +139,9 @@ pub enum ServerMsg {
     StartSignaling {
         gamemode: GameMode,
         win_condition: WinCondition,
+        /// Host-chosen random-spawn rules (BallSpliter cadence + chain-split), so
+        /// every client drives an identical local spawner.
+        spawn_settings: SpawnSettings,
         player_count: u8,
         peers: Vec<String>,
     },

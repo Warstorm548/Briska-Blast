@@ -175,6 +175,7 @@ pub async fn start_session(
                         ServerMsg::StartSignaling {
                             gamemode: session.gamemode,
                             win_condition: session.win_condition,
+                            spawn_settings: session.spawn_settings,
                             player_count: session.player_count,
                             peers: session_members,
                         },

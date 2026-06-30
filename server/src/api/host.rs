@@ -46,6 +46,11 @@ pub async fn host(
         .validate()
         .map_err(|(min, max, requested)| AppError::InvalidWinCondition { min, max, requested })?;
 
+    // Same trust boundary for the random-spawn settings (the UI slider caps input).
+    body.spawn_settings
+        .validate()
+        .map_err(|(min, max, requested)| AppError::InvalidSpawnSettings { min, max, requested })?;
+
     let mut conn = state
         .redis
         .get()
@@ -70,6 +75,7 @@ pub async fn host(
         host_player_id: body.player_id.clone(),
         gamemode: body.gamemode,
         win_condition: body.win_condition,
+        spawn_settings: body.spawn_settings,
         player_count: body.player_count,
         joiners: Vec::new(),
         status: SessionStatus::Waiting,
