@@ -26,6 +26,13 @@ public partial class SessionContext : Node
     public string WinConditionKind { get; set; } = WinConditionDto.SetScoreKind;
     public int WinScoreTarget { get; set; } = WinConditionDto.ScoreDefault;
 
+    /// <summary>Random-spawn rules for this session (BallSpliter cadence +
+    /// chain-split), learned from host setup, the join/poll response, or the
+    /// <c>start_signaling</c> frame. Mirror the server's <c>spawn_settings</c>;
+    /// <see cref="Game.GameScene"/> drives its local spawner from these.</summary>
+    public int SplitterIntervalSecs { get; set; } = SpawnSettingsDto.IntervalDefault;
+    public bool ChainSplit { get; set; } = SpawnSettingsDto.ChainSplitDefault;
+
     /// <summary>Human-readable win condition for menus, e.g. "First to 11".</summary>
     public string WinConditionDisplay =>
         WinConditionKind == WinConditionDto.SetScoreKind
@@ -160,12 +167,14 @@ public partial class SessionContext : Node
 #endif
 
     /// <summary>Set up local state after a successful POST /host.</summary>
-    public void StartHostSession(string code, string mode, int maxPlayers, WinConditionDto winCondition)
+    public void StartHostSession(string code, string mode, int maxPlayers,
+        WinConditionDto winCondition, SpawnSettingsDto spawnSettings)
     {
         SessionCode = code;
         GameMode = mode;
         MaxPlayers = maxPlayers;
         ApplyWinCondition(winCondition);
+        ApplySpawnSettings(spawnSettings);
         PlayerIds.Clear();
         SeatOrder.Clear();
         _usernames.Clear();
@@ -175,12 +184,13 @@ public partial class SessionContext : Node
 
     /// <summary>Set up local state after a successful POST /join.</summary>
     public void StartJoinSession(string code, string mode, int maxPlayers,
-        WinConditionDto winCondition, IEnumerable<string> roster)
+        WinConditionDto winCondition, SpawnSettingsDto spawnSettings, IEnumerable<string> roster)
     {
         SessionCode = code;
         GameMode = mode;
         MaxPlayers = maxPlayers;
         ApplyWinCondition(winCondition);
+        ApplySpawnSettings(spawnSettings);
         PlayerIds.Clear();
         SeatOrder.Clear();
         _usernames.Clear();
@@ -194,12 +204,14 @@ public partial class SessionContext : Node
     /// <summary>Set up local state for rejoining a live match by code (process-
     /// death recovery). The roster and host arrive authoritatively in the WS
     /// <c>Identified</c> frame, so they start empty here.</summary>
-    public void StartRejoinSession(string code, string mode, int maxPlayers, WinConditionDto winCondition)
+    public void StartRejoinSession(string code, string mode, int maxPlayers,
+        WinConditionDto winCondition, SpawnSettingsDto spawnSettings)
     {
         SessionCode = code;
         GameMode = mode;
         MaxPlayers = maxPlayers;
         ApplyWinCondition(winCondition);
+        ApplySpawnSettings(spawnSettings);
         PlayerIds.Clear();
         SeatOrder.Clear();
         _usernames.Clear();
@@ -236,6 +248,26 @@ public partial class SessionContext : Node
         WinScoreTarget = target >= WinConditionDto.ScoreMin && target <= WinConditionDto.ScoreMax
             ? target
             : WinConditionDto.ScoreDefault;
+    }
+
+    /// <summary>Adopt random-spawn settings from a wire DTO (host/join/poll). A null
+    /// DTO (a server predating the field) falls back to the defaults.</summary>
+    public void ApplySpawnSettings(SpawnSettingsDto? spawnSettings)
+    {
+        var s = spawnSettings ?? SpawnSettingsDto.Default;
+        ApplySpawnSettings(s.SplitterIntervalSecs, s.ChainSplit);
+    }
+
+    /// <summary>Adopt random-spawn settings by parsed fields (used by the
+    /// <c>start_signaling</c> frame). An out-of-range interval falls back to the
+    /// default rather than driving a nonsense spawner cadence.</summary>
+    public void ApplySpawnSettings(int splitterIntervalSecs, bool chainSplit)
+    {
+        SplitterIntervalSecs =
+            splitterIntervalSecs >= SpawnSettingsDto.IntervalMin && splitterIntervalSecs <= SpawnSettingsDto.IntervalMax
+                ? splitterIntervalSecs
+                : SpawnSettingsDto.IntervalDefault;
+        ChainSplit = chainSplit;
     }
 
     /// <summary>Reset all per-session state (code, mode, roster, seating, usernames,

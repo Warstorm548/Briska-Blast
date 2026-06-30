@@ -39,9 +39,10 @@ public partial class SignalingClient : Node
     public event Action<string, string>? PeerJoined;
     public event Action<string, string>? PeerLeft;
     public event Action<string>? HostChanged;
-    /// <summary>Match starting. Carries (gamemode, winCondition, playerCount, peers).
-    /// <c>winCondition</c> is the host-chosen match-end rule the client applies.</summary>
-    public event Action<string, WinConditionDto, int, string[]>? StartSignaling;
+    /// <summary>Match starting. Carries (gamemode, winCondition, spawnSettings,
+    /// playerCount, peers). <c>winCondition</c> + <c>spawnSettings</c> are the
+    /// host-chosen rules every client applies.</summary>
+    public event Action<string, WinConditionDto, SpawnSettingsDto, int, string[]>? StartSignaling;
     public event Action<string>? SessionEnded;
     public event Action<string>? Kicked;
     /// <summary>Authoritative per-session score tally (player_id → points)
@@ -122,7 +123,7 @@ public partial class SignalingClient : Node
     private sealed record AnswerFrame(string Type, string To, string Sdp);
     private sealed record IceFrame(string Type, string To, string Candidate, string SdpMid, int SdpMLineIndex);
     private sealed record PeerConnectionFailedFrame(string Type, string Peer, string Reason);
-    private sealed record ReportScoreFrame(string Type, string ScoringPlayerId);
+    private sealed record ReportScoreFrame(string Type, string ScoringPlayerId, int Points);
     private sealed record TimeSyncFrame(string Type, long ClientSendMs);
     private sealed record SendChatFrame(string Type, string Text);
 
@@ -193,8 +194,8 @@ public partial class SignalingClient : Node
 
     /// <summary>Report that <paramref name="scoringPlayerId"/> (the last player
     /// to hit the ball) scored. The server tallies and broadcasts ScoreUpdate.</summary>
-    public void SendReportScore(string scoringPlayerId) =>
-        SendFrame(new ReportScoreFrame("report_score", scoringPlayerId));
+    public void SendReportScore(string scoringPlayerId, int points) =>
+        SendFrame(new ReportScoreFrame("report_score", scoringPlayerId, points));
 
     /// <summary>Send a lobby chat message. The server attests the sender,
     /// resolves the display name, and broadcasts <see cref="ChatMessage"/> to the
@@ -417,6 +418,7 @@ public partial class SignalingClient : Node
                     StartSignaling?.Invoke(
                         Str(root, "gamemode"),
                         ReadWinCondition(root, "win_condition"),
+                        ReadSpawnSettings(root, "spawn_settings"),
                         root.GetProperty("player_count").GetInt32(),
                         ReadStrings(root, "peers"));
                     break;
@@ -514,6 +516,25 @@ public partial class SignalingClient : Node
             return new WinConditionDto(kind, target);
         }
         return WinConditionDto.Default;
+    }
+
+    /// <summary>Read a <c>spawn_settings</c> object into a DTO. A missing/malformed
+    /// field degrades to the default so a client talking to a server that predates
+    /// the field still has usable random-spawn rules.</summary>
+    private static SpawnSettingsDto ReadSpawnSettings(JsonElement obj, string name)
+    {
+        if (obj.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.Object)
+        {
+            int interval = el.TryGetProperty("splitter_interval_secs", out var s) && s.TryGetInt32(out var v)
+                ? v
+                : SpawnSettingsDto.IntervalDefault;
+            bool chain = el.TryGetProperty("chain_split", out var c)
+                && (c.ValueKind == JsonValueKind.True || c.ValueKind == JsonValueKind.False)
+                ? c.ValueKind == JsonValueKind.True
+                : SpawnSettingsDto.ChainSplitDefault;
+            return new SpawnSettingsDto(interval, chain);
+        }
+        return SpawnSettingsDto.Default;
     }
 
     private static string[] ReadStrings(JsonElement obj, string name)

@@ -29,6 +29,9 @@ public partial class HostSetupMenu : Control
 	private OptionButton _winCondition = null!;
 	private SpinBox _winScore = null!;
 	private Label _winDescription = null!;
+	private HSlider _splitterInterval = null!;
+	private Label _splitterIntervalValue = null!;
+	private CheckBox _chainSplit = null!;
 	private Button _createButton = null!;
 	private Label _status = null!;
 
@@ -62,6 +65,19 @@ public partial class HostSetupMenu : Control
 		_winCondition.ItemSelected += idx => ApplyWinKind((int)idx);
 		_winScore.ValueChanged += _ => UpdateWinDescription();
 		ApplyWinKind(0);
+
+		// Advanced "Random Spawns": BallSpliter cadence + chain-split. Bounds come
+		// from the shared SpawnSettings constants so the slider and the server check
+		// can't drift; defaults match a host who never opens this tab.
+		_splitterInterval = GetNode<HSlider>("%SplitterInterval");
+		_splitterIntervalValue = GetNode<Label>("%SplitterIntervalValue");
+		_chainSplit = GetNode<CheckBox>("%ChainSplit");
+		_splitterInterval.MinValue = SpawnSettingsDto.IntervalMin;
+		_splitterInterval.MaxValue = SpawnSettingsDto.IntervalMax;
+		_splitterInterval.Value = SpawnSettingsDto.IntervalDefault;
+		_chainSplit.ButtonPressed = SpawnSettingsDto.ChainSplitDefault;
+		_splitterInterval.ValueChanged += _ => UpdateSplitterLabel();
+		UpdateSplitterLabel();
 
 		_createButton.Pressed += OnCreatePressed;
 		GetNode<Button>("%ReturnButton").Pressed += () =>
@@ -103,6 +119,18 @@ public partial class HostSetupMenu : Control
 		return new WinConditionDto(kind.WireName, target);
 	}
 
+	// The "every Ns" readout to the right of the splitter slider.
+	private void UpdateSplitterLabel() =>
+		_splitterIntervalValue.Text = $"every {(int)_splitterInterval.Value}s";
+
+	private SpawnSettingsDto BuildSpawnSettings()
+	{
+		// Clamp defensively to the shared range (the slider already bounds it; the
+		// server re-checks regardless).
+		int interval = Math.Clamp((int)_splitterInterval.Value, SpawnSettingsDto.IntervalMin, SpawnSettingsDto.IntervalMax);
+		return new SpawnSettingsDto(interval, _chainSplit.ButtonPressed);
+	}
+
 	// Read UI values on the main thread, then do the async server round-trip.
 	// The awaited continuation is not guaranteed to be on the main thread, so
 	// every result handler is marshalled back via Callable.From(...).CallDeferred().
@@ -111,6 +139,7 @@ public partial class HostSetupMenu : Control
 		var mode = Modes[_gameMode.Selected];
 		var max = (int)_maxPlayers.Value;
 		var winCondition = BuildWinCondition();
+		var spawnSettings = BuildSpawnSettings();
 
 		SetBusy(true, "Creating session…");
 
@@ -121,15 +150,16 @@ public partial class HostSetupMenu : Control
 			return;
 		}
 
-		var result = await ctx.Api.HostAsync(ctx.PlayerId, ctx.SecretToken, mode.WireName, max, winCondition);
-		Callable.From(() => OnHostComplete(result, mode.DisplayName, max, winCondition)).CallDeferred();
+		var result = await ctx.Api.HostAsync(ctx.PlayerId, ctx.SecretToken, mode.WireName, max, winCondition, spawnSettings);
+		Callable.From(() => OnHostComplete(result, mode.DisplayName, max, winCondition, spawnSettings)).CallDeferred();
 	}
 
-	private void OnHostComplete(ApiResult<HostResponse> result, string modeDisplay, int max, WinConditionDto winCondition)
+	private void OnHostComplete(ApiResult<HostResponse> result, string modeDisplay, int max,
+		WinConditionDto winCondition, SpawnSettingsDto spawnSettings)
 	{
 		if (result.Ok && result.Value is { } r)
 		{
-			SessionContext.Instance.StartHostSession(r.SessionCode, modeDisplay, max, winCondition);
+			SessionContext.Instance.StartHostSession(r.SessionCode, modeDisplay, max, winCondition, spawnSettings);
 			GetTree().ChangeSceneToFile("res://src/ui/menus/SessionLobby.tscn");
 			return;
 		}
@@ -139,6 +169,7 @@ public partial class HostSetupMenu : Control
 		string message = result.ErrorCode switch
 		{
 			"invalid_win_condition" => $"Score must be {WinConditionDto.ScoreMin}–{WinConditionDto.ScoreMax}.",
+			"invalid_spawn_settings" => $"Splitter interval must be {SpawnSettingsDto.IntervalMin}–{SpawnSettingsDto.IntervalMax}s.",
 			"invalid_player_count" => "That player count isn't allowed for this mode.",
 			_ => $"Could not host: {result.ErrorCode}",
 		};

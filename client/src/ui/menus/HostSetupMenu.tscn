@@ -101,6 +101,75 @@ theme_override_constants/margin_bottom = 48
 layout_mode = 2
 theme_override_constants/separation = 24
 
+[node name="RandomSpawnsHeading" type="Label" parent="TabContainer/Advanced/Content"]
+layout_mode = 2
+text = "Random Spawns"
+theme_override_colors/font_color = Color(0.5, 0.75, 1, 1)
+theme_override_font_sizes/font_size = 36
+
+[node name="RandomSpawnsSeparator" type="HSeparator" parent="TabContainer/Advanced/Content"]
+layout_mode = 2
+
+[node name="SplitterRow" type="HBoxContainer" parent="TabContainer/Advanced/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="SplitterLabel" type="Label" parent="TabContainer/Advanced/Content/SplitterRow"]
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+size_flags_vertical = 1
+text = "Ball Splitter"
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 28
+
+[node name="SplitterInterval" type="HSlider" parent="TabContainer/Advanced/Content/SplitterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(300, 56)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 1
+min_value = 5.0
+max_value = 60.0
+step = 1.0
+value = 15.0
+
+[node name="SplitterIntervalValue" type="Label" parent="TabContainer/Advanced/Content/SplitterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+size_flags_vertical = 1
+text = "every 15s"
+vertical_alignment = 1
+theme_override_colors/font_color = Color(0.7, 0.78, 0.9, 1)
+theme_override_font_sizes/font_size = 22
+
+[node name="ChainSplitRow" type="HBoxContainer" parent="TabContainer/Advanced/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="ChainSplitLabel" type="Label" parent="TabContainer/Advanced/Content/ChainSplitRow"]
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+size_flags_vertical = 1
+text = "Chain Splitting"
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 28
+
+[node name="ChainSplit" type="CheckBox" parent="TabContainer/Advanced/Content/ChainSplitRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 1
+button_pressed = true
+text = "Split balls can split again"
+theme_override_font_sizes/font_size = 22
+
+[node name="RandomSpawnsHint" type="Label" parent="TabContainer/Advanced/Content"]
+layout_mode = 2
+text = "Lower interval = splitters appear more often. Each player's screen spawns its own."
+autowrap_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.62, 0.75, 1)
+theme_override_font_sizes/font_size = 20
+
 [node name="MatchRulesHeading" type="Label" parent="TabContainer/Advanced/Content"]
 layout_mode = 2
 text = "Match Rules"

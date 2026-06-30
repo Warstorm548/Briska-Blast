@@ -52,12 +52,30 @@ public sealed record WinConditionDto(string Kind, int Target)
     public static WinConditionDto Default => SetScore(ScoreDefault);
 }
 
+/// <summary>
+/// Mirror of the Rust <c>SpawnSettings</c> struct. Serializes flat as
+/// <c>{"splitter_interval_secs":N,"chain_split":bool}</c> under the snake_case
+/// policy. Range constants are hand-mirrored from
+/// <c>shared/src/types/spawn_settings.rs</c> (same single-source convention as the
+/// win-condition bounds) so the UI slider cap and the server's check can't drift.
+/// </summary>
+public sealed record SpawnSettingsDto(int SplitterIntervalSecs, bool ChainSplit)
+{
+    public const int IntervalMin = 5;
+    public const int IntervalMax = 60;
+    public const int IntervalDefault = 15;
+    public const bool ChainSplitDefault = true;
+
+    public static SpawnSettingsDto Default => new(IntervalDefault, ChainSplitDefault);
+}
+
 public sealed record HostRequest(
     string PlayerId,
     string SecretToken,
     string Gamemode,
     int PlayerCount,
-    WinConditionDto WinCondition);
+    WinConditionDto WinCondition,
+    SpawnSettingsDto SpawnSettings);
 
 public sealed record HostResponse(string SessionCode);
 
@@ -71,6 +89,7 @@ public sealed record JoinedPeer(string PlayerId);
 public sealed record JoinResponse(
     string Gamemode,
     WinConditionDto WinCondition,
+    SpawnSettingsDto SpawnSettings,
     int PlayerCount,
     int CurrentPlayerCount,
     List<JoinedPeer> Joiners);
@@ -79,6 +98,7 @@ public sealed record SessionPollResponse(
     string Status,
     string Gamemode,
     WinConditionDto WinCondition,
+    SpawnSettingsDto SpawnSettings,
     int PlayerCount,
     int CurrentPlayerCount,
     List<string> JoinerPlayerIds);
