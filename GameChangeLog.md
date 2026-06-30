@@ -9,6 +9,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.18.0] — 2026-06-29
+
+Adds the **ball-splitter** mechanic: a system-spawned **BallSpliter** element that
+splits the master ball into three double-value **BallBT** balls, plus a host-tuned
+**Random Spawns** settings tab and a central **sprite registry**.
+
+### Added
+
+- **Asset/sprite registry** (`core/SpriteRegistry.cs`, autoload). A hand-curated
+  lookup table mapping a stable, upward-counting `AssetId` to its `res://` path +
+  category (`PlayerControlled` / `SystemHandled`), lazily caching the texture. Replaces
+  the scattered texture constants in `View2D` — the single source of truth for sprite
+  textures.
+- **BallSpliter element + split mechanic.** A system spawn appears on each screen on a
+  host-configured cadence (the cooldown doubles as its respawn timer). When the master
+  ball touches it, it spawns **3 BallBT split balls** fanned 45° apart (centred away
+  from the master's heading), inheriting the master's last-hitter; the master passes
+  through unaffected. **Chain-splitting** (a split ball splitting again) is a host
+  toggle, on by default.
+- **BallBT split balls** are worth **2 points** and **vanish** at a goal (the master
+  ball is re-served as before). They follow the same last-hitter possession rule and
+  hand off between screens like any ball (the kind travels in the handoff packet).
+- **Advanced "Random Spawns" settings tab** (above Match Rules): a splitter
+  spawn-interval slider (5–60s, default 15) + a chain-split toggle. Sent to the server
+  at host time and applied by every client (joiners included) so the cadence + rule are
+  identical across the table.
+- **Multi-ball support.** The sim now carries multiple concurrent balls: ball ids are
+  seat-namespaced for global uniqueness, the serve no longer clears the ball list, and
+  the loop always steps so split balls keep moving during a serve hold.
+
+### Changed
+
+- The score report now carries the ball's point value (1 master / 2 split) over the
+  server-authoritative scoring channel.
+
+---
+
 ## [0.17.0] — 2026-06-25
 
 Isolates each release channel's self-contained **.NET runtime cache** and ships

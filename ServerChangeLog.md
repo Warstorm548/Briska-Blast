@@ -5,6 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.20.0] — 2026-06-29
+
+Plumbs the host's **random-spawn settings** through the session and adds a
+**`points`** field to score reports so a double-value BallBT split ball counts for 2.
+
+### Added
+
+- **`spawn_settings` on a session.** `HostRequest` now carries `SpawnSettings`
+  (shared crate; BallSpliter cadence + chain-split), validated server-side
+  (`invalid_spawn_settings`, 400) and echoed to joiners in `JoinResponse` /
+  `SessionPollResponse` / the `StartSignaling` broadcast. The `Session` stores it
+  (`#[serde(default)]`), exactly like `win_condition`.
+- **`points` on `ReportScore`.** The score frame gained an optional `points` field
+  (`#[serde(default)]` → 1). `record_score` credits the reported points, **clamped to
+  `[1, 2]`** so a forged report can't mint an arbitrary tally (with a win condition a
+  forged report can end a match — clamp is defense-in-depth pending the trajectory-
+  validation hook). Older clients that omit `points` still credit 1.
+
+---
+
 ## [0.19.0] — 2026-06-22
 
 Adds the game's first **win condition** — "Set Score": first player to a
