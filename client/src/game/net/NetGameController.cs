@@ -64,7 +64,7 @@ public sealed class NetGameController : IDisposable
         float invH = 1f / _state.ArenaHeight;
         var pkt = new BallHandoffPacket(
             ev.BallId, ev.LastHitterId, perp * invH, tang * invH, ev.NormalizedAlong,
-            _signaling.ServerNowMs());
+            _signaling.ServerNowMs(), ev.Kind);
         _transport.Send(ev.PeerId, GamePacket.WriteBallHandoff(pkt));
     }
 
@@ -75,7 +75,7 @@ public sealed class NetGameController : IDisposable
     public void ReportScore(ScoreEvent ev)
     {
         if (!string.IsNullOrEmpty(ev.ScoringPlayerId))
-            _signaling.SendReportScore(ev.ScoringPlayerId);
+            _signaling.SendReportScore(ev.ScoringPlayerId, ev.Points);
     }
 
     private void OnPeerData(string peerId, byte[] data)
@@ -112,8 +112,9 @@ public sealed class NetGameController : IDisposable
             : 0f;
         pos += vel * transit;
 
-        // Defence: a duplicate id is a packet replay or a future multi-ball
-        // collision. With single-ball this can't happen normally; ignore.
+        // Defence: drop a ball we already have (a packet replay, or a ball that
+        // crossed back). Ball ids are globally unique (seat-namespaced), so this
+        // scan is correct with multiple balls in play.
         foreach (var b in _state.Balls)
             if (b.Id == pkt.BallId)
                 return;
@@ -125,6 +126,7 @@ public sealed class NetGameController : IDisposable
             Vel = vel,
             Radius = _spawnRadius,
             LastHitterId = pkt.LastHitterId,
+            Kind = pkt.Kind,
         });
     }
 

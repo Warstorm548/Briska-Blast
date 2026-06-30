@@ -48,6 +48,17 @@ public readonly struct EdgeTarget
     public static EdgeTarget Portal(string peerId) => new(EdgeKind.Portal, peerId);
 }
 
+/// <summary>What kind of ball this is. The white master/starter ball is re-served
+/// when it's lost and worth a single point; <see cref="Split"/> balls are the
+/// BallBT bonus balls spawned by a ball splitter — worth double and simply removed
+/// (never re-served) when they reach a goal. Drives texture, score weight and
+/// re-serve behaviour.</summary>
+public enum BallKind
+{
+    Master,
+    Split,
+}
+
 /// <summary>
 /// A ball in flight on this screen. Plain data; the simulation integrates it and
 /// the view draws it. <see cref="LastHitterId"/> travels with the ball across
@@ -62,6 +73,20 @@ public sealed class Ball
     /// <summary>player_id of the last player to deflect this ball with a paddle;
     /// empty until someone has hit it.</summary>
     public string LastHitterId = "";
+    /// <summary>Master (the white starter ball) by default; <see cref="BallKind.Split"/>
+    /// for BallBT balls produced by a splitter.</summary>
+    public BallKind Kind = BallKind.Master;
+}
+
+/// <summary>A ball-splitter element (BallSpliter) sitting on this screen. A system
+/// spawn: it appears on a host-configured cadence, and when a ball touches it the
+/// splitter is consumed and spits out three BallBT split balls. Local to this
+/// screen — splitters are never handed off; each client spawns its own.</summary>
+public sealed class Splitter
+{
+    public int Id;
+    public Vector2 Pos;
+    public float Radius = 24f;
 }
 
 /// <summary>The local player's paddle: a horizontal bar that slides along the
@@ -91,6 +116,14 @@ public sealed class GameState
     public readonly Paddle Paddle = new();
     public readonly List<Ball> Balls = new();
 
+    /// <summary>System-spawned ball splitters currently on this screen (local-only;
+    /// never networked). A ball touching one consumes it into three split balls.</summary>
+    public readonly List<Splitter> Splitters = new();
+
+    /// <summary>When true, BallBT split balls that hit another splitter split again;
+    /// when false only the master ball can trigger a split. Host-configured.</summary>
+    public bool ChainSplitEnabled = true;
+
     /// <summary>Per-edge mapping for this screen. Bottom is always
     /// <see cref="EdgeTarget.Goal"/>; Top/Right/Left are Portal or Wall.</summary>
     public readonly Dictionary<Edge, EdgeTarget> Edges = new();
@@ -101,9 +134,26 @@ public sealed class GameState
 
     public string LocalPlayerId = "";
 
+    /// <summary>Per-seat stride that namespaces ball ids so balls created
+    /// independently on different screens (split balls, simultaneous serves) never
+    /// collide once handed across the mesh. Each screen's <see cref="BallIdBase"/>
+    /// is its seat × this; a screen will never allocate near this many balls.</summary>
+    public const int BallIdSeatStride = 1_000_000;
+
+    /// <summary>Start of this screen's ball-id block (seat × <see cref="BallIdSeatStride"/>),
+    /// set once from the seating in GameScene. Defaults to 0 (seat 0 / unseated).</summary>
+    public int BallIdBase;
+
     private int _nextBallId;
 
-    /// <summary>Monotonic ball id allocator (ids are unique within this screen's
-    /// lifetime; handed-off balls keep the id assigned by their origin screen).</summary>
-    public int NextBallId() => _nextBallId++;
+    /// <summary>Globally-unique ball id allocator. Monotonic within this screen's
+    /// id block; handed-off balls keep the id assigned by their origin screen, so
+    /// ids stay unique across the mesh.</summary>
+    public int NextBallId() => BallIdBase + _nextBallId++;
+
+    private int _nextSplitterId;
+
+    /// <summary>Splitter id allocator. Splitters never leave this screen, so a plain
+    /// local counter suffices (no cross-screen uniqueness needed).</summary>
+    public int NextSplitterId() => _nextSplitterId++;
 }

@@ -35,9 +35,12 @@ public readonly struct BallHandoffPacket
     /// network transit rather than the offset between two machines' wall
     /// clocks.</summary>
     public readonly long SentTimestampMs;
+    /// <summary>The ball's kind, so a handed-off BallBT split ball stays a split ball
+    /// on the peer's screen (texture, double score, vanish-on-goal).</summary>
+    public readonly BallKind Kind;
 
     public BallHandoffPacket(int ballId, string lastHitterId,
-        float perp, float tang, float along, long sentTimestampMs)
+        float perp, float tang, float along, long sentTimestampMs, BallKind kind)
     {
         BallId = ballId;
         LastHitterId = lastHitterId;
@@ -45,6 +48,7 @@ public readonly struct BallHandoffPacket
         Tang = tang;
         Along = along;
         SentTimestampMs = sentTimestampMs;
+        Kind = kind;
     }
 }
 
@@ -68,6 +72,7 @@ public static class GamePacket
         w.Write(p.Tang);
         w.Write(p.Along);
         w.Write(p.SentTimestampMs);
+        w.Write((byte)p.Kind);
         return ms.ToArray();
     }
 
@@ -92,7 +97,12 @@ public static class GamePacket
             float tang = r.ReadSingle();
             float along = r.ReadSingle();
             long ts = r.ReadInt64();
-            pkt = new BallHandoffPacket(id, hitter, perp, tang, along, ts);
+            // Kind is appended; tolerate an older packet without it (default Master)
+            // and treat any unknown byte as Master so a bad value can't strand a ball.
+            BallKind kind = BallKind.Master;
+            if (ms.Position < ms.Length && r.ReadByte() == (byte)BallKind.Split)
+                kind = BallKind.Split;
+            pkt = new BallHandoffPacket(id, hitter, perp, tang, along, ts, kind);
             return true;
         }
         catch

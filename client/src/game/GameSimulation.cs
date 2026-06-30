@@ -17,9 +17,10 @@ public readonly struct HandoffEvent
     public readonly float NormalizedAlong;
     public readonly Vector2 Velocity;
     public readonly string LastHitterId;
+    public readonly BallKind Kind;
 
     public HandoffEvent(int ballId, string peerId, Edge exitEdge, float along,
-        Vector2 velocity, string lastHitterId)
+        Vector2 velocity, string lastHitterId, BallKind kind)
     {
         BallId = ballId;
         PeerId = peerId;
@@ -27,17 +28,28 @@ public readonly struct HandoffEvent
         NormalizedAlong = along;
         Velocity = velocity;
         LastHitterId = lastHitterId;
+        Kind = kind;
     }
 }
 
-/// <summary>A ball passed the local player's paddle into their goal. Always
-/// triggers a serve by the scored-on (local) player. <see cref="ScoringPlayerId"/>
-/// is the last hitter when a point is due, or empty when none is — a self-goal
-/// (the scored-on player was the last hitter) or a ball nobody had hit.</summary>
+/// <summary>A ball passed the local player's paddle into their goal.
+/// <see cref="ScoringPlayerId"/> is the last hitter when a point is due, or empty
+/// when none is — a self-goal (the scored-on player was the last hitter) or a ball
+/// nobody had hit. <see cref="Points"/> is the goal's value (1 for the master ball,
+/// 2 for a BallBT split ball). <see cref="Kind"/> is the goaled ball's kind: only a
+/// lost <see cref="BallKind.Master"/> is re-served — a split ball just vanishes.</summary>
 public readonly struct ScoreEvent
 {
     public readonly string ScoringPlayerId;
-    public ScoreEvent(string scoringPlayerId) => ScoringPlayerId = scoringPlayerId;
+    public readonly int Points;
+    public readonly BallKind Kind;
+
+    public ScoreEvent(string scoringPlayerId, int points, BallKind kind)
+    {
+        ScoringPlayerId = scoringPlayerId;
+        Points = points;
+        Kind = kind;
+    }
 }
 
 /// <summary>Events emitted by one <see cref="GameSimulation.Step"/>. Owned and
@@ -67,6 +79,21 @@ public static class GameSimulation
     /// very edge of the paddle (radians). Centre hits go straight up.</summary>
     private const float MaxPaddleBounce = 1.0472f; // 60°
 
+    /// <summary>Points a BallBT split ball is worth at a goal — double the master
+    /// ball's single point. May change as the game evolves.</summary>
+    private const int SplitBallPoints = 2;
+
+    /// <summary>Number of BallBT split balls a splitter produces.</summary>
+    private const int SplitBallCount = 3;
+
+    /// <summary>Angle between adjacent split balls in the fan (45°).</summary>
+    private static readonly float SplitFanSpacing = Mathf.Pi / 4f;
+
+    /// <summary>The split fan is centred opposite the hitting ball's heading (180°),
+    /// so the gap around the ball's forward path stays clear and the new balls don't
+    /// immediately re-collide with it.</summary>
+    private static readonly float SplitFanBaseOffset = Mathf.Pi;
+
     public static void Step(GameState state, double dt, StepResult result)
     {
         result.Clear();
@@ -81,6 +108,10 @@ public static class GameSimulation
             if (StepBall(state, ball, result))
                 state.Balls.RemoveAt(i); // left the screen (handoff or goal)
         }
+
+        // A ball touching a splitter spawns split balls — handled after integration
+        // so the ball list is settled for this frame.
+        ResolveSplitters(state);
     }
 
     /// <summary>Resolve one ball against the paddle and edges after integration.
@@ -114,11 +145,14 @@ public static class GameSimulation
         // --- Goal: crossed the bottom line past the paddle ---
         if (ball.Pos.Y >= h)
         {
-            // A point goes to the last hitter — unless that's the scored-on
-            // player (a self-goal doesn't count) or nobody had hit it. Either
-            // way the event fires so the scored-on player serves a replacement.
+            // A point goes to the last hitter — unless that's the scored-on player
+            // (a self-goal doesn't count) or nobody had hit it. A master ball is
+            // worth 1 and is re-served by the scored-on player; a split (BallBT)
+            // ball is worth 2 and just vanishes. The event fires either way so the
+            // scorer is credited.
             bool counts = !string.IsNullOrEmpty(ball.LastHitterId) && ball.LastHitterId != state.LocalPlayerId;
-            result.Scores.Add(new ScoreEvent(counts ? ball.LastHitterId : ""));
+            int points = ball.Kind == BallKind.Split ? SplitBallPoints : 1;
+            result.Scores.Add(new ScoreEvent(counts ? ball.LastHitterId : "", points, ball.Kind));
             return true;
         }
 
@@ -148,7 +182,7 @@ public static class GameSimulation
         {
             result.Handoffs.Add(new HandoffEvent(
                 ball.Id, target.PeerId, edge, Mathf.Clamp(along, 0f, 1f),
-                ball.Vel, ball.LastHitterId));
+                ball.Vel, ball.LastHitterId, ball.Kind));
             return true;
         }
 
@@ -171,5 +205,66 @@ public static class GameSimulation
                 break;
         }
         return false;
+    }
+
+    /// <summary>Resolve ball↔splitter collisions. A master ball always splits a
+    /// splitter it overlaps; a split ball only does so when chain-splitting is on.
+    /// The splitter is consumed (it disappears; the spawner re-arms the cooldown)
+    /// and the hitting ball passes through unaffected.</summary>
+    private static void ResolveSplitters(GameState state)
+    {
+        if (state.Splitters.Count == 0)
+            return;
+
+        // Backwards so a consumed splitter can be removed in place.
+        for (int s = state.Splitters.Count - 1; s >= 0; s--)
+        {
+            var splitter = state.Splitters[s];
+            for (int b = 0; b < state.Balls.Count; b++)
+            {
+                var ball = state.Balls[b];
+                // Only the master always splits; split balls re-split only when the
+                // host has chain-splitting enabled.
+                if (ball.Kind == BallKind.Split && !state.ChainSplitEnabled)
+                    continue;
+                float reach = ball.Radius + splitter.Radius;
+                if (ball.Pos.DistanceSquaredTo(splitter.Pos) > reach * reach)
+                    continue;
+                if (!SpawnSplitBalls(state, splitter, ball))
+                    continue; // ball too slow to define a fan — leave the splitter
+
+                state.Splitters.RemoveAt(s);
+                break; // splitter consumed; on to the next one
+            }
+        }
+    }
+
+    /// <summary>Spawn the fan of BallBT split balls at the splitter's position,
+    /// inheriting the hitting ball's owner and speed. Returns false (spawning
+    /// nothing) if the hitting ball has no meaningful velocity to fan around.</summary>
+    private static bool SpawnSplitBalls(GameState state, Splitter splitter, Ball hitter)
+    {
+        float speed = hitter.Vel.Length();
+        if (speed <= 0.001f)
+            return false;
+
+        float heading = Mathf.Atan2(hitter.Vel.Y, hitter.Vel.X);
+        float baseAngle = heading + SplitFanBaseOffset;
+        // Centre the fan on baseAngle: for 3 balls → {−spacing, 0, +spacing}.
+        float start = baseAngle - SplitFanSpacing * (SplitBallCount - 1) * 0.5f;
+        for (int k = 0; k < SplitBallCount; k++)
+        {
+            float a = start + SplitFanSpacing * k;
+            state.Balls.Add(new Ball
+            {
+                Id = state.NextBallId(),
+                Pos = splitter.Pos,
+                Vel = new Vector2(Mathf.Cos(a), Mathf.Sin(a)) * speed,
+                Radius = hitter.Radius,
+                Kind = BallKind.Split,
+                LastHitterId = hitter.LastHitterId,
+            });
+        }
+        return true;
     }
 }

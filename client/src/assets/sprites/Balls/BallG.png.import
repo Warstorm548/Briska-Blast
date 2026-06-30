@@ -3,15 +3,15 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://s28h3fk1nuju"
-path="res://.godot/imported/BallG.png-69688e9b5c820d7776230d6e54326bcf.ctex"
+path="res://.godot/imported/BallG.png-e10544f62f7304d49a556ece3aadb71b.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://src/assets/Starter balls/BallG.png"
-dest_files=["res://.godot/imported/BallG.png-69688e9b5c820d7776230d6e54326bcf.ctex"]
+source_file="res://src/assets/sprites/Balls/BallG.png"
+dest_files=["res://.godot/imported/BallG.png-e10544f62f7304d49a556ece3aadb71b.ctex"]
 
 [params]
 
