@@ -56,6 +56,7 @@ pub async fn get_session(
         status: session.status,
         gamemode: session.gamemode,
         win_condition: session.win_condition,
+        spawn_settings: session.spawn_settings,
         player_count: session.player_count,
         current_player_count,
         joiner_player_ids,

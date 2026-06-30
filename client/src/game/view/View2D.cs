@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using Godot;
+using BriskaBlast.Core;
 
 namespace BriskaBlast.Game.View;
 
@@ -13,23 +14,21 @@ namespace BriskaBlast.Game.View;
 /// </summary>
 public partial class View2D : Node2D, IGameView
 {
-    private const string BallTexPath = "res://src/assets/Starter balls/Ball.png";
-    private const string PaddleTexPath = "res://src/assets/Paddles/BallStricker.png";
-    private const string BackgroundTexPath = "res://src/assets/sprites/backgrounds/BackgroundDefault.png";
-
     private static readonly Color WallColor = new(0.6f, 0.6f, 0.6f);
     private static readonly Color PortalColor = new(0.3f, 0.6f, 1f);
     private static readonly Color GoalColor = new(1f, 0.35f, 0.35f);
 
     private Sprite2D _background = null!;
     private Sprite2D _paddle = null!;
-    private Texture2D _ballTex = null!;
     private Label _scoreboard = null!;
     private readonly Dictionary<int, Sprite2D> _ballSprites = new();
+    private readonly Dictionary<int, Sprite2D> _splitterSprites = new();
 
     // Reused across frames so Render allocates nothing in the hot loop.
     private readonly HashSet<int> _seen = new();
     private readonly List<int> _gone = new();
+    private readonly HashSet<int> _seenSplitters = new();
+    private readonly List<int> _goneSplitters = new();
     private readonly List<string> _scoreOrder = new();
     private readonly StringBuilder _scoreText = new();
 
@@ -43,19 +42,22 @@ public partial class View2D : Node2D, IGameView
 
     public override void _Ready()
     {
-        // Default background sprite for now (BackgroundDefault.png).
+        var sprites = SpriteRegistry.Instance;
+
+        // Textures come from the central registry (the single source of truth).
         _background = new Sprite2D
         {
-            Texture = GD.Load<Texture2D>(BackgroundTexPath),
+            Texture = sprites.GetTexture(AssetId.Background),
             Centered = false,
             ZIndex = -10,
         };
         AddChild(_background);
 
-        _paddle = new Sprite2D { Texture = GD.Load<Texture2D>(PaddleTexPath) };
+        _paddle = new Sprite2D { Texture = sprites.GetTexture(AssetId.Paddle) };
         AddChild(_paddle);
 
-        _ballTex = GD.Load<Texture2D>(BallTexPath);
+        // Ball textures are resolved per ball in Render (by kind), so the registry
+        // loads the BallBT art lazily — the build runs before it's imported.
 
         // Minimal scoreboard, top-left. Sized large so it's visible on the
         // 2560-wide design viewport without further theming.
@@ -80,19 +82,22 @@ public partial class View2D : Node2D, IGameView
         if (paddleSize.X > 0 && paddleSize.Y > 0)
             _paddle.Scale = new Vector2(p.Width / paddleSize.X, p.Height / paddleSize.Y);
 
-        // Balls: create/move sprites by id, free those whose ball is gone.
+        // Balls: create/move sprites by id, free those whose ball is gone. The
+        // texture is chosen by ball kind (master vs BallBT split) via the registry.
         _seen.Clear();
-        var ballSize = _ballTex.GetSize();
         foreach (var ball in state.Balls)
         {
             _seen.Add(ball.Id);
             if (!_ballSprites.TryGetValue(ball.Id, out var sprite))
             {
-                sprite = new Sprite2D { Texture = _ballTex };
+                var tex = SpriteRegistry.Instance.GetTexture(
+                    ball.Kind == BallKind.Master ? AssetId.MasterBall : AssetId.BallBT);
+                sprite = new Sprite2D { Texture = tex };
                 AddChild(sprite);
                 _ballSprites[ball.Id] = sprite;
             }
             sprite.Position = ball.Pos;
+            var ballSize = sprite.Texture.GetSize();
             if (ballSize.X > 0 && ballSize.Y > 0)
                 sprite.Scale = new Vector2(ball.Radius * 2f / ballSize.X, ball.Radius * 2f / ballSize.Y);
         }
@@ -105,6 +110,33 @@ public partial class View2D : Node2D, IGameView
         {
             _ballSprites[id].QueueFree();
             _ballSprites.Remove(id);
+        }
+
+        // Splitters (system spawns): same create/move/free-by-id pattern as balls.
+        _seenSplitters.Clear();
+        foreach (var sp in state.Splitters)
+        {
+            _seenSplitters.Add(sp.Id);
+            if (!_splitterSprites.TryGetValue(sp.Id, out var sprite))
+            {
+                sprite = new Sprite2D { Texture = SpriteRegistry.Instance.GetTexture(AssetId.BallSpliter) };
+                AddChild(sprite);
+                _splitterSprites[sp.Id] = sprite;
+            }
+            sprite.Position = sp.Pos;
+            var size = sprite.Texture.GetSize();
+            if (size.X > 0 && size.Y > 0)
+                sprite.Scale = new Vector2(sp.Radius * 2f / size.X, sp.Radius * 2f / size.Y);
+        }
+
+        _goneSplitters.Clear();
+        foreach (var id in _splitterSprites.Keys)
+            if (!_seenSplitters.Contains(id))
+                _goneSplitters.Add(id);
+        foreach (var id in _goneSplitters)
+        {
+            _splitterSprites[id].QueueFree();
+            _splitterSprites.Remove(id);
         }
 
         // Scoreboard: "<name>: N  <name>: N  ..." sorted by player_id (stable and

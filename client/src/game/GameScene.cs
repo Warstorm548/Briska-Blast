@@ -31,11 +31,23 @@ public partial class GameScene : Node2D
     private const float PaddleHeightHFrac = 36f / 1440f;
     private const float BallRadiusHFrac = 24f / 1440f;
 
+    /// <summary>Default seconds between BallSpliter spawns, used as a fallback until
+    /// the host's setting is read (Stage 3). On average a splitter appears this often
+    /// on each screen; the cooldown after one is consumed doubles as its respawn.</summary>
+    private const double DefaultSplitterIntervalSecs = 15.0;
+
     // Pixel values resolved from this client's arena in _Ready (the ones used
     // after construction; one-shot locals cover the rest).
     private float _paddleSpeed;
     private float _serveSpeed;
     private float _ballRadius;
+
+    // Random-spawn (BallSpliter) cadence. Each screen spawns its own splitters
+    // locally on this cooldown; the resulting BallBT balls hand off like any other
+    // ball. Stage 3 overrides the interval + chain-split from the host's settings.
+    private double _splitterIntervalSecs = DefaultSplitterIntervalSecs;
+    private double _splitterCooldown;
+    private readonly RandomNumberGenerator _rng = new();
 
     // Seat-relative portal layout (bottom is always the local goal). Seats are
     // arranged on a fixed "table" matching Example Imgs/GameMode Extended.png:
@@ -111,6 +123,16 @@ public partial class GameScene : Node2D
         _state.Paddle.Y = arena.Y - GoalGapHFrac * arena.Y;
 
         BuildEdges(ctx);
+
+        // Arm the random-spawn cadence from the host's settings (broadcast at start
+        // and applied by every client), falling back to the defaults if absent.
+        if (ctx != null)
+        {
+            _splitterIntervalSecs = ctx.SplitterIntervalSecs;
+            _state.ChainSplitEnabled = ctx.ChainSplit;
+        }
+        _rng.Randomize();
+        _splitterCooldown = _splitterIntervalSecs;
 
         _view = new View2D();
         // Label the scoreboard by username (server-provided, learned via the
@@ -439,6 +461,15 @@ public partial class GameScene : Node2D
         if (localSeat < 0 || localSeat >= 4)
             return; // not seated (shouldn't happen in a 2–4 player round) — all walls
 
+        // Namespace this screen's ball ids by seat so balls created on different
+        // screens never collide once handed across the mesh. A per-process wall-clock
+        // offset within the seat's block makes a process-death rejoin (which restarts
+        // the local counter at 0) begin in a different sub-range, so its new ids can't
+        // collide with same-seat balls it served before dropping that may still be in
+        // play elsewhere.
+        int idOffset = (int)((long)(Time.GetUnixTimeFromSystem() * 1000.0) % GameState.BallIdRejoinOffsetRange);
+        _state.BallIdBase = localSeat * GameState.BallIdSeatStride + idOffset;
+
         for (int peerSeat = 0; peerSeat < seatOrder.Count && peerSeat < 4; peerSeat++)
         {
             if (peerSeat == localSeat)
@@ -468,6 +499,10 @@ public partial class GameScene : Node2D
         if (Input.IsActionJustPressed("ui_cancel"))
             TogglePauseMenu();
 
+        // System spawns (BallSpliter) appear on their own cadence, independent of
+        // the serve / paddle — the sim resolves any ball that touches one.
+        TickSplitters(delta);
+
         // Paddle: Left/Right arrows. GetAxis returns +1 toward paddle_right.
         // Suspended while the pause menu is open — the match stays live underneath
         // (a P2P round can't truly pause for everyone) but we stop driving input.
@@ -479,6 +514,20 @@ public partial class GameScene : Node2D
             paddle.CenterX = Mathf.Clamp(
                 paddle.CenterX + dir * _paddleSpeed * dt, half, _state.ArenaWidth - half);
         }
+
+        // Always advance the simulation so every ball in play keeps moving — with
+        // multi-ball, an un-served master resting on the paddle must not freeze the
+        // split balls still bouncing around. The held serve ball has zero velocity,
+        // so Step leaves it untouched; it's glued to the paddle just below.
+        GameSimulation.Step(_state, delta, _step);
+
+        // Hand off any balls that left this screen to the peer across the crossed
+        // edge (directed Send, not a broadcast).
+        foreach (var handoff in _step.Handoffs)
+            _controller?.SendHandoff(handoff);
+
+        foreach (var score in _step.Scores)
+            OnScore(score);
 
         if (_awaitingServe && _serveBall != null)
         {
@@ -498,18 +547,6 @@ public partial class GameScene : Node2D
                 _serveBall = null;
             }
         }
-        else
-        {
-            GameSimulation.Step(_state, delta, _step);
-
-            // Hand off any balls that left this screen to the peer across the
-            // crossed edge (directed Send, not a broadcast).
-            foreach (var handoff in _step.Handoffs)
-                _controller?.SendHandoff(handoff);
-
-            foreach (var score in _step.Scores)
-                OnScore(score);
-        }
 
         _view.Render(_state);
     }
@@ -517,23 +554,55 @@ public partial class GameScene : Node2D
     private void OnScore(ScoreEvent e)
     {
         // Report to the server (server-relayed scoring) — the controller drops
-        // empty scorers (self-goal / untouched). The scored-on player (this
-        // client) always serves the next ball regardless of whether a point was
-        // awarded.
+        // empty scorers (self-goal / untouched).
         _controller?.ReportScore(e);
-        SpawnServeBall();
+
+        // Only a lost master ball is replaced: the scored-on player serves the next
+        // one. A split (BallBT) ball is a bonus — it just vanishes, no re-serve.
+        if (e.Kind == BallKind.Master)
+            SpawnServeBall();
     }
 
     private void SpawnServeBall()
     {
-        _state.Balls.Clear(); // single ball for now (multi-ball is future work)
+        // Serve a fresh master ball. Any split balls in play are left alone — only
+        // the lost master is replaced. Exactly one master exists at a time (it's the
+        // single ball handed between screens), so there's nothing to clear here.
         _serveBall = new Ball
         {
             Id = _state.NextBallId(),
             Radius = _ballRadius,
+            Kind = BallKind.Master,
             Pos = new Vector2(_state.Paddle.CenterX, _state.Paddle.Y - _ballRadius),
         };
         _state.Balls.Add(_serveBall);
         _awaitingServe = true;
+    }
+
+    private void TickSplitters(double dt)
+    {
+        if (_splitterIntervalSecs <= 0)
+            return; // disabled by the host
+
+        _splitterCooldown -= dt;
+        if (_splitterCooldown > 0)
+            return;
+        _splitterCooldown = _splitterIntervalSecs;
+
+        // Drop a splitter at a random spot in the play area, clear of the very edges
+        // and the paddle band. Consuming one in the sim doesn't re-arm — this timer
+        // owns the cadence, so a fresh splitter follows roughly every interval.
+        float margin = _ballRadius * 4f;
+        float minX = margin, maxX = _state.ArenaWidth - margin;
+        float minY = margin, maxY = _state.Paddle.Y - margin;
+        if (maxX <= minX || maxY <= minY)
+            return;
+
+        _state.Splitters.Add(new Splitter
+        {
+            Id = _state.NextSplitterId(),
+            Radius = _ballRadius * 1.5f,
+            Pos = new Vector2(_rng.RandfRange(minX, maxX), _rng.RandfRange(minY, maxY)),
+        });
     }
 }

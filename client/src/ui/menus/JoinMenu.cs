@@ -57,7 +57,7 @@ public partial class JoinMenu : Control
         if (result.Ok && result.Value is { } r)
         {
             var roster = r.Joiners.Select(j => j.PlayerId);
-            SessionContext.Instance.StartJoinSession(code, r.Gamemode, r.PlayerCount, r.WinCondition, roster);
+            SessionContext.Instance.StartJoinSession(code, r.Gamemode, r.PlayerCount, r.WinCondition, r.SpawnSettings, roster);
             GetTree().ChangeSceneToFile("res://src/ui/menus/SessionLobby.tscn");
             return;
         }
@@ -106,7 +106,7 @@ public partial class JoinMenu : Control
         }
 
         var ctx = SessionContext.Instance;
-        ctx.StartRejoinSession(code, s.Gamemode, s.PlayerCount, s.WinCondition);
+        ctx.StartRejoinSession(code, s.Gamemode, s.PlayerCount, s.WinCondition, s.SpawnSettings);
 
         _rejoinSignaling = new SignalingClient();
         AddChild(_rejoinSignaling);

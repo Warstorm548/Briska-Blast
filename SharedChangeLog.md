@@ -13,6 +13,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.0] — 2026-06-29
+
+Adds **`SpawnSettings`** — the host-configured random-spawn rules (BallSpliter
+spawn cadence + chain-splitting) for the new ball-splitter mechanic.
+
+### Added
+
+- **`SpawnSettings`** (`types/spawn_settings.rs`) — flat wire shape
+  `{"splitter_interval_secs":N,"chain_split":bool}` with shared range constants
+  (`SPLITTER_INTERVAL_MIN_SECS`/`_MAX`, default 15s; `chain_split` default on) and a
+  `validate()` for the server's trust boundary — same single-source convention as
+  `WinCondition`.
+- **`spawn_settings` field** on `HostRequest`, `JoinResponse` and
+  `SessionPollResponse` (`#[serde(default)]`), carried alongside `win_condition` so an
+  older client that omits it still hosts with the defaults.
+
+---
+
 ## [0.4.0] — 2026-06-22
 
 Adds the first **win condition** type.

@@ -125,6 +125,9 @@ All collisions use trigonometric angle reflection:
   scoreboard (never increments locally — a dropped/duplicated frame can't
   desync). The server credits only players currently in the room. This is the
   hook for later server-side trajectory validation.
+- **Point value travels with the report.** A normal goal is worth 1; a **BallBT
+  split ball** is worth 2 (`ReportScore.points`, server-clamped to `[1, 2]`). The
+  server adds the reported points to the authoritative tally.
 
 ## Win condition & game over
 
@@ -144,14 +147,43 @@ All collisions use trigonometric angle reflection:
   channel, so each client latches game-over before the `SessionEnded` arrives and
   suppresses its usual auto-leave — the end screen owns navigation from then on.
 
+## Random spawns: ball splitter & BallBT
+
+- A **BallSpliter** is a *system-spawned* element (not player-controlled). Each
+  player's screen spawns its own on a host-configured cadence — a cooldown that
+  doubles as the respawn timer — at a random spot in the play area. Splitters are
+  **local to a screen** and never handed off.
+- When the **master ball** touches a splitter, the splitter is consumed and spawns
+  **3 BallBT split balls** fanned **45° apart**, centred opposite the master's
+  heading so they clear its forward path. The master **passes through unaffected**
+  (same colour, same trajectory). Each split ball inherits the master's last-hitter
+  as its owner.
+- **Chain-splitting** (a split ball hitting another splitter splits again) is a host
+  toggle, **on by default**; with it off, only the master ball can trigger a split.
+- **BallBT split balls** follow the same last-hitter possession rule, are worth
+  **2 points** at a goal (vs 1), and **vanish** when they reach a goal — unlike the
+  master, which the scored-on player re-serves. They hand off between screens like
+  any ball; the ball **kind** travels in the handoff packet so a split ball stays a
+  split ball on the peer's screen.
+- Cadence + chain-split come from the host's **Random Spawns** advanced settings
+  (`SpawnSettings`: splitter interval 5–60s / default 15, chain-split on), sent at
+  `/host`, validated server-side (`invalid_spawn_settings`), and broadcast to every
+  client (joiners included) via `start_signaling`, so the rules match across the
+  table. Each client drives its **own** local spawner from them.
+- Sprites resolve through a central **`SpriteRegistry`** autoload
+  (`client/src/core/SpriteRegistry.cs`): every fast-lookup sprite has a stable,
+  upward-counting `AssetId` plus a `PlayerControlled` / `SystemHandled` tag. See
+  [`asset-registry.md`](asset-registry.md).
+
 ## Serve
 
 - **First serve:** at game start, **only the host** spawns a ball resting on its
   paddle; everyone else starts empty (a ball reaches them via a handoff, or when
   they're scored on).
-- **After a goal:** the scored-on player respawns the next ball on their own
-  paddle and serves it — **always**, whether or not a point was awarded (so a
-  self-goal still hands them the serve).
+- **After a goal:** when the **master** ball is lost, the scored-on player respawns
+  the next master ball on their own paddle and serves it — **always**, even when no
+  point was awarded (so a self-goal still hands them the serve). A lost **BallBT
+  split ball** is *not* re-served — it just vanishes.
 - A resting ball follows the paddle until the player presses serve, which
   launches it.
 
@@ -171,6 +203,7 @@ Re-binding through settings is future work.
 | Rules (integrate, reflect, score, emit handoff/score events) | `client/src/game/GameSimulation.cs` |
 | Frame-independent handoff math | `client/src/game/BallTransform.cs` |
 | 2D rendering (swappable view) | `client/src/game/view/View2D.cs` (`IGameView`) |
+| Central sprite/asset lookup | `client/src/core/SpriteRegistry.cs` (see [`asset-registry.md`](asset-registry.md)) |
 | Scene host: input, serve, sim loop | `client/src/game/GameScene.cs` |
 | Handoff packet wire format | `client/src/game/net/GamePacket.cs` |
 | Net glue (handoff/score over `IPeerTransport` + signaling) | `client/src/game/net/NetGameController.cs` |
@@ -178,9 +211,9 @@ Re-binding through settings is future work.
 
 ## Deferred / future
 
-- **Multiple balls** at once. `GameState` already holds a `List<Ball>` and
-  packets carry ball ids; the hard part to design is **globally-unique ball ids**
-  once several balls (and ball types) cross between screens.
+- **Multiple balls** at once — **shipped** in game v0.18.0 with the ball-splitter
+  mechanic: ball ids are seat-namespaced for global uniqueness, the serve no longer
+  clears the list, and the sim always steps so concurrent balls keep moving.
 - **Solo vs computer** (an AI paddle) — not built; the Solo Play menu button is
   intentionally disabled.
 - **Ball-speed cap** — speed is currently preserved on every bounce with no cap;
