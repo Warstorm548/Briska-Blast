@@ -461,9 +461,14 @@ public partial class GameScene : Node2D
         if (localSeat < 0 || localSeat >= 4)
             return; // not seated (shouldn't happen in a 2–4 player round) — all walls
 
-        // Namespace this screen's ball ids by seat so split balls / serves created
-        // on different screens never collide once handed across the mesh.
-        _state.BallIdBase = localSeat * GameState.BallIdSeatStride;
+        // Namespace this screen's ball ids by seat so balls created on different
+        // screens never collide once handed across the mesh. A per-process wall-clock
+        // offset within the seat's block makes a process-death rejoin (which restarts
+        // the local counter at 0) begin in a different sub-range, so its new ids can't
+        // collide with same-seat balls it served before dropping that may still be in
+        // play elsewhere.
+        int idOffset = (int)((long)(Time.GetUnixTimeFromSystem() * 1000.0) % GameState.BallIdRejoinOffsetRange);
+        _state.BallIdBase = localSeat * GameState.BallIdSeatStride + idOffset;
 
         for (int peerSeat = 0; peerSeat < seatOrder.Count && peerSeat < 4; peerSeat++)
         {

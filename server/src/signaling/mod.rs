@@ -167,9 +167,13 @@ impl SignalHub {
         if !room.senders.contains_key(scoring_player_id) {
             return None;
         }
-        // Clamp so a forged/garbled report can't mint an arbitrary number of
-        // points (master ball = 1, BallBT split ball = 2).
-        let points = points.clamp(1, Self::MAX_SCORE_POINTS);
+        // Reject a non-positive (forged/garbled) report rather than coercing it to a
+        // real point; still clamp an oversized value down to the max (master = 1,
+        // BallBT split ball = 2).
+        if points <= 0 {
+            return None;
+        }
+        let points = points.min(Self::MAX_SCORE_POINTS);
         let new_total = {
             let entry = room.scores.entry(scoring_player_id.to_string()).or_insert(0);
             *entry += points;
@@ -468,16 +472,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_score_clamps_points_to_range() {
+    async fn record_score_clamps_high_and_rejects_non_positive() {
         let hub = SignalHub::default();
         let (_, _rx) = hub.join_room("ABC", "0000001").await;
 
-        // A forged out-of-range report is clamped down to the max (2).
+        // A forged oversized report is clamped down to the max (2).
         let (tally, _) = hub.record_score("ABC", "0000001", 99).await.unwrap();
         assert_eq!(tally.get("0000001"), Some(&2));
-        // ...and a zero/negative report still credits at least 1.
-        let (tally, _) = hub.record_score("ABC", "0000001", 0).await.unwrap();
-        assert_eq!(tally.get("0000001"), Some(&3));
+        // ...and a non-positive report is rejected outright (no point, no broadcast).
+        assert!(hub.record_score("ABC", "0000001", 0).await.is_none());
+        assert!(hub.record_score("ABC", "0000001", -5).await.is_none());
     }
 
     #[tokio::test]

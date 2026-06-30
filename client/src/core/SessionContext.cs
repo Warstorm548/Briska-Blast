@@ -279,6 +279,8 @@ public partial class SessionContext : Node
         MaxPlayers = 0;
         WinConditionKind = WinConditionDto.SetScoreKind;
         WinScoreTarget = WinConditionDto.ScoreDefault;
+        SplitterIntervalSecs = SpawnSettingsDto.IntervalDefault;
+        ChainSplit = SpawnSettingsDto.ChainSplitDefault;
         PlayerIds.Clear();
         SeatOrder.Clear();
         _usernames.Clear();

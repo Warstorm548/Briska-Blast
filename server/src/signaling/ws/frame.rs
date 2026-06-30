@@ -89,9 +89,12 @@ pub(super) async fn handle_client_frame(
             // the server's authoritative tally rather than a local guess.
             //
             // CodeRabbit (PR #78) flagged that the win condition now lets a
-            // forged report *end* the match, not just pad the score. Deferred:
+            // forged report *end* the match, not just pad the score. The `points`
+            // value is likewise client-supplied; the server can't derive it without
+            // tracking ball state (the sim is client-authoritative / P2P), so it only
+            // bounds it (`record_score` rejects <= 0 and clamps to the max). Deferred:
             // this mode has the scored-on player report a *different* scorer, so
-            // there's no minimal authz check — the fix is the trajectory
+            // there's no minimal authz check — the real fix is the trajectory
             // validation tracked in docs/planning/roadmap.md ("Server-side
             // validation of score reports").
             if let Some((scores, winner)) =

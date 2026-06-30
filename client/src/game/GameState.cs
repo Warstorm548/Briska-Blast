@@ -140,6 +140,12 @@ public sealed class GameState
     /// is its seat × this; a screen will never allocate near this many balls.</summary>
     public const int BallIdSeatStride = 1_000_000;
 
+    /// <summary>Range of the per-process id offset folded into <see cref="BallIdBase"/>
+    /// so a process-death rejoin (which restarts the local counter at 0) begins in a
+    /// different sub-range of its seat block. Kept below the stride so the offset plus
+    /// a match's ball count stays within the seat's block.</summary>
+    public const int BallIdRejoinOffsetRange = 900_000;
+
     /// <summary>Start of this screen's ball-id block (seat × <see cref="BallIdSeatStride"/>),
     /// set once from the seating in GameScene. Defaults to 0 (seat 0 / unseated).</summary>
     public int BallIdBase;

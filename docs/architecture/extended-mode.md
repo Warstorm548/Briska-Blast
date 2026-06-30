@@ -181,8 +181,8 @@ All collisions use trigonometric angle reflection:
   paddle; everyone else starts empty (a ball reaches them via a handoff, or when
   they're scored on).
 - **After a goal:** when the **master** ball is lost, the scored-on player respawns
-  the next master ball on their own paddle and serves it — **always**, whether or not
-  a point was awarded (so a self-goal still hands them the serve). A lost **BallBT
+  the next master ball on their own paddle and serves it — **always**, even when no
+  point was awarded (so a self-goal still hands them the serve). A lost **BallBT
   split ball** is *not* re-served — it just vanishes.
 - A resting ball follows the paddle until the player presses serve, which
   launches it.
