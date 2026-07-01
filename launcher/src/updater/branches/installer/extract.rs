@@ -49,14 +49,16 @@ pub(super) fn extract_archive_blocking(
 /// one-level-deep search in case the archive wraps everything in a single
 /// directory (a common Godot export quirk).
 fn find_executable(dir: &Path, name: &str) -> Option<String> {
-    if dir.join(name).exists() {
+    // is_file (not exists) so a directory that happens to share the executable's
+    // name is never mistaken for the binary — matching `find_app_executable`.
+    if dir.join(name).is_file() {
         return Some(name.to_string());
     }
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let path = entry.path();
         if path.is_dir() {
             let candidate = path.join(name);
-            if candidate.exists() {
+            if candidate.is_file() {
                 return candidate
                     .strip_prefix(dir)
                     .ok()

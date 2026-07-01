@@ -138,9 +138,14 @@ where
         let stamp = Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
         let aside =
             install_root.join(format!(".{}.old-{stamp}", channel.dir_name()));
-        tokio::fs::rename(&final_install_dir, &aside)
-            .await
-            .map_err(|e| format!("move old install aside: {e}"))?;
+        if let Err(e) = tokio::fs::rename(&final_install_dir, &aside).await {
+            // The staged install is ready but we couldn't move the live install
+            // aside to make room for the swap. Clean up the staging tree before
+            // returning — the live install is untouched — matching the other
+            // install-error paths rather than leaking the staging dir.
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+            return Err(format!("move old install aside: {e}"));
+        }
         Some(aside)
     } else {
         None

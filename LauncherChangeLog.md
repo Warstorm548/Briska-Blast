@@ -7,7 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.17.1] — 2026-07-01
 
-Internal refactor only — no behavior change, no new features.
+Internal refactor plus a few minor review-driven hardening fixes on error/edge
+paths — no new features.
 
 ### Changed
 
@@ -18,6 +19,17 @@ Internal refactor only — no behavior change, no new features.
   `verify` (integrity check against `files.json`), and `uninstall` (teardown + saves
   backup). `mod.rs` re-exports the public surface, so `installer::*` paths and every
   caller are unchanged; the 8 install/verify tests moved beside the code they exercise.
+
+### Fixed
+
+- The staging tree is now cleaned up when the pre-swap "move old install aside"
+  rename fails, instead of being leaked (the live install was already safe).
+- Executable resolution requires a real *file* (`is_file`, not `exists`), so a
+  directory that happens to share the binary's name can't be mistaken for it —
+  matching the macOS bundle resolver.
+- The legacy (no-`files.json`) verify fallback rejects an unsafe `installed.json`
+  `executable` path (absolute / `..`) before the on-disk check, so it can't resolve
+  outside the install tree.
 
 ## [0.17.0] — 2026-06-25
 

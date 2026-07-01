@@ -73,6 +73,12 @@ pub async fn verify_install(install_dir: PathBuf) -> VerifyOutcome {
         Ok(None) => {
             // Legacy install (no files.json) — fall back to the cheap exe check.
             let exe = install_dir.join(&manifest.executable);
+            // Reject an unsafe executable path (absolute / `..` / drive-prefix)
+            // from a tampered installed.json before touching the filesystem, so
+            // the join can't resolve outside the install tree.
+            if !is_safe_relpath(&manifest.executable) {
+                return VerifyOutcome::ExecutableMissing { expected: exe };
+            }
             match tokio::fs::metadata(&exe).await {
                 Ok(_) => VerifyOutcome::Ok {
                     version: manifest.version,

@@ -120,6 +120,9 @@ pub(super) fn nav_html(active: &str) -> String {
     // constants so the client countdown can't drift from the Redis session TTL.
     let warn = super::super::ADMIN_IDLE_WARN_SECS;
     let logout = super::super::ADMIN_IDLE_LOGOUT_SECS;
+    // Initial countdown shown the instant the warning modal appears, before the
+    // 1s JS tick recomputes it — derived from the constants so it can't drift.
+    let idle_secs = logout.saturating_sub(warn);
     format!(
         r#"<nav>
   <button type="button" class="nav-burger" aria-label="Open menu" aria-controls="nav-drawer" aria-expanded="false" onclick="bbToggleNav(this)">&#9776;</button>
@@ -150,7 +153,7 @@ document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCloseNav(
 <div id="idle-backdrop" class="modal-backdrop">
   <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="idle-title" aria-describedby="idle-desc">
     <p class="section-title" id="idle-title">Still there?</p>
-    <p class="section-sub" id="idle-desc">You'll be signed out in <span id="idle-count">30</span> seconds due to inactivity.</p>
+    <p class="section-sub" id="idle-desc">You'll be signed out in <span id="idle-count">{idle_secs}</span> seconds due to inactivity.</p>
     <div class="modal-actions">
       <button type="button" class="btn btn-primary btn-sm" id="idle-stay" onclick="bbStayLoggedIn()">Keep me logged in</button>
     </div>
