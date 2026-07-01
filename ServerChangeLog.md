@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.20.1] — 2026-07-01
+
+Internal refactor only — no behavior change, no new features.
+
+### Changed
+
+- Split the 735-line `admin/templates.rs` into a `templates/` module mirroring the
+  admin handler layout: `common` (the shared `escape()` / `CSS` sheet / `nav_html()`),
+  and one page renderer each in `login`, `stats`, `users`, and `dashboard`. `mod.rs`
+  re-exports the page functions, so `templates::{...}` paths and every handler caller
+  are unchanged.
+
 ## [0.20.0] — 2026-06-29
 
 Plumbs the host's **random-spawn settings** through the session and adds a
