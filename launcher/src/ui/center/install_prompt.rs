@@ -71,14 +71,32 @@ fn content<'a>(
         None => "(no location chosen)".to_string(),
     };
 
+    // Whether this channel is already installed on disk. When it is, the prompt
+    // is an *update* (the path is pre-seeded with the existing install root by
+    // `update_pressed`), so the location must stay locked — re-pointing an update
+    // at a different folder would leave the old install behind / corrupt the
+    // update. We key off `parsed_installed_version()` (true install state) rather
+    // than `install_root.is_some()`, which is also `Some` once a fresh-install
+    // user picks a folder. On uninstall both creds are cleared, so this flips
+    // back to false and "Choose…" re-enables for a new location.
+    let is_update = state
+        .identity
+        .channels
+        .get(&channel)
+        .and_then(|c| c.parsed_installed_version())
+        .is_some();
+
+    let mut choose_btn = button(text("Choose…")).padding(8);
+    if !is_update {
+        choose_btn = choose_btn.on_press(Message::PickInstallLocation);
+    }
+
     let path_row = row![
         container(text(path_display).size(14))
             .style(theme::bordered)
             .padding(10)
             .width(Length::Fixed(320.0)),
-        button(text("Choose…"))
-            .padding(8)
-            .on_press(Message::PickInstallLocation),
+        choose_btn,
     ]
     .spacing(ZONE_GAP * 2)
     .align_y(Alignment::Center);
@@ -114,6 +132,13 @@ fn content<'a>(
         ))
         .size(13)
         .into()
+    } else if is_update {
+        let existing = install_root
+            .map(|p| p.join(channel.dir_name()).to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("<existing folder>/{}", channel.dir_name()));
+        text(format!("Updating existing install at: {existing} — location locked"))
+            .size(13)
+            .into()
     } else {
         text(format!(
             "Files will be installed into: <chosen folder>/{}/",

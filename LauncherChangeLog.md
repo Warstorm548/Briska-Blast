@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.17.2] — 2026-07-01
+
+A small fix to the install-location prompt so an update can't be redirected away from
+the existing install.
+
+### Fixed
+
+- The install prompt now **locks the install directory when the channel is already
+  installed**: the "Choose…" button is disabled on an update, and the path stays pinned
+  to the existing install location (already pre-seeded by the update flow). Previously
+  the button was always pressable, so a user could point an update at a different folder
+  and leave the old install behind / corrupt the update. The button re-enables for a
+  genuine first-time install, and again after a channel is uninstalled (both the stored
+  install location and version are cleared), so a fresh location can be chosen.
+
 ## [0.17.1] — 2026-07-01
 
 Internal refactor plus a few minor review-driven hardening fixes on error/edge
