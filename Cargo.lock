@@ -2427,7 +2427,7 @@ dependencies = [
 
 [[package]]
 name = "launcher"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "chrono",
  "directories",
@@ -4176,7 +4176,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.20.0"
+version = "0.20.1"
 dependencies = [
  "axum",
  "bcrypt",

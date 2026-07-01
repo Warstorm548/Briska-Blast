@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.17.1] — 2026-07-01
+
+Internal refactor only — no behavior change, no new features.
+
+### Changed
+
+- Split the 1073-line `updater/branches/installer.rs` into an `installer/` module,
+  one submodule per responsibility: `manifest` (the `installed.json` / `files.json`
+  types + readers), `download` (asset selection + the transactional download/extract/
+  manifest pipeline), `extract` (archive unpacking + executable resolution, internal),
+  `verify` (integrity check against `files.json`), and `uninstall` (teardown + saves
+  backup). `mod.rs` re-exports the public surface, so `installer::*` paths and every
+  caller are unchanged; the 8 install/verify tests moved beside the code they exercise.
+
 ## [0.17.0] — 2026-06-25
 
 Adds a **file-integrity / repair toolkit** to Settings → Game Channel Management,
