@@ -5,6 +5,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.18.0] — 2026-07-01
+
+Adds scrolling to menu pages that are taller than the visible pane, so their content
+is no longer clipped and unreachable.
+
+### Added
+
+- **Dynamic scrollbar on overflowing menu pages.** Any center/menu page whose content
+  exceeds the visible pane now shows a vertical scrollbar and can be scrolled with the
+  **mouse wheel** (while the pointer is over the pane) or by dragging the bar. The
+  scrollbar only appears when the content actually overflows — pages that fit are
+  unchanged. Headers and the Settings tab bar stay pinned while the body scrolls. The
+  primary beneficiary is **Settings → Game Channel Management** (per-channel lists +
+  firewall + the Windows-only runtime-cache section). Implemented as a single shared
+  `scroll_area` helper (`ui/center/mod.rs`) applied per view.
+
+## [0.17.2] — 2026-07-01
+
+A small fix to the install-location prompt so an update can't be redirected away from
+the existing install.
+
+### Fixed
+
+- The install prompt now **locks the install directory when the channel is already
+  installed**: the "Choose…" button is disabled on an update, and the path stays pinned
+  to the existing install location (already pre-seeded by the update flow). Previously
+  the button was always pressable, so a user could point an update at a different folder
+  and leave the old install behind / corrupt the update. The button re-enables for a
+  genuine first-time install, and again after a channel is uninstalled (both the stored
+  install location and version are cleared), so a fresh location can be chosen.
+
 ## [0.17.1] — 2026-07-01
 
 Internal refactor plus a few minor review-driven hardening fixes on error/edge

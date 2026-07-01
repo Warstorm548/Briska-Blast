@@ -58,9 +58,16 @@ pub fn view<'a>(channel: Channel, error: Option<&'a str>, in_progress: bool) -> 
     };
 
     container(
-        column![header, explainer, note, buttons, status]
-            .spacing(ZONE_GAP * 3)
-            .align_x(Alignment::Center),
+        column![
+            header,
+            super::scroll_area(
+                column![explainer, note, buttons, status]
+                    .spacing(ZONE_GAP * 3)
+                    .align_x(Alignment::Center),
+            )
+        ]
+        .spacing(ZONE_GAP * 3)
+        .align_x(Alignment::Center),
     )
     .style(theme::menu_pane)
     .width(Length::Fill)

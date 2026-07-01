@@ -40,7 +40,7 @@ Five zones. Top bar, left rail, center pane, right rail, bottom bar.
 | **Top-right** | Gear icon → Settings. |
 | **Left rail (top)** | Channel selector. Conditional contents per §3. |
 | **Left rail (bottom)** | Server-status panel. One dot per visible channel: `●` reachable, `○` unreachable (see §6). |
-| **Center pane** | Selectable content. v1 default state: *"no menu selected"* placeholder. Becomes news feed when news system lands (`launcher/src/news/`). Settings opens as an overlay/panel within this zone. |
+| **Center pane** | Selectable content. v1 default state: *"no menu selected"* placeholder. Becomes news feed when news system lands (`launcher/src/news/`). Settings opens as an overlay/panel within this zone. When a page's body is taller than the pane it scrolls (dynamic vertical scrollbar + mouse wheel while hovered); the page header and the Settings tab bar stay pinned. Implemented once as `ui/center::scroll_area` and applied per view — see §10. |
 | **Right rail (top)** | Username + Change UserName affordance. **One** username per launcher install, shared across all channels (see §2). |
 | **Right rail (middle)** | Per-channel Player IDs. Conditional rows (see §3). |
 | **Bottom-left** | Update button (kicks off game-files update for the selected channel). |
@@ -175,6 +175,16 @@ Triggered by Update button. Modal asks for confirmation, then progress is displa
 | Bottom bar | Progress fills blue (in flight) → purple (remaining) |
 | Play button | Disabled while update is in flight. **If Play is clicked, refuses with a message** — see §7. |
 
+**Install-location picker is first-install-only.** The install/update prompt
+(`ui/center/install_prompt.rs`) shares one view for both fresh installs and updates. For a
+**first-time** install the user picks the target directory (the "Choose…" button). For an
+**update** of an already-installed channel the prompt pre-seeds the existing install
+location and **disables "Choose…"**, so an update can't be redirected to a different folder
+(which would strand the old install / corrupt the update). "Already installed" is keyed off
+`ChannelCreds::parsed_installed_version()` (the real install-state guard — both
+`install_location` and `installed_version` present), so an **uninstall** — which clears both
+— re-enables the picker for a new location.
+
 ### G. Update modal — launcher self-update
 
 Triggered by clicking the "Update available: launcher" banner. Uses the rename-trick flow via the `self_update` crate (`launcher-update-and-version-validation.md:54-73`).
@@ -285,3 +295,38 @@ Captured here so future contributors don't re-litigate.
 - **Proactive notifications when dev flag flips** — current model is pull-based; a newly-flagged user sees the dev surface on their next launch. Acceptable; no push needed.
 - **A/B install slots** — captured in §7. Targeted post-v1.
 - **Live heartbeat on server-status dots** — single-shot per launch is fine until it isn't.
+
+---
+
+## 10. Scrollable Center Pages
+
+Center/menu pages render in a fixed-height pane (window height minus the top and bottom
+bars). When a page's body is taller than that pane, the overflow must stay reachable —
+most visibly **Settings → Game Channel Management**, which is tallest on Windows (its
+per-channel lists plus the Windows-only Reset Runtime Cache section).
+
+The behavior:
+
+- A vertical scrollbar appears **only when the body overflows** — pages that fit are
+  unchanged. It scrolls by dragging the bar or with the **mouse wheel while the pointer is
+  over the pane** (both are built into Iced's `scrollable`; no extra event wiring).
+- The page **header** (title + Close/Cancel) and the Settings **tab bar** stay **pinned**;
+  only the body scrolls.
+
+The pattern (single definition, applied per view):
+
+- `ui/center::scroll_area(body)` wraps a view's body in a vertical `scrollable` pinned to
+  `Length::Fill` height (the bounded viewport that makes overflow detectable). Width is
+  left to Iced's `enclose`, so a full-width body (Settings) gets a far-right scrollbar
+  while the fixed-width confirm dialogs keep their existing width/placement.
+- Each view keeps its own `theme::menu_pane` outer container and builds
+  `column![ header, scroll_area(body) ]`, so the header is a *sibling* of the scroll area
+  (pinned), not inside it.
+- A **pure** central wrapper (one `scrollable` around the whole center pane) does **not**
+  work here: every view sets `height(Length::Fill)` on its outer container (Fill content
+  collapses to the viewport and never overflows), each draws its own pane border, and each
+  header lives inside the pane. Content placed inside a `scroll_area` must therefore avoid
+  `Length::Fill` on the scroll (vertical) axis, or it can't overflow.
+
+The `default` placeholder view is intentionally left unwrapped — it's centered and never
+overflows.

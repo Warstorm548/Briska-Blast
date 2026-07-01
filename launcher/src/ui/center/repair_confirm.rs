@@ -26,7 +26,7 @@ pub fn view<'a>(
     .align_y(Alignment::Center);
 
     container(
-        column![header, content(state, channel, version, error)]
+        column![header, super::scroll_area(content(state, channel, version, error))]
             .spacing(ZONE_GAP * 4)
             .align_x(Alignment::Center),
     )

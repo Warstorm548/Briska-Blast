@@ -11,6 +11,25 @@ resurfaces unintentionally later.
 
 ---
 
+## Update could be redirected to a different install directory
+
+- **Status:** ✅ resolved 2026-07-01 (launcher v0.17.2). The install/update prompt
+  (`launcher/src/ui/center/install_prompt.rs`) shares one view for fresh installs and
+  updates; its "Choose…" directory picker was always enabled. On an **update** of an
+  already-installed channel a user could point the download at a *different* folder,
+  stranding the old install or corrupting the update.
+- **Affects:** launcher ≤ v0.17.1, any channel that had already been installed once.
+- **Symptom:** updating an installed channel let the user browse to and confirm a new
+  install directory instead of the existing one.
+- **Fix:** "Choose…" is now disabled and the path is locked to the existing install
+  location whenever the channel is already installed (keyed off
+  `ChannelCreds::parsed_installed_version()`). It re-enables for a genuine first-time
+  install and again after an uninstall (which clears the stored location + version). The
+  backend already reused/re-validated the prior root, so this is a UI-lock only. See
+  [`../launcher/launcher-foundation.md`](../launcher/launcher-foundation.md) §5F.
+
+---
+
 ## Game closes before the main menu (missing `.NET` runtime DLLs / AV quarantine)
 
 - **Status:** open — **mitigation + triage shipped** in game/launcher 0.17.0

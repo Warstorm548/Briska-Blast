@@ -11,7 +11,8 @@ use iced::{Alignment, Element, Length};
 
 pub fn view(state: &AppState, active: SettingsTab) -> Element<'_, Message> {
     container(
-        column![header_row(), tab_bar(active), body(state, active)].spacing(ZONE_GAP * 3),
+        column![header_row(), tab_bar(active), super::scroll_area(body(state, active))]
+            .spacing(ZONE_GAP * 3),
     )
     .style(theme::menu_pane)
     .width(Length::Fill)
@@ -79,11 +80,13 @@ fn body<'a>(state: &'a AppState, active: SettingsTab) -> Element<'a, Message> {
             }
             col.into()
         }
+        // No Length::Fill here: this body is placed inside a `scroll_area`, where a
+        // Fill height on the scroll axis is undefined. A padded, horizontally
+        // centered placeholder is enough for a "coming soon" tab.
         SettingsTab::Graphics => container(text("Coming soon.").size(16))
             .center_x(Length::Fill)
-            .center_y(Length::Fill)
             .width(Length::Fill)
-            .height(Length::Fill)
+            .padding(24)
             .into(),
         SettingsTab::LauncherOptions => super::launcher_update::content(state),
     }

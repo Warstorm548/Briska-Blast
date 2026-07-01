@@ -20,7 +20,7 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
     .align_y(Alignment::Center);
 
     container(
-        column![header, content(state)]
+        column![header, super::scroll_area(content(state))]
             .spacing(ZONE_GAP * 4)
             .align_x(Alignment::Center),
     )
