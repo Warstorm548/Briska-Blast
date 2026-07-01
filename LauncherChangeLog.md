@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.18.0] — 2026-07-01
+
+Adds scrolling to menu pages that are taller than the visible pane, so their content
+is no longer clipped and unreachable.
+
+### Added
+
+- **Dynamic scrollbar on overflowing menu pages.** Any center/menu page whose content
+  exceeds the visible pane now shows a vertical scrollbar and can be scrolled with the
+  **mouse wheel** (while the pointer is over the pane) or by dragging the bar. The
+  scrollbar only appears when the content actually overflows — pages that fit are
+  unchanged. Headers and the Settings tab bar stay pinned while the body scrolls. The
+  primary beneficiary is **Settings → Game Channel Management** (per-channel lists +
+  firewall + the Windows-only runtime-cache section). Implemented as a single shared
+  `scroll_area` helper (`ui/center/mod.rs`) applied per view.
+
 ## [0.17.2] — 2026-07-01
 
 A small fix to the install-location prompt so an update can't be redirected away from

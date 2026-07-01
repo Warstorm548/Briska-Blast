@@ -40,7 +40,7 @@ pub fn view<'a>(state: &'a AppState, draft: &'a str) -> Element<'a, Message> {
     ];
 
     container(
-        column![header, form]
+        column![header, super::scroll_area(form)]
             .spacing(ZONE_GAP * 4)
             .align_x(Alignment::Center),
     )

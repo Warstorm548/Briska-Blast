@@ -30,9 +30,12 @@ pub fn view<'a>(
     .align_y(Alignment::Center);
 
     container(
-        column![header, content(state, channel, install_root, available, error)]
-            .spacing(ZONE_GAP * 4)
-            .align_x(Alignment::Center),
+        column![
+            header,
+            super::scroll_area(content(state, channel, install_root, available, error))
+        ]
+        .spacing(ZONE_GAP * 4)
+        .align_x(Alignment::Center),
     )
     .style(theme::menu_pane)
     .width(Length::Fill)
