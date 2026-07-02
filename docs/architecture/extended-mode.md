@@ -104,6 +104,32 @@ All collisions use trigonometric angle reflection:
 - **Paddle:** where the ball strikes relative to the paddle centre steers the
   outgoing angle (centre → straight up; the edges → up to ±60° off vertical),
   speed preserved. This is the classic paddle "english."
+- **Corner barriers:** solid obstacles in the four corners (below); a ball bounces
+  off the least-penetrated face, negating that velocity component.
+
+### Corner barriers
+
+A solid **L-shaped barrier** sits in **all four corners of every screen** (identical
+on every client — it's static local geometry, never networked). It reduces cheap
+scoring in the goal corners and stops fast balls from cutting the corners.
+
+- **Placement.** The `Cornerbarrier` sprite is drawn for the **bottom-left** corner;
+  the other three are the *same* sprite rotated in 90° steps about its **bottom-left
+  pixel**, with that pixel pinned to the screen corner. Every L opens toward the arena
+  centre. Size is a fraction of arena **height** (`CornerBarrier.HeightHFrac`), like the
+  paddle / ball / goal-gap tuning, so every resolution gets the same proportion.
+- **Collision model.** Each L is its two solid bars — a vertical **arm** and a
+  horizontal **foot** — so a barrier is 2 axis-aligned rects, 8 across the four corners.
+  The transparent inner notch of the L is left open (the ball can occupy it). A ball is
+  resolved against each rect (Minkowski-inflated by the ball radius) **before** the
+  goal/edge checks, so a ball entering a bottom goal corner is turned away instead of
+  slipping past the paddle. Position-based like the wall/goal checks (no sweep).
+- **Single source of truth.** `CornerBarrier` (`game/CornerBarrier.cs`) owns the corner
+  → (pivot, rotation, scale) table and the local L rects. The simulation derives its
+  collision rects and the view places its sprites from that same helper, so the collider
+  can never drift from the art. The barrier is registered as `AssetId.CornerBarrier` with
+  the `AssetCategory.SystemControlled` tag (game-owned but static — not a tunable random
+  spawn, so it never appears in the host's Random-Spawns UI).
 
 ## Scoring (server-relayed)
 
@@ -204,6 +230,7 @@ Re-binding through settings is future work.
 | Frame-independent handoff math | `client/src/game/BallTransform.cs` |
 | 2D rendering (swappable view) | `client/src/game/view/View2D.cs` (`IGameView`) |
 | Central sprite/asset lookup | `client/src/core/SpriteRegistry.cs` (see [`asset-registry.md`](asset-registry.md)) |
+| Corner-barrier layout (shared collision + sprite geometry) | `client/src/game/CornerBarrier.cs` |
 | Scene host: input, serve, sim loop | `client/src/game/GameScene.cs` |
 | Handoff packet wire format | `client/src/game/net/GamePacket.cs` |
 | Net glue (handoff/score over `IPeerTransport` + signaling) | `client/src/game/net/NetGameController.cs` |

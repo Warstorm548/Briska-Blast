@@ -122,6 +122,11 @@ public static class GameSimulation
         float h = state.ArenaHeight;
         float r = ball.Radius;
 
+        // --- Corner barriers: solid static obstacles in the four corners. Resolved
+        // first so a ball entering a bottom goal corner bounces off instead of sneaking
+        // past the paddle into the goal below. ---
+        ResolveBarriers(state, ball);
+
         // --- Paddle (only while descending and overlapping the paddle face) ---
         var paddle = state.Paddle;
         if (ball.Vel.Y > 0 && ball.Pos.Y + r >= paddle.Y && ball.Pos.Y + r <= paddle.Y + paddle.Height)
@@ -205,6 +210,56 @@ public static class GameSimulation
                 break;
         }
         return false;
+    }
+
+    /// <summary>Bounce a ball off any corner barrier it overlaps. Each barrier rect is
+    /// Minkowski-inflated by the ball radius (circle↔rect = point↔inflated-rect); if the
+    /// centre is inside, the ball is pushed out along the least-penetrated face and that
+    /// velocity component is negated — the same reflection walls use. The barriers hug
+    /// the walls, so the ball only ever meets one inner face and single-axis resolution
+    /// is stable. Like the wall/goal checks this is position-based (no sweep), so a very
+    /// fast ball could tunnel a thin foot in one step — an accepted parity limitation.</summary>
+    private static void ResolveBarriers(GameState state, Ball ball)
+    {
+        var barriers = state.Barriers;
+        float r = ball.Radius;
+        for (int i = 0; i < barriers.Count; i++)
+        {
+            var rect = barriers[i];
+            float minX = rect.Position.X - r, maxX = rect.End.X + r;
+            float minY = rect.Position.Y - r, maxY = rect.End.Y + r;
+            var c = ball.Pos;
+            if (c.X <= minX || c.X >= maxX || c.Y <= minY || c.Y >= maxY)
+                continue; // not overlapping this barrier
+
+            // Penetration to each inflated face; exit along the shallowest. Only negate
+            // the velocity if it points into the barrier, so a ball already leaving
+            // isn't yanked back (which would make it stick).
+            float penL = c.X - minX, penR = maxX - c.X;
+            float penT = c.Y - minY, penB = maxY - c.Y;
+            float min = Mathf.Min(Mathf.Min(penL, penR), Mathf.Min(penT, penB));
+
+            if (min == penL)
+            {
+                ball.Pos = new Vector2(minX, c.Y);
+                if (ball.Vel.X > 0) ball.Vel = new Vector2(-ball.Vel.X, ball.Vel.Y);
+            }
+            else if (min == penR)
+            {
+                ball.Pos = new Vector2(maxX, c.Y);
+                if (ball.Vel.X < 0) ball.Vel = new Vector2(-ball.Vel.X, ball.Vel.Y);
+            }
+            else if (min == penT)
+            {
+                ball.Pos = new Vector2(c.X, minY);
+                if (ball.Vel.Y > 0) ball.Vel = new Vector2(ball.Vel.X, -ball.Vel.Y);
+            }
+            else
+            {
+                ball.Pos = new Vector2(c.X, maxY);
+                if (ball.Vel.Y < 0) ball.Vel = new Vector2(ball.Vel.X, -ball.Vel.Y);
+            }
+        }
     }
 
     /// <summary>Resolve ball↔splitter collisions. A master ball always splits a

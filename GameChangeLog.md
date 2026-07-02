@@ -9,6 +9,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.19.0] — 2026-07-01
+
+Adds **corner barriers**: a solid L-shaped obstacle in all four corners of every
+player's screen that turns balls away from the goal corners and stops corner-cutting.
+
+### Added
+
+- **Corner barriers.** The `Cornerbarrier` sprite (drawn for the bottom-left corner) is
+  placed in all four corners of every screen — the same sprite rotated in 90° steps
+  about its bottom-left pixel, that pixel pinned to the screen corner, so each L opens
+  toward the arena centre. Sized as a fraction of arena height (like the paddle / ball /
+  goal-gap tuning), so every resolution gets the same proportion.
+- **Barrier collision.** Balls (master and split) bounce off the barriers. Each L is
+  modelled as its two solid bars (arm + foot) — 8 axis-aligned rects total — resolved
+  in the sim before the goal/edge checks, so a ball entering a bottom goal corner is
+  turned away instead of sneaking past the paddle. Reflection reuses the wall-bounce
+  math; the transparent inner region of the L stays open.
+- **`CornerBarrier` layout helper** (`game/CornerBarrier.cs`), the single source of
+  truth for barrier geometry — the simulation derives its collision rects and the view
+  places its sprites from the same corner/rotation/scale table, so the collider can
+  never drift from the art.
+- **`AssetCategory.SystemControlled`** for the barrier: game-owned but static (no spawn
+  cadence), so it stays out of the host's Random-Spawns frequency UI. Registered as
+  `AssetId.CornerBarrier` in the sprite registry.
+
+### Changed
+
+- Random splitter spawns now avoid the corner barriers, so a splitter can't appear
+  unreachable inside one.
+
+---
+
 ## [0.18.0] — 2026-06-29
 
 Adds the **ball-splitter** mechanic: a system-spawned **BallSpliter** element that
