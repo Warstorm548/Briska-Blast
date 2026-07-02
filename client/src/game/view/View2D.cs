@@ -33,6 +33,7 @@ public partial class View2D : Node2D, IGameView
     private readonly StringBuilder _scoreText = new();
 
     private GameState? _state;
+    private bool _barriersBuilt;
 
     /// <summary>Resolves a player_id to the display name shown on the scoreboard.
     /// Injected by <c>GameScene</c> from <c>SessionContext.DisplayNameFor</c>. When
@@ -66,9 +67,41 @@ public partial class View2D : Node2D, IGameView
         AddChild(_scoreboard);
     }
 
+    /// <summary>Create the four static corner-barrier sprites once. They never move, so
+    /// this runs a single time. Each sprite pivots on its bottom-left pixel
+    /// (<c>Offset = (0, -texH)</c>) so the per-corner 90° rotation hinges on that pixel
+    /// pinned to the screen corner — the same <see cref="CornerBarrier"/> layout the
+    /// simulation derives its collision rects from, so art and collider stay aligned.
+    /// Drawn just above the background and below the balls.</summary>
+    private void BuildBarriersOnce(GameState state)
+    {
+        if (_barriersBuilt)
+            return;
+        var tex = SpriteRegistry.Instance.GetTexture(AssetId.CornerBarrier);
+        float texH = tex.GetSize().Y;
+        if (texH <= 0f)
+            return; // texture not ready yet — retry on the next frame
+        float scale = CornerBarrier.ScaleFor(state.ArenaHeight);
+        foreach (var (corner, rotation) in CornerBarrier.Corners)
+        {
+            AddChild(new Sprite2D
+            {
+                Texture = tex,
+                Centered = false,
+                Offset = new Vector2(0, -texH),
+                Position = CornerBarrier.Pivot(corner, state.ArenaWidth, state.ArenaHeight),
+                Rotation = rotation,
+                Scale = new Vector2(scale, scale),
+                ZIndex = -1,
+            });
+        }
+        _barriersBuilt = true;
+    }
+
     public void Render(GameState state)
     {
         _state = state;
+        BuildBarriersOnce(state);
 
         // Background stretched to fill the arena.
         var bgSize = _background.Texture.GetSize();

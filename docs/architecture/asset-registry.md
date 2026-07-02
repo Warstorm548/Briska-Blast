@@ -11,15 +11,19 @@ a **category tag**.
 - A stable integer id (`AssetId`) that never changes once assigned — safe to persist
   or send over the wire later.
 - A category tag distinguishing **player-controlled** sprites (paddles, the served
-  ball) from **system-handled** ones (random spawns like the ball splitter), so
-  systems can treat each class uniformly — e.g. host spawn-frequency settings can
-  enumerate the system spawns via `SpriteRegistry.SystemSpawns()`.
+  ball), **system-controlled** static fixtures (the corner barriers), and
+  **system-handled** random spawns (the ball splitter), so systems can treat each
+  class uniformly — e.g. host spawn-frequency settings enumerate only the system spawns
+  via `SpriteRegistry.SystemSpawns()`, which the static `SystemControlled` fixtures are
+  deliberately excluded from.
 
 ## Shape
 
 - `enum AssetId` — the lookup numbers, counting **upward**; never reorder or reuse a
   number.
-- `enum AssetCategory { PlayerControlled, SystemHandled }`.
+- `enum AssetCategory { PlayerControlled, SystemControlled, SystemHandled }`
+  (`SystemControlled` = game-owned but static, e.g. the corner barriers; `SystemHandled`
+  = random spawns with a host-tunable cadence).
 - `Entries` — the table ("grid"): one `AssetEntry(id, name, res-path, category)` row
   per sprite.
 - API: `GetTexture(AssetId)` (lazy-loads + caches the `Texture2D`), `GetCategory(id)`,

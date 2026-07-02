@@ -124,6 +124,11 @@ public partial class GameScene : Node2D
 
         BuildEdges(ctx);
 
+        // Solid L barriers in all four corners (same on every screen). Static local
+        // geometry — built once here so the sim can bounce balls off them and the view
+        // can place the sprites from the shared CornerBarrier layout.
+        CornerBarrier.AppendRects(_state.Barriers, arena.X, arena.Y);
+
         // Arm the random-spawn cadence from the host's settings (broadcast at start
         // and applied by every client), falling back to the defaults if absent.
         if (ctx != null)
@@ -598,11 +603,32 @@ public partial class GameScene : Node2D
         if (maxX <= minX || maxY <= minY)
             return;
 
-        _state.Splitters.Add(new Splitter
+        float radius = _ballRadius * 1.5f;
+
+        // Keep the splitter out of the corner barriers so it can't spawn unreachable.
+        // Try a few random spots; if the corners crowd them all out this tick, skip the
+        // spawn (the cadence timer already re-armed, so another follows next interval).
+        for (int attempt = 0; attempt < 8; attempt++)
         {
-            Id = _state.NextSplitterId(),
-            Radius = _ballRadius * 1.5f,
-            Pos = new Vector2(_rng.RandfRange(minX, maxX), _rng.RandfRange(minY, maxY)),
-        });
+            var pos = new Vector2(_rng.RandfRange(minX, maxX), _rng.RandfRange(minY, maxY));
+            if (OverlapsBarrier(pos, radius))
+                continue;
+            _state.Splitters.Add(new Splitter
+            {
+                Id = _state.NextSplitterId(),
+                Radius = radius,
+                Pos = pos,
+            });
+            return;
+        }
+    }
+
+    /// <summary>True if a circle at <paramref name="pos"/> overlaps any corner barrier.</summary>
+    private bool OverlapsBarrier(Vector2 pos, float radius)
+    {
+        foreach (var rect in _state.Barriers)
+            if (rect.Grow(radius).HasPoint(pos))
+                return true;
+        return false;
     }
 }

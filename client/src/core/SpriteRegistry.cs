@@ -4,14 +4,22 @@ using Godot;
 namespace BriskaBlast.Core;
 
 /// <summary>
-/// Who drives an asset: a player (paddles, the served ball) versus the game
-/// itself (random-spawn elements like the ball splitter). Lets systems treat
-/// "system-handled" sprites uniformly — e.g. the host spawn-frequency settings
-/// enumerate them.
+/// Who drives an asset: a player (paddles, the served ball), the game itself as a
+/// static fixture (corner barriers), or the game itself as a random spawn (the ball
+/// splitter). Lets systems treat these groups uniformly — e.g. the host spawn-frequency
+/// settings enumerate only <see cref="SystemHandled"/>.
 /// </summary>
 public enum AssetCategory
 {
+    /// <summary>Driven by a player — paddles, the served ball.</summary>
     PlayerControlled,
+    /// <summary>Owned by the game as a STATIC fixture with no spawn cadence — the corner
+    /// barriers. Distinct from <see cref="SystemHandled"/> so it never appears in the
+    /// host's Random-Spawns frequency UI. Room to grow later (e.g. a mechanic that hides
+    /// a barrier for a particular player).</summary>
+    SystemControlled,
+    /// <summary>Spawned by the game on a host-tunable cadence — the ball splitter and
+    /// future random-spawn elements. Enumerated by <see cref="SpriteRegistry.SystemSpawns"/>.</summary>
     SystemHandled,
 }
 
@@ -28,6 +36,7 @@ public enum AssetId
     BallSpliter = 3,
     Paddle = 4,
     Background = 5,
+    CornerBarrier = 6,
 }
 
 /// <summary>One row of the asset lookup table: a stable id, a human label, the
@@ -68,6 +77,7 @@ public partial class SpriteRegistry : Node
         new(AssetId.BallSpliter, "BallSpliter", "res://src/assets/sprites/RandomSpawns/BallSpliter.png", AssetCategory.SystemHandled),
         new(AssetId.Paddle, "Paddle", "res://src/assets/Paddles/BallStricker.png", AssetCategory.PlayerControlled),
         new(AssetId.Background, "Background", "res://src/assets/sprites/backgrounds/BackgroundDefault.png", AssetCategory.PlayerControlled),
+        new(AssetId.CornerBarrier, "CornerBarrier", "res://src/assets/sprites/Platforms/Cornerbarrier.png", AssetCategory.SystemControlled),
     };
 
     private readonly Dictionary<AssetId, AssetEntry> _byId = new();
