@@ -272,7 +272,7 @@ public partial class GameScene : Node2D
             return;
         _leaving = true;
         if (!string.IsNullOrEmpty(message))
-            GD.Print($"[game] {message}");
+            Log.Info("game", message);
 
         var ctx = SessionContext.Instance;
         ctx?.TeardownNet();

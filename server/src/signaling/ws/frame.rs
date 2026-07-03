@@ -39,6 +39,7 @@ pub(super) async fn handle_client_frame(
             tracing::debug!("ws: duplicate identify from {} — ignored", from_player);
         }
         ClientMsg::Offer { to, sdp } => {
+            tracing::debug!(%to, "relay offer");
             state
                 .signal_hub
                 .send_to(
@@ -49,6 +50,7 @@ pub(super) async fn handle_client_frame(
                 .await;
         }
         ClientMsg::Answer { to, sdp } => {
+            tracing::debug!(%to, "relay answer");
             state
                 .signal_hub
                 .send_to(
@@ -59,6 +61,10 @@ pub(super) async fn handle_client_frame(
                 .await;
         }
         ClientMsg::IceCandidate { to, candidate, sdp_mid, sdp_m_line_index } => {
+            // Candidate type (host/srflx/relay) makes NAT-traversal progress
+            // visible server-side — a run that never yields a connectable pair is
+            // the symmetric-NAT / no-TURN case.
+            tracing::debug!(%to, cand_type = candidate_type(&candidate), "relay ice");
             state
                 .signal_hub
                 .send_to(
@@ -74,12 +80,12 @@ pub(super) async fn handle_client_frame(
                 .await;
         }
         ClientMsg::PeerConnectionFailed { peer, reason } => {
-            // Symmetric-NAT kick logic is deferred to a follow-up branch
-            // (TURN relay work). For now, just log.
-            tracing::info!(
-                "ws: {} reports peer_connection_failed against {} (reason: {})",
-                from_player, peer, reason
-            );
+            // Symmetric-NAT kick logic is deferred to a follow-up branch (TURN
+            // relay work). For now, log it as a warning with structured fields — a
+            // peer pair that can't connect is a real connectivity problem (usually
+            // symmetric NAT with no TURN relay yet). `session`/`player` come from
+            // the connection span.
+            tracing::warn!(%peer, %reason, "peer connection failed");
         }
         ClientMsg::ReportScore { scoring_player_id, points } => {
             // Trusted for now: any member may report, and the reported
@@ -179,4 +185,17 @@ pub(super) async fn handle_client_frame(
         ClientMsg::Leave => return false,
     }
     true
+}
+
+/// Extract the ICE candidate type (host / srflx / relay / prflx) from a candidate
+/// SDP line, for NAT diagnosis in the relay trace. Returns `"end"` for the empty
+/// end-of-candidates sentinel and `"unknown"` when no `typ` token is present.
+fn candidate_type(candidate: &str) -> &str {
+    if candidate.is_empty() {
+        return "end";
+    }
+    match candidate.split_once("typ ") {
+        Some((_, rest)) => rest.split(' ').next().unwrap_or("unknown"),
+        None => "unknown",
+    }
 }

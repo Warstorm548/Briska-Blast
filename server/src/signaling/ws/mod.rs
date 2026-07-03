@@ -63,12 +63,19 @@ pub async fn ws_handler(
 /// Drive one signaling WebSocket end to end: authenticate the player (Identify),
 /// reply with the `Identified` roster snapshot, register with the `SignalHub`, and
 /// relay signaling/chat frames until the socket closes.
+///
+/// A per-connection span carries `session` and `player` so every line emitted
+/// while this socket is live — including the signaling relay in `frame.rs`, which
+/// runs inside this fn — is attributable to one session and player. `player` is
+/// empty until Identify succeeds, then recorded.
+#[tracing::instrument(skip(socket, state, code), fields(session = %code, player = tracing::field::Empty))]
 async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
     // Phase 1: Identify-frame auth with deadline.
     let (player_id, is_host, host_player_id) = match identify(&mut socket, &code, &state).await {
         Ok(triple) => triple,
         Err(_) => return, // identify() already closed the socket with the right code
     };
+    tracing::Span::current().record("player", player_id.as_str());
 
     // Phase 2: Register with SignalHub and announce arrival.
     // conn_id scopes the eventual leave_room call so an older socket's

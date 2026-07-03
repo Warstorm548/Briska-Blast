@@ -96,7 +96,7 @@ public partial class SessionContext : Node
         {
             PlayerId = pid;
             SecretToken = token;
-            GD.Print($"SessionContext: identity {PlayerId} accepted from launcher.");
+            Log.Info("session", $"identity {PlayerId} accepted from launcher.");
         }
 
         // Defence in depth: the launcher should only ever hand a build the
@@ -106,8 +106,8 @@ public partial class SessionContext : Node
         if (handoff?.Channel is { Length: > 0 } ch &&
             !ch.Equals(BuildConfig.Channel, System.StringComparison.OrdinalIgnoreCase))
         {
-            GD.PushWarning(
-                $"SessionContext: handoff channel '{ch}' != build channel '{BuildConfig.Channel}'.");
+            Log.Warn("session",
+                $"handoff channel '{ch}' != build channel '{BuildConfig.Channel}'.");
         }
 
         // Versions sent on every gated request. Without a launcher handoff
@@ -140,7 +140,7 @@ public partial class SessionContext : Node
         if (OS.HasFeature("editor"))
             return SelfRegisterAsync();
 #endif
-        GD.PushWarning("[identity] no launcher identity available — cannot reach the server.");
+        Log.Warn("identity", "no launcher identity available — cannot reach the server.");
         return Task.FromResult(false);
     }
 
@@ -158,10 +158,10 @@ public partial class SessionContext : Node
             PlayerId = reg.PlayerId;
             SecretToken = reg.SecretToken;
             LocalUsername = reg.Username;
-            GD.Print($"[identity] dev self-registered as {PlayerId} ({LocalUsername}).");
+            Log.Info("identity", $"dev self-registered as {PlayerId} ({LocalUsername}).");
             return true;
         }
-        GD.PushWarning($"[identity] dev self-register failed: {result.ErrorCode}");
+        Log.Warn("identity", $"dev self-register failed: {result.ErrorCode}");
         return false;
     }
 #endif

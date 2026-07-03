@@ -17,18 +17,25 @@ use axum::{
 use deadpool_redis::{redis::AsyncCommands, Config as RedisConfig, Runtime};
 use std::net::SocketAddr;
 use tower_http::trace::TraceLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 #[tokio::main]
 async fn main() {
     let cfg = config::Config::from_env();
 
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "server=info,tower_http=info".into());
+    // LOG_FORMAT=json emits structured lines (for log shippers / the future admin
+    // Logs tab); anything else stays human-readable. Boxed so both branches share
+    // one subscriber type.
+    let fmt_layer = if cfg.log_format == "json" {
+        tracing_subscriber::fmt::layer().json().boxed()
+    } else {
+        tracing_subscriber::fmt::layer().boxed()
+    };
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "server=info,tower_http=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
+        .with(env_filter)
+        .with(fmt_layer)
         .init();
 
     let redis_cfg = RedisConfig::from_url(&cfg.redis_url);

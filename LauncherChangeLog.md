@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.19.0] — 2026-07-03
+
+Adds a **Logs button** so users can open the game's per-run log folder and send it
+to the developer in one click.
+
+### Added
+
+- **Logs button** in **Settings → Game Channel Management**, beside each channel's
+  **Game Save** button. Opens that channel's per-user log folder
+  (`<data_dir>/log<channel>` — `logdev` / `logea` / `logstable`), where the game
+  writes its per-run logs. Enabled only for installed channels. New
+  `paths::logs_dir(channel)` resolves/creates the folder; the plain `<data_dir>/logs`
+  name is reserved for the launcher's own future logs.
+
 ## [0.18.0] — 2026-07-01
 
 Adds scrolling to menu pages that are taller than the visible pane, so their content

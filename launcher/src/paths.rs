@@ -120,6 +120,16 @@ pub fn saves_dir(channel: Channel) -> io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// `<data_dir>/log<channel>` — the game's per-run log folder for `channel`
+/// (`logdev`/`logea`/`logstable`). Created on first call. The game writes here
+/// (`client/src/core/Paths.cs::LogDir`), and the Settings → Logs button opens it.
+/// The plain `<data_dir>/logs` name is reserved for the launcher's own future logs.
+pub fn logs_dir(channel: Channel) -> io::Result<PathBuf> {
+    let dir = data_dir()?.join(format!("log{}", channel.dir_name()));
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 /// Resolve the game's .NET runtime-extraction cache directory for `channel` on
 /// **Windows**: `%LOCALAPPDATA%\data_<cache_basename>_windows_x86_64`. This is
 /// the folder Godot extracts the self-contained .NET runtime into on first

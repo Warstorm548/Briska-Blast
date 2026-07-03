@@ -147,6 +147,7 @@ fn important_files_section(state: &AppState) -> Element<'_, Message> {
             row![
                 bordered_cell(c.label(), 120.0),
                 cell_button_maybe("Game Save", Message::GameSavePressed(c), installed && !busy),
+                cell_button_maybe("Logs", Message::GameLogsPressed(c), installed && !busy),
                 container(Space::new().width(Length::Fill))
                     .style(theme::bordered)
                     .width(Length::Fill)

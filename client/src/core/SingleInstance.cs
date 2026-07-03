@@ -8,7 +8,6 @@ using System.Text.Json;
 using System.Threading;
 // Disambiguate from Godot's same-named types pulled in by `using Godot;`.
 using FileAccess = System.IO.FileAccess;
-using Environment = System.Environment;
 
 namespace BriskaBlast.Core;
 
@@ -61,7 +60,7 @@ public partial class SingleInstance : Node
         catch (Exception e)
         {
             // Fail-safe: never let the single-instance machinery wedge the game.
-            GD.PushWarning($"SingleInstance: acquire failed, running without guard: {e.Message}");
+            Log.Warn("single-instance", $"acquire failed, running without guard: {e.Message}");
         }
     }
 
@@ -89,11 +88,11 @@ public partial class SingleInstance : Node
         // editor=false and are still single-instanced for real users.
         if (OS.HasFeature("editor"))
         {
-            GD.Print("SingleInstance: editor run — skipping single-instance guard.");
+            Log.Info("single-instance", "editor run — skipping single-instance guard.");
             return;
         }
 
-        var dir = ResolveDataDir();
+        var dir = Paths.DataDir();
         Directory.CreateDirectory(dir);
         _filePath = Path.Combine(dir, FileName);
 
@@ -119,7 +118,7 @@ public partial class SingleInstance : Node
                 _ownsFile = true;
                 _serving = true;
                 StartAcceptLoop(listener);
-                GD.Print($"SingleInstance: acquired game slot on 127.0.0.1:{port}.");
+                Log.Info("single-instance", $"acquired game slot on 127.0.0.1:{port}.");
                 return;
             }
             catch (IOException) when (File.Exists(_filePath))
@@ -132,19 +131,19 @@ public partial class SingleInstance : Node
                     // before the main scene does anything meaningful.
                     IsDuplicate = true;
                     listener.Stop();
-                    GD.Print("SingleInstance: another game instance is live — exiting.");
+                    Log.Info("single-instance", "another game instance is live — exiting.");
                     GetTree().CallDeferred(SceneTree.MethodName.Quit);
                     return;
                 }
                 // Stale (crashed game, recycled port, stranger, or no port) → reclaim.
-                GD.Print("SingleInstance: stale game_instance.json — reclaiming.");
+                Log.Info("single-instance", "stale game_instance.json — reclaiming.");
                 TryDelete(_filePath);
             }
         }
 
         // Exhausted attempts → fail-safe: run normally without a claim.
         listener.Stop();
-        GD.PushWarning("SingleInstance: exhausted claim attempts — running without guard.");
+        Log.Warn("single-instance", "exhausted claim attempts — running without guard.");
     }
 
     /// <summary>Background thread that owns the listener for the process lifetime
@@ -240,49 +239,12 @@ public partial class SingleInstance : Node
         return null;
     }
 
-    /// <summary>Locate the per-user data dir: the launcher handoff's value when
-    /// present, else the same dir computed locally (editor / standalone run).</summary>
-    private static string ResolveDataDir()
-    {
-        var handoff = LaunchArgs.FromLauncher;
-        if (!string.IsNullOrEmpty(handoff?.DataDir))
-            return handoff!.DataDir!;
-        return FallbackDataDir();
-    }
-
-    /// <summary>Mirrors the Rust <c>directories</c> crate
-    /// (<c>ProjectDirs::from("", "", "BriskaBlast").data_dir()</c>) exactly, so a
-    /// standalone game writes where a launcher would probe. Note the per-platform
-    /// asymmetry: Windows/macOS append <c>/data</c>; Linux lowercases and has no
-    /// <c>/data</c> suffix. (A standalone game and a launcher-spawned game running
-    /// at once is an unsupported edge — online play is impossible standalone — but
-    /// both resolve the same path regardless, so they still agree.)</summary>
-    private static string FallbackDataDir()
-    {
-        if (OS.HasFeature("windows"))
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "BriskaBlast", "data");
-        if (OS.HasFeature("macos"))
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                "Library", "Application Support", "BriskaBlast", "data");
-        // Linux: $XDG_DATA_HOME (or ~/.local/share), app name lowercased, no /data.
-        string? xdg = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
-        string baseDir = !string.IsNullOrEmpty(xdg)
-            ? xdg!
-            : Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".local", "share");
-        return Path.Combine(baseDir, "briskablast");
-    }
-
     private static void TryDelete(string path)
     {
         try { File.Delete(path); }
         catch (Exception e)
         {
-            GD.PushWarning($"SingleInstance: failed to delete '{path}': {e.Message}");
+            Log.Warn("single-instance", $"failed to delete '{path}': {e.Message}");
         }
     }
 }
