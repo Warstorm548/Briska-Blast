@@ -5,6 +5,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.21.0] — 2026-07-03
+
+Adds **observability** to the signaling server: per-session log correlation, a
+signaling-relay trace, structured peer-failure logging, and a JSON log-format
+switch — the server-side half of tracing why WebRTC peers fail to connect.
+
+### Added
+
+- **Per-connection tracing span** on the signaling WebSocket handler carrying
+  `session` and `player`, so every line emitted while a socket is live — including
+  the relay in `frame.rs` — is attributable to one session and player.
+- **Signaling-relay trace** (`debug`): offer/answer/ICE relays are logged, ICE with
+  its **candidate type** (host/srflx/relay), making NAT-traversal progress visible
+  server-side (belt-and-suspenders with the client's own WebRTC log).
+- **`LOG_FORMAT` env** (`pretty` default, `json`): `json` emits machine-parseable
+  lines for log shippers / the future admin Logs tab. Read via `Config`.
+
+### Changed
+
+- `PeerConnectionFailed` now logs at **WARN** with structured fields (`peer`,
+  `reason`) instead of an INFO format string — a peer pair that can't connect is a
+  real connectivity problem worth surfacing.
+
 ## [0.20.1] — 2026-07-01
 
 Internal refactor only — no behavior change, no new features.

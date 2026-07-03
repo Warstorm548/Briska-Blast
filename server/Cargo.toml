@@ -1,6 +1,6 @@
 [package]
 name = "server"
-version = "0.20.1"
+version = "0.21.0"
 edition = "2021"
 
 [[bin]]
@@ -20,7 +20,7 @@ hex             = "0.4"
 tower           = "0.4"
 tower-http      = { version = "0.5", features = ["trace"] }
 tracing         = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 dotenvy         = "0.15"
 semver          = "1.0"
 governor        = "0.6"

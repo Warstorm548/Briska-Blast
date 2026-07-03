@@ -28,7 +28,11 @@ public interface IPeerTransport
     /// link died) rejoins, so both sides rebuild that one connection without
     /// disturbing the rest of the mesh.</summary>
     void ResyncPeer(string peerId);
-    void Send(string peerId, byte[] data);
+    /// <summary>Send bytes to one peer. Returns <c>true</c> if the packet was
+    /// handed to an open channel, <c>false</c> if it was dropped because the peer's
+    /// channel isn't open yet (still negotiating, failed, or gone) — the caller can
+    /// surface that instead of losing the send silently.</summary>
+    bool Send(string peerId, byte[] data);
     void Broadcast(byte[] data);
     void Close();
 }

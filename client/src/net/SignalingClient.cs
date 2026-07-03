@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
 using Godot;
+using BriskaBlast.Core;
 
 namespace BriskaBlast.Net;
 
@@ -146,7 +147,7 @@ public partial class SignalingClient : Node
         var err = _ws.ConnectToUrl(url);
         if (err != Error.Ok)
         {
-            GD.PushWarning($"[signaling] ConnectToUrl({url}) failed: {err}");
+            Log.Warn("net.signaling", $"ConnectToUrl({url}) failed: {err}");
             EmitClosedOnce(0, $"connect_failed:{err}");
             return;
         }
@@ -300,7 +301,7 @@ public partial class SignalingClient : Node
         _reconnecting = true;
         _reconnectStartMsec = Time.GetTicksMsec();
         _nextAttemptMsec = 0; // first retry on the next tick
-        GD.Print($"[signaling] connection lost (code {code}) — reconnecting…");
+        Log.Info("net.signaling", $"connection lost (code {code}) — reconnecting…");
         Reconnecting?.Invoke();
     }
 
@@ -313,7 +314,7 @@ public partial class SignalingClient : Node
                 SendIdentifyOnce();
                 _nextSyncMsec = 0; // re-sync now: the clock may have stepped while away
                 _reconnecting = false;
-                GD.Print("[signaling] reconnected.");
+                Log.Info("net.signaling", "reconnected.");
                 Reconnected?.Invoke();
                 DrainPackets();
                 break;
@@ -357,7 +358,7 @@ public partial class SignalingClient : Node
         var url = $"{ServerEndpoint.WsBase}/ws/session/{_code}";
         var err = _ws.ConnectToUrl(url);
         if (err != Error.Ok)
-            GD.PushWarning($"[signaling] reconnect dial failed: {err}");
+            Log.Warn("net.signaling", $"reconnect dial failed: {err}");
     }
 
     // App close codes that mean "you can't be in this session" — reconnecting
@@ -458,13 +459,13 @@ public partial class SignalingClient : Node
                         IntProp(root, "sdp_m_line_index"));
                     break;
                 default:
-                    GD.Print($"[signaling] ignoring unknown frame type '{typeEl.GetString()}'");
+                    Log.Debug("net.signaling", $"ignoring unknown frame type '{typeEl.GetString()}'");
                     break;
             }
         }
         catch (Exception e)
         {
-            GD.PushWarning($"[signaling] failed to parse frame: {e.Message}");
+            Log.Warn("net.signaling", $"failed to parse frame: {e.Message}");
         }
     }
 

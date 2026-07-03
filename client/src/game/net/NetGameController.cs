@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Godot;
+using BriskaBlast.Core;
 using BriskaBlast.Game.Net;
 using BriskaBlast.Net;
 
@@ -65,7 +66,13 @@ public sealed class NetGameController : IDisposable
         var pkt = new BallHandoffPacket(
             ev.BallId, ev.LastHitterId, perp * invH, tang * invH, ev.NormalizedAlong,
             _signaling.ServerNowMs(), ev.Kind);
-        _transport.Send(ev.PeerId, GamePacket.WriteBallHandoff(pkt));
+        bool sent = _transport.Send(ev.PeerId, GamePacket.WriteBallHandoff(pkt));
+        if (sent)
+            Log.Debug("game.handoff", $"OUT ball={ev.BallId} kind={ev.Kind} peer={ev.PeerId} edge={ev.ExitEdge}");
+        else
+            // The ball just left our screen but the peer channel isn't open, so it
+            // vanished into nothing — the classic "no balls crossing" symptom.
+            Log.Warn("game.handoff", $"DROPPED ball={ev.BallId} peer={ev.PeerId} — channel not open (ball lost)");
     }
 
     /// <summary>Report a credited score to the server (server-relayed channel).
@@ -128,6 +135,7 @@ public sealed class NetGameController : IDisposable
             LastHitterId = pkt.LastHitterId,
             Kind = pkt.Kind,
         });
+        Log.Debug("game.handoff", $"IN  ball={pkt.BallId} kind={pkt.Kind} peer={peerId} edge={entryEdge}");
     }
 
     private void OnPeerLost(string peerId)
@@ -136,6 +144,7 @@ public sealed class NetGameController : IDisposable
         // heading at them bounces instead of vanishing into a dead channel.
         if (_peerToEdge.TryGetValue(peerId, out var edge))
         {
+            Log.Info("session", $"peer={peerId} lost — edge {edge} → wall");
             _state.Edges[edge] = EdgeTarget.Wall;
             _peerToEdge.Remove(peerId);
         }
@@ -156,6 +165,7 @@ public sealed class NetGameController : IDisposable
         if (_peerToEdge.ContainsKey(peerId))
             return; // link never lost — nothing to heal
 
+        Log.Info("session", $"peer={peerId} rejoined — restoring edge {edge} → portal, re-meshing");
         _state.Edges[edge] = EdgeTarget.Portal(peerId);
         _peerToEdge[peerId] = edge;
         _transport.ResyncPeer(peerId);

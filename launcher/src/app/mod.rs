@@ -254,6 +254,10 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         Message::GameSaveOpenDone { channel, result } => {
             maintenance::game_save_open_done(channel, result)
         }
+        Message::GameLogsPressed(channel) => maintenance::game_logs_pressed(state, channel),
+        Message::GameLogsOpenDone { channel, result } => {
+            maintenance::game_logs_open_done(channel, result)
+        }
 
         // ---- Windows firewall: check + first-Play prompt ----
         Message::CheckFirewall(channel) => firewall::check_firewall(state, channel),

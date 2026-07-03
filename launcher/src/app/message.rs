@@ -109,6 +109,9 @@ pub enum Message {
         result: Result<Option<crate::updater::branches::GameRelease>, String>,
     },
     GameSavePressed(Channel),
+    /// User asked to open a channel's log folder (`data/log<channel>`) so they
+    /// can hand the game's per-run logs to the developer.
+    GameLogsPressed(Channel),
     StartLauncherUpdatePressed,
     CheckForUpdatesPressed,
     LauncherUpdateCheckDone(Result<UpdateCheckOutcome, String>),
@@ -223,6 +226,12 @@ pub enum Message {
     /// Result of the platform `open` call for the Game Save button. Only
     /// logged for now; the button itself doesn't surface failures in the UI.
     GameSaveOpenDone {
+        channel: Channel,
+        result: Result<(), String>,
+    },
+    /// Result of the platform `open` call for the Logs button. Only logged for
+    /// now; the button itself doesn't surface failures in the UI.
+    GameLogsOpenDone {
         channel: Channel,
         result: Result<(), String>,
     },

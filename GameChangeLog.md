@@ -9,6 +9,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.20.0] — 2026-07-03
+
+Adds a **permanent, structured logging system** with a persisted per-run log file,
+and instruments the WebRTC/handoff path so peer-connection problems (the "balls
+don't cross portals" class of bug) are finally visible in a file users can send.
+
+### Added
+
+- **Central `Log` autoload** (`src/core/Log.cs`): leveled (Trace/Debug/Info/Warn/
+  Error), category-tagged (`net.webrtc`, `net.signaling`, `game.handoff`, `session`,
+  `single-instance`, …), timestamped structured lines. Every line is mirrored to the
+  Godot console **and** written to a per-run file. Debug on the `dev` channel, Info
+  on ea/stable.
+- **Per-run log file** in the launcher-known per-user data dir, in a **per-channel
+  folder** (`logdev` / `logea` / `logstable`, resolved by the new shared
+  `src/core/Paths.cs`). One file per game launch, named
+  `briskablast_<channel>_<timestamp>.log`; the newest 20 runs are kept, older ones
+  pruned on open. A rejected duplicate instance writes no file, and AutoFlush keeps
+  the tail on disk through a hang/crash. A startup banner records version, channel,
+  platform, renderer, resolution, and the resolved log path.
+- **WebRTC instrumentation** (`WebRtcMeshTransport`): logs ICE connection-state
+  transitions, gathering state, ICE **candidate types** (host/srflx/relay — the NAT
+  story), data-channel open/close, and offerer/answerer role — so a stalled or failed
+  peer link is diagnosable from the log alone.
+- **Handoff instrumentation** (`NetGameController`): logs each ball handoff in/out
+  and — via a new `IPeerTransport.Send` success bool — a **Warn when a ball is handed
+  to a not-yet-open channel** (the previously-silent drop that looks like "no balls
+  crossing").
+
+### Changed
+
+- `SingleInstance` resolves the data dir through the shared `Paths` helper (the
+  per-platform logic moved there unchanged), and the net / session / single-instance
+  `GD.Print`/`PushWarning` calls were migrated onto `Log`.
+
 ## [0.19.0] — 2026-07-01
 
 Adds **corner barriers**: a solid L-shaped obstacle in all four corners of every

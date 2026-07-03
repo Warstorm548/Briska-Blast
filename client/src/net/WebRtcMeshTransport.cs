@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Godot;
+using BriskaBlast.Core;
 
 namespace BriskaBlast.Net;
 
@@ -43,6 +44,10 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
         public bool Connected;
         public bool Failed;
         public bool Disconnected;
+        // Last-seen negotiation states, so _Process logs only transitions rather
+        // than spamming the same state every frame.
+        public WebRtcPeerConnection.ConnectionState LastConn = WebRtcPeerConnection.ConnectionState.New;
+        public WebRtcPeerConnection.GatheringState LastGather = WebRtcPeerConnection.GatheringState.New;
         public readonly List<(string Mid, int Index, string Candidate)> PendingIce = new();
     }
 
@@ -71,7 +76,9 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
             _peers[pid] = link;
 
             // Deterministic offerer: smaller id offers + owns the data channel.
-            if (string.CompareOrdinal(selfId, pid) < 0)
+            bool offerer = string.CompareOrdinal(selfId, pid) < 0;
+            Log.Info("net.webrtc", $"peer={pid} negotiating role={(offerer ? "offerer" : "answerer")}");
+            if (offerer)
             {
                 link.Channel = link.Pc.CreateDataChannel("data");
                 link.Pc.CreateOffer();
@@ -99,20 +106,24 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
 
         // Same deterministic-offerer rule as Connect: the smaller id offers and
         // owns the data channel; the other answers when the offer arrives.
-        if (string.CompareOrdinal(_selfId, peerId) < 0)
+        bool offerer = string.CompareOrdinal(_selfId, peerId) < 0;
+        Log.Info("net.webrtc", $"peer={peerId} resync — renegotiating role={(offerer ? "offerer" : "answerer")}");
+        if (offerer)
         {
             link.Channel = link.Pc.CreateDataChannel("data");
             link.Pc.CreateOffer();
         }
     }
 
-    public void Send(string peerId, byte[] data)
+    public bool Send(string peerId, byte[] data)
     {
         if (_peers.TryGetValue(peerId, out var link) &&
             link.Channel is { } ch && ch.GetReadyState() == WebRtcDataChannel.ChannelState.Open)
         {
             ch.PutPacket(data);
+            return true;
         }
+        return false;
     }
 
     public void Broadcast(byte[] data)
@@ -144,12 +155,18 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
     {
         var pc = new WebRtcPeerConnection();
         if (pc.Initialize(IceConfig) != Error.Ok)
-            GD.PushWarning($"[webrtc] Initialize failed for peer {pid} — is the webrtc-native extension installed?");
+            Log.Warn("net.webrtc", $"Initialize failed for peer {pid} — is the webrtc-native extension installed?");
 
         var link = new PeerLink { Pc = pc };
 
         pc.SessionDescriptionCreated += (type, sdp) => OnLocalDescription(pid, type, sdp);
-        pc.IceCandidateCreated += (media, index, name) => _signaling.SendIceCandidate(pid, name, media, (int)index);
+        pc.IceCandidateCreated += (media, index, name) =>
+        {
+            // Candidate type (host/srflx/relay) is the NAT story: srflx means STUN
+            // reflexive worked; without a pairing that connects, traversal is failing.
+            Log.Debug("net.webrtc", $"peer={pid} local-candidate type={CandidateType(name)} mid={media}");
+            _signaling.SendIceCandidate(pid, name, media, (int)index);
+        };
         pc.DataChannelReceived += channel => link.Channel = channel;
 
         return link;
@@ -171,6 +188,7 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
         if (!_peers.TryGetValue(from, out var link))
             return;
         // SetRemoteDescription(offer) triggers SessionDescriptionCreated(answer).
+        Log.Debug("net.webrtc", $"peer={from} remote-description set (offer)");
         link.Pc.SetRemoteDescription("offer", sdp);
         link.RemoteSet = true;
         FlushPendingIce(link);
@@ -180,6 +198,7 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
     {
         if (!_peers.TryGetValue(from, out var link))
             return;
+        Log.Debug("net.webrtc", $"peer={from} remote-description set (answer)");
         link.Pc.SetRemoteDescription("answer", sdp);
         link.RemoteSet = true;
         FlushPendingIce(link);
@@ -189,6 +208,7 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
     {
         if (!_peers.TryGetValue(from, out var link))
             return;
+        Log.Debug("net.webrtc", $"peer={from} remote-candidate type={CandidateType(candidate)} ready={link.RemoteSet}");
         // ICE can arrive before the remote description is set; buffer until then.
         if (link.RemoteSet)
             link.Pc.AddIceCandidate(sdpMid, sdpMLineIndex, candidate);
@@ -211,9 +231,25 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
         {
             link.Pc.Poll();
 
-            if (!link.Failed && link.Pc.GetConnectionState() == WebRtcPeerConnection.ConnectionState.Failed)
+            // Log ICE connection + gathering state only when they change, so the
+            // trace reads as a timeline (New→Checking→Connected/Failed …).
+            var conn = link.Pc.GetConnectionState();
+            if (conn != link.LastConn)
+            {
+                Log.Info("net.webrtc", $"peer={pid} connection {link.LastConn}->{conn}");
+                link.LastConn = conn;
+            }
+            var gather = link.Pc.GetGatheringState();
+            if (gather != link.LastGather)
+            {
+                Log.Debug("net.webrtc", $"peer={pid} gathering {link.LastGather}->{gather}");
+                link.LastGather = gather;
+            }
+
+            if (!link.Failed && conn == WebRtcPeerConnection.ConnectionState.Failed)
             {
                 link.Failed = true;
+                Log.Warn("net.webrtc", $"peer={pid} ICE failed — reporting to server (usually symmetric-NAT with no TURN relay)");
                 _signaling.SendPeerConnectionFailed(pid, "ice_failed");
                 PeerFailed?.Invoke(pid);
             }
@@ -227,6 +263,7 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
             if (!link.Connected && state == WebRtcDataChannel.ChannelState.Open)
             {
                 link.Connected = true;
+                Log.Info("net.webrtc", $"peer={pid} data channel OPEN — handoffs can flow");
                 PeerConnected?.Invoke(pid);
             }
 
@@ -236,8 +273,24 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
             if (link.Connected && !link.Disconnected && state == WebRtcDataChannel.ChannelState.Closed)
             {
                 link.Disconnected = true;
+                Log.Info("net.webrtc", $"peer={pid} data channel CLOSED");
                 PeerDisconnected?.Invoke(pid);
             }
         }
+    }
+
+    /// <summary>Extract the ICE candidate type (host / srflx / relay / prflx) from a
+    /// candidate SDP line, for NAT diagnosis. Empty candidate is the
+    /// end-of-candidates sentinel; "unknown" if no <c>typ</c> token is present.</summary>
+    private static string CandidateType(string candidate)
+    {
+        if (string.IsNullOrEmpty(candidate))
+            return "end-of-candidates";
+        int i = candidate.IndexOf("typ ", StringComparison.Ordinal);
+        if (i < 0)
+            return "unknown";
+        i += 4;
+        int end = candidate.IndexOf(' ', i);
+        return end < 0 ? candidate.Substring(i) : candidate.Substring(i, end - i);
     }
 }

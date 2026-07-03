@@ -10,6 +10,9 @@ pub struct Config {
     pub admin_password: String,
     pub watchtower_url: String,
     pub watchtower_token: String,
+    /// Log output format: `json` for machine-parseable lines (feeds the future
+    /// admin Logs tab / log shippers), anything else for human-readable `pretty`.
+    pub log_format: String,
 }
 
 impl Config {
@@ -58,6 +61,7 @@ impl Config {
                      with a known-literal token."
                 )
             }),
+            log_format: env::var("LOG_FORMAT").unwrap_or_else(|_| "pretty".to_string()),
         }
     }
 }

@@ -315,3 +315,35 @@ pub(crate) fn game_save_open_done(channel: Channel, result: Result<(), String>) 
     }
     Task::none()
 }
+
+/// Open the per-channel game **log** folder (`<data_dir>/log<channel>`) so the
+/// user can hand the game's per-run logs to the developer. Mirrors
+/// [`game_save_pressed`] but targets the per-user data dir (logs live there, not
+/// in the install dir). The button is gated to installed channels in the UI.
+pub(crate) fn game_logs_pressed(state: &mut AppState, channel: Channel) -> Task<Message> {
+    if channel == Channel::Dev && !state.dev_flag {
+        tracing::warn!("GameLogsPressed for Dev without dev_flag — refusing");
+        return Task::none();
+    }
+    Task::perform(
+        async move {
+            // Resolve+create the folder and open it entirely off the UI thread
+            // (logs_dir does create_dir_all), matching game_save_pressed.
+            tokio::task::spawn_blocking(move || {
+                let dir = crate::paths::logs_dir(channel).map_err(|e| format!("logs dir: {e}"))?;
+                open::that(&dir).map_err(|e| format!("open: {e}"))
+            })
+            .await
+            .map_err(|e| format!("open join: {e}"))?
+        },
+        move |result| Message::GameLogsOpenDone { channel, result },
+    )
+}
+
+pub(crate) fn game_logs_open_done(channel: Channel, result: Result<(), String>) -> Task<Message> {
+    match result {
+        Ok(()) => tracing::info!(?channel, "logs dir opened"),
+        Err(e) => tracing::warn!(?channel, error = %e, "failed to open logs dir"),
+    }
+    Task::none()
+}
