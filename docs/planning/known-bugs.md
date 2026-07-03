@@ -30,6 +30,56 @@ resurfaces unintentionally later.
 
 ---
 
+## Launcher self-update fails with "os error 5" (ACCESS_DENIED) in Program Files
+
+- **Status:** open — root-caused and reproduced in the field 2026-07-03; the durable
+  code fix (elevation fallback / clearer error) is **deferred**, not yet built. The
+  affected machine was recovered by reinstalling **outside** `C:\Program Files\` plus
+  a reboot.
+- **Affects:** Windows, machines where the launcher is installed to its default
+  `C:\Program Files\BriskaBlast\Launcher` location and run unelevated. Seen on one
+  specific Win11 laptop; other Win11 machines self-updated fine.
+- **Symptom (as reported):** the in-app launcher **self-update** fails with a message
+  ending in **"os error 5"** and never applies, while **game** updates work fine on
+  the same machine. An uninstall + manual reinstall of the newer launcher fixes it
+  **once**, but the *next* self-update fails again. Adding the launcher/game to the
+  **antivirus exclusions did not help.**
+- **Cause:** os error 5 = Windows `ERROR_ACCESS_DENIED` — a permission/lock failure,
+  **not** an AV signature hit (which is why an AV *exclusion*, which only stops
+  quarantine, changes nothing). Self-update uses the `self_update` crate's
+  rename-trick: the *running, unelevated* launcher renames its own
+  `briskablast-launcher.exe` and drops the new binary in its place, **inside its own
+  install dir** (`launcher/src/updater/github.rs:85`,
+  `launcher/src/app/handlers/launcher_update.rs:50`). The NSIS installer puts that dir
+  at `C:\Program Files\BriskaBlast\Launcher` (`tools/installer/launcher.nsi:17`,
+  `RequestExecutionLevel admin`), which a normal user cannot write to
+  (`launcher/src/paths.rs:9-13`). So the **game** update (a user-writable, user-chosen
+  folder) succeeds while the **launcher** self-update (Program Files, unelevated) is
+  denied. Uninstall/reinstall works only because the NSIS installer **elevates** (UAC);
+  the in-app self-update never elevates, so the next update hits the same wall. On the
+  one affected laptop the write was blocked where other machines' weren't — a
+  locked-down / Program-Files ACL, a stale file handle on the old exe (orphan
+  `.__relocated__.exe` / a security scan / a pending-rename cleared by the reboot),
+  and/or **Controlled Folder Access** (Ransomware protection), whose allow-list is
+  **separate from AV exclusions** and which blocks the write even when elevated.
+- **Fix direction (durable):** detect access-denied / os-error-5 in the self-update
+  result (`launcher/src/app/handlers/launcher_update.rs:79-82`) and **fall back to
+  relaunching the elevated NSIS installer** — reuse the one-shot `runas` /
+  `ShellExecuteExW` elevation already in `launcher/src/firewall.rs` — or at minimum
+  surface a clear, actionable error ("your launcher folder isn't writable / Controlled
+  Folder Access is blocking it — reinstall outside Program Files") instead of a raw
+  "Update failed: … (os error 5)". Longer term, consider defaulting the install to a
+  **per-user** location so unelevated self-update always works.
+- **Workaround:** reinstall the launcher **outside** `C:\Program Files\` (a
+  user-writable folder, e.g. `C:\Users\<name>\BriskaBlast\Launcher` via the NSIS
+  directory page) and reboot to clear any stale lock. If it still fails from a
+  user-writable folder, check **Controlled Folder Access** and add
+  `briskablast-launcher.exe` to its allow-list. The launcher logs to stdout only
+  (`launcher/src/main.rs:47-54`) — run the exe from a console to see the exact denied
+  path.
+
+---
+
 ## Game closes before the main menu (missing `.NET` runtime DLLs / AV quarantine)
 
 - **Status:** open — **mitigation + triage shipped** in game/launcher 0.17.0
