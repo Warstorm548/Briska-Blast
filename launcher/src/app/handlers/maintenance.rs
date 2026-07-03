@@ -325,19 +325,16 @@ pub(crate) fn game_logs_pressed(state: &mut AppState, channel: Channel) -> Task<
         tracing::warn!("GameLogsPressed for Dev without dev_flag — refusing");
         return Task::none();
     }
-    let logs_dir = match crate::paths::logs_dir(channel) {
-        Ok(dir) => dir,
-        Err(e) => {
-            tracing::warn!(?channel, error = %e, "cannot resolve logs dir");
-            return Task::none();
-        }
-    };
     Task::perform(
         async move {
-            tokio::task::spawn_blocking(move || open::that(&logs_dir))
-                .await
-                .map_err(|e| format!("open join: {e}"))?
-                .map_err(|e| format!("open: {e}"))
+            // Resolve+create the folder and open it entirely off the UI thread
+            // (logs_dir does create_dir_all), matching game_save_pressed.
+            tokio::task::spawn_blocking(move || {
+                let dir = crate::paths::logs_dir(channel).map_err(|e| format!("logs dir: {e}"))?;
+                open::that(&dir).map_err(|e| format!("open: {e}"))
+            })
+            .await
+            .map_err(|e| format!("open join: {e}"))?
         },
         move |result| Message::GameLogsOpenDone { channel, result },
     )

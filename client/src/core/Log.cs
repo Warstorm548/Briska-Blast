@@ -44,6 +44,9 @@ public partial class Log : Node
     private static readonly List<string> PreOpenBuffer = new();
     private static StreamWriter? _file;
     private static bool _openAttempted;
+    // Log dir resolved during OpenFile, cached so the banner can report it without
+    // re-hitting the filesystem (and re-throwing the failure OpenFile already handles).
+    private static string? _logDir;
 
     /// <summary>Minimum level actually recorded. Debug on the dev channel, Info on
     /// ea/stable — so release builds don't spew per-frame detail. Public so a
@@ -135,6 +138,7 @@ public partial class Log : Node
             try
             {
                 string dir = Paths.LogDir();
+                _logDir = dir;
                 PruneOldRuns(dir);
                 string name = string.Format(
                     CultureInfo.InvariantCulture,
@@ -191,6 +195,8 @@ public partial class Log : Node
             $"Briska Blast v{GameVersion.Current} channel={BuildConfig.Channel} " +
             $"platform={OS.GetName()} renderer=\"{RenderingServer.GetVideoAdapterName()}\" " +
             $"resolution={DisplayServer.WindowGetSize()} pid={OS.GetProcessId()}");
-        Info("boot", $"log_dir={Paths.LogDir()}");
+        // Reuse the dir OpenFile resolved — never re-call Paths.LogDir() here, so a
+        // filesystem failure can't throw out of _Ready and wedge the game.
+        Info("boot", $"log_dir={_logDir ?? "(unresolved)"}");
     }
 }
