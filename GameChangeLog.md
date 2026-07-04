@@ -9,6 +9,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.21.0] — 2026-07-04
+
+Consumes the server-minted **Cloudflare TURN credentials** (server 0.22.0), so
+peers behind symmetric NATs — the confirmed Win↔Mac field failure — connect via
+a relay instead of ICE dying in `Connecting` and every handoff dropping.
+
+### Added
+
+- **`IceServerDto`** (`src/net/Dto.cs`) mirroring the server's `IceServer`
+  (`turn.rs`), parsed tolerantly from the new `ice_servers` field on the
+  `start_signaling` and `identified` frames (absent/malformed ⇒ empty, so old
+  servers keep working).
+- **`WebRtcMeshTransport.SetIceServers`**: adopts the server-minted STUN+TURN
+  list for all subsequently created peer connections; an empty list keeps the
+  built-in Google-STUN fallback (old server / TURN unconfigured / mint failed).
+  Logs `using N server-provided ice servers (turn=yes|no)` — the field-log tell
+  that relay candidates are possible.
+- Wired at both mesh bring-up sites: `SessionLobby.OnStartSignaling` (normal
+  match start) and `JoinMenu.OnRejoinIdentified` (process-death rejoin, whose
+  fresh process gets its own credential set in the `identified` frame), always
+  before `Connect`.
+
 ## [0.20.0] — 2026-07-03
 
 Adds a **permanent, structured logging system** with a persisted per-run log file,

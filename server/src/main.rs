@@ -7,6 +7,7 @@ mod middleware;
 mod signaling;
 mod state;
 mod testharness;
+mod turn;
 mod update;
 
 use axum::{
@@ -44,6 +45,16 @@ async fn main() {
         .expect("failed to create Redis pool");
 
     seed_defaults(&redis_pool, &cfg).await;
+
+    // One-time visibility: without TURN credentials the game still works on
+    // friendly NATs (clients fall back to STUN-only), but symmetric-NAT peer
+    // pairs will fail ICE — the exact field failure TURN exists to fix.
+    if !turn::configured(&cfg) {
+        tracing::warn!(
+            "TURN_KEY_ID / TURN_API_TOKEN not set — TURN relay disabled; \
+             symmetric-NAT peers will fail to connect (STUN-only fallback)"
+        );
+    }
 
     let game_port = cfg.game_port;
     let admin_port = cfg.admin_port;

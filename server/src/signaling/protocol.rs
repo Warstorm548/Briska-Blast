@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::turn::IceServer;
 use shared::types::gamemode::GameMode;
 use shared::types::spawn_settings::SpawnSettings;
 use shared::types::win_condition::WinCondition;
@@ -92,6 +93,13 @@ pub enum ServerMsg {
     /// meshing), this is identical on every client and includes the recipient,
     /// so a process-death rejoiner can reproduce the exact Extended-mode portal
     /// layout the rest of the match froze at Start. See `GameScene.BuildEdges`.
+    ///
+    /// `ice_servers` carries freshly minted STUN+TURN entries **only when the
+    /// session is already past Start** (`seat_order` non-empty) — i.e. for a
+    /// process-death rejoiner, a fresh process that missed the credentials in
+    /// `StartSignaling`. Empty while Waiting (lobby members get theirs at
+    /// Start) and when TURN is unconfigured / the mint failed, in which case
+    /// the client keeps its built-in STUN-only fallback.
     Identified {
         your_player_id: String,
         host_player_id: String,
@@ -99,6 +107,7 @@ pub enum ServerMsg {
         seat_order: Vec<String>,
         is_host: bool,
         usernames: HashMap<String, String>,
+        ice_servers: Vec<IceServer>,
     },
     /// Broadcast when a new player completes Identify in this session.
     /// `username` is the joining player's server-stored display name (empty if
@@ -136,6 +145,10 @@ pub enum ServerMsg {
     /// on receipt. `peers` is the authoritative roster at start time.
     /// `win_condition` is the host-chosen match-end rule (mirrors `gamemode`), so
     /// every joiner applies the same rule when the server signals game over.
+    /// `ice_servers` is the match's freshly minted STUN+TURN list (one
+    /// credential set shared by the whole match, TTL outlives it — see
+    /// `turn.rs`). Empty when TURN is unconfigured or the mint failed; the
+    /// client then keeps its built-in STUN-only fallback.
     StartSignaling {
         gamemode: GameMode,
         win_condition: WinCondition,
@@ -144,6 +157,7 @@ pub enum ServerMsg {
         spawn_settings: SpawnSettings,
         player_count: u8,
         peers: Vec<String>,
+        ice_servers: Vec<IceServer>,
     },
     /// Relayed SDP offer. `from` is server-attested — set from the
     /// authenticated WS connection, not echoed from the client's frame.
@@ -194,4 +208,58 @@ pub enum ServerMsg {
         username: String,
         text: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// StartSignaling must carry the minted ICE list on the wire: STUN entries
+    /// without credential keys (the client treats key presence as
+    /// "credentialed"), TURN entries with them.
+    #[test]
+    fn start_signaling_serializes_ice_servers() {
+        let msg = ServerMsg::StartSignaling {
+            gamemode: GameMode::Extended,
+            win_condition: WinCondition::default(),
+            spawn_settings: SpawnSettings::default(),
+            player_count: 2,
+            peers: vec!["000000001".into(), "000000004".into()],
+            ice_servers: vec![
+                IceServer {
+                    urls: vec!["stun:stun.cloudflare.com:3478".into()],
+                    username: None,
+                    credential: None,
+                },
+                IceServer {
+                    urls: vec!["turn:turn.cloudflare.com:3478?transport=udp".into()],
+                    username: Some("user".into()),
+                    credential: Some("pass".into()),
+                },
+            ],
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"start_signaling""#));
+        assert!(json.contains(
+            r#""ice_servers":[{"urls":["stun:stun.cloudflare.com:3478"]},"#
+        ));
+        assert!(json.contains(r#""username":"user","credential":"pass""#));
+    }
+
+    /// A Waiting-phase Identified (no mint) still carries the field as an
+    /// explicit empty array — the client parses it unconditionally.
+    #[test]
+    fn identified_serializes_empty_ice_servers() {
+        let msg = ServerMsg::Identified {
+            your_player_id: "000000001".into(),
+            host_player_id: "000000004".into(),
+            peers: vec!["000000004".into()],
+            seat_order: vec![],
+            is_host: false,
+            usernames: HashMap::new(),
+            ice_servers: vec![],
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""ice_servers":[]"#));
+    }
 }

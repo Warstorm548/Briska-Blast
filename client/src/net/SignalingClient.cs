@@ -28,22 +28,29 @@ namespace BriskaBlast.Net;
 public partial class SignalingClient : Node
 {
     /// <summary>Identify accepted. Carries (hostPlayerId, peers, seatOrder,
-    /// selfIsHost, usernames). <c>peers</c> excludes self (WebRTC mesh targets);
-    /// <c>seatOrder</c> is the frozen, self-inclusive Extended-mode seating roster
-    /// ([host, …joiners] in join order, empty until the match has started) used to
-    /// lay out portals. <c>usernames</c> maps player_id → display name for the ids
-    /// in this frame (host + self + peers); ids with no server username are absent,
-    /// so consumers fall back to <c>Player &lt;id&gt;</c>.</summary>
-    public event Action<string, string[], string[], bool, Dictionary<string, string>>? Identified;
+    /// selfIsHost, usernames, iceServers). <c>peers</c> excludes self (WebRTC mesh
+    /// targets); <c>seatOrder</c> is the frozen, self-inclusive Extended-mode
+    /// seating roster ([host, …joiners] in join order, empty until the match has
+    /// started) used to lay out portals. <c>usernames</c> maps player_id → display
+    /// name for the ids in this frame (host + self + peers); ids with no server
+    /// username are absent, so consumers fall back to <c>Player &lt;id&gt;</c>.
+    /// <c>iceServers</c> is only populated on a mid-game rejoin identify (the
+    /// server minted this fresh process its own TURN credentials); empty in the
+    /// lobby, on old servers, and when TURN is off — feed it to
+    /// <see cref="WebRtcMeshTransport.SetIceServers"/> before connecting.</summary>
+    public event Action<string, string[], string[], bool, Dictionary<string, string>, IceServerDto[]>? Identified;
     /// <summary>A peer completed identify. Carries (playerId, username); username
     /// is empty when none is on file.</summary>
     public event Action<string, string>? PeerJoined;
     public event Action<string, string>? PeerLeft;
     public event Action<string>? HostChanged;
     /// <summary>Match starting. Carries (gamemode, winCondition, spawnSettings,
-    /// playerCount, peers). <c>winCondition</c> + <c>spawnSettings</c> are the
-    /// host-chosen rules every client applies.</summary>
-    public event Action<string, WinConditionDto, SpawnSettingsDto, int, string[]>? StartSignaling;
+    /// playerCount, peers, iceServers). <c>winCondition</c> + <c>spawnSettings</c>
+    /// are the host-chosen rules every client applies. <c>iceServers</c> is the
+    /// match's server-minted STUN+TURN list (empty on old servers or when TURN is
+    /// off — the transport then keeps its STUN-only fallback); feed it to
+    /// <see cref="WebRtcMeshTransport.SetIceServers"/> before connecting.</summary>
+    public event Action<string, WinConditionDto, SpawnSettingsDto, int, string[], IceServerDto[]>? StartSignaling;
     public event Action<string>? SessionEnded;
     public event Action<string>? Kicked;
     /// <summary>Authoritative per-session score tally (player_id → points)
@@ -395,7 +402,8 @@ public partial class SignalingClient : Node
                         ReadStrings(root, "peers"),
                         ReadStrings(root, "seat_order"),
                         root.GetProperty("is_host").GetBoolean(),
-                        ReadStringMap(root, "usernames"));
+                        ReadStringMap(root, "usernames"),
+                        ReadIceServers(root));
                     break;
                 case "peer_joined":
                     PeerJoined?.Invoke(Str(root, "player_id"), Str(root, "username"));
@@ -421,7 +429,8 @@ public partial class SignalingClient : Node
                         ReadWinCondition(root, "win_condition"),
                         ReadSpawnSettings(root, "spawn_settings"),
                         root.GetProperty("player_count").GetInt32(),
-                        ReadStrings(root, "peers"));
+                        ReadStrings(root, "peers"),
+                        ReadIceServers(root));
                     break;
                 case "session_ended":
                     SessionEnded?.Invoke(Str(root, "reason"));
@@ -536,6 +545,34 @@ public partial class SignalingClient : Node
             return new SpawnSettingsDto(interval, chain);
         }
         return SpawnSettingsDto.Default;
+    }
+
+    /// <summary>Read the <c>ice_servers</c> array (server-minted STUN+TURN
+    /// entries) into DTOs. Absent/malformed — an old server, TURN unconfigured,
+    /// or a failed mint — degrades to an empty array; the transport then keeps
+    /// its built-in STUN-only fallback. Entries without a usable <c>urls</c>
+    /// array are skipped.</summary>
+    private static IceServerDto[] ReadIceServers(JsonElement obj)
+    {
+        if (!obj.TryGetProperty("ice_servers", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return Array.Empty<IceServerDto>();
+        var list = new List<IceServerDto>(arr.GetArrayLength());
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+            var urls = ReadStrings(item, "urls");
+            if (urls.Length == 0)
+                continue;
+            string? username = item.TryGetProperty("username", out var u) && u.ValueKind == JsonValueKind.String
+                ? u.GetString()
+                : null;
+            string? credential = item.TryGetProperty("credential", out var c) && c.ValueKind == JsonValueKind.String
+                ? c.GetString()
+                : null;
+            list.Add(new IceServerDto(urls, username, credential));
+        }
+        return list.ToArray();
     }
 
     private static string[] ReadStrings(JsonElement obj, string name)

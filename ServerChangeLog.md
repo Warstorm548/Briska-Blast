@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.22.0] — 2026-07-04
+
+Adds **TURN relay support via Cloudflare's managed TURN service**, fixing the
+confirmed field failure where peers behind symmetric/endpoint-dependent NATs
+(the Win↔Mac pair) exchange candidates but ICE never connects — STUN-only
+hole punching cannot traverse those NATs, so the mesh needs relay candidates.
+
+### Added
+
+- **`turn` module** (`src/turn.rs`): mints short-lived STUN+TURN credentials
+  (4 h TTL) from Cloudflare's `generate-ice-servers` API. The API token never
+  leaves the server; clients only ever see the minted per-match credentials.
+  Fail-open: unconfigured TURN or a failed mint returns an empty list with a
+  warn, and clients keep their built-in STUN-only fallback.
+- **`ice_servers` on two signaling frames**: `StartSignaling` carries the
+  match's credential set (one mint shared by the whole match), and `Identified`
+  carries a fresh set **only** for a mid-game rejoiner (`seat_order` non-empty)
+  — a fresh process that missed the Start broadcast. Lobby identifies skip the
+  mint. Nothing is stored in the Redis `Session` (deliberately avoids the
+  lua-cjson empty-array re-encode pitfall).
+- **`TURN_KEY_ID` / `TURN_API_TOKEN` env config** (`.env` /
+  `docker-compose.yml`, optional): both unset disables minting with a one-time
+  boot warn — the game still works on friendly NATs, so absence must not
+  fail closed (contrast `WATCHTOWER_TOKEN`).
+
 ## [0.21.0] — 2026-07-03
 
 Adds **observability** to the signaling server: per-session log correlation, a

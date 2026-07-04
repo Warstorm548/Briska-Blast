@@ -166,6 +166,12 @@ pub async fn start_session(
                     .set_win_target(&code, session.win_condition.target() as i64)
                     .await;
 
+                // One credential set shared by the whole match (TTL outlives
+                // it — see turn.rs); empty on mint failure or when TURN is
+                // unconfigured, in which case clients keep their built-in
+                // STUN-only fallback rather than the start being blocked.
+                let ice_servers = crate::turn::mint_ice_servers(&state.config).await;
+
                 // Best-effort broadcast. Clients that miss it can re-poll
                 // /session/:code to discover the new Starting status.
                 state
@@ -178,6 +184,7 @@ pub async fn start_session(
                             spawn_settings: session.spawn_settings,
                             player_count: session.player_count,
                             peers: session_members,
+                            ice_servers,
                         },
                         None,
                     )

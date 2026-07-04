@@ -116,6 +116,16 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
     // unknown — peers then fall back to `Player <id>`.
     let self_username = usernames.get(&player_id).cloned().unwrap_or_default();
 
+    // A non-empty seat_order means the match already started, so this is a
+    // process-death rejoiner — a fresh process that missed the TURN credentials
+    // broadcast in StartSignaling. Mint it a set of its own. Lobby identifies
+    // (empty seat_order) skip the mint: theirs arrive at Start.
+    let ice_servers = if seat_order.is_empty() {
+        Vec::new()
+    } else {
+        crate::turn::mint_ice_servers(&state.config).await
+    };
+
     let identified = ServerMsg::Identified {
         your_player_id: player_id.clone(),
         host_player_id,
@@ -123,6 +133,7 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
         seat_order,
         is_host,
         usernames,
+        ice_servers,
     };
     if let Ok(text) = serde_json::to_string(&identified) {
         let _ = socket.send(Message::Text(text)).await;
