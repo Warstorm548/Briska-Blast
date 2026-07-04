@@ -62,6 +62,13 @@ struct Room {
     /// Latches true the instant the target is first reached, so a late or
     /// duplicate `ReportScore` after the win can't fire a second `GameOver`.
     game_over: bool,
+    /// The match's minted STUN+TURN credential set, cached at `/start` via
+    /// [`SignalHub::set_ice_servers`] and reused for every later mid-game
+    /// identify (rejoin or transient WS reconnect), so repeated identifies
+    /// can't each trigger a Cloudflare round-trip. Empty = none cached.
+    /// In-memory like `scores`; after a server restart the first mid-game
+    /// identify re-mints and re-caches (see `ws/mod.rs`).
+    ice_servers: Vec<crate::turn::IceServer>,
 }
 
 impl SignalHub {
@@ -140,6 +147,25 @@ impl SignalHub {
         let room = rooms.entry(code.to_string()).or_default();
         room.win_target = target;
         room.game_over = false;
+    }
+
+    /// Cache the match's minted STUN+TURN credential set on `code`'s room.
+    /// Called by `/start` (the one mint per match) and by a mid-game identify
+    /// that had to re-mint after a server restart emptied the cache.
+    pub async fn set_ice_servers(&self, code: &str, servers: Vec<crate::turn::IceServer>) {
+        let mut rooms = self.rooms.write().await;
+        let room = rooms.entry(code.to_string()).or_default();
+        room.ice_servers = servers;
+    }
+
+    /// The cached credential set for `code`'s room, or `None` when nothing is
+    /// cached (room missing, pre-Start, TURN disabled, or a server restart).
+    pub async fn ice_servers(&self, code: &str) -> Option<Vec<crate::turn::IceServer>> {
+        let rooms = self.rooms.read().await;
+        rooms
+            .get(code)
+            .map(|r| r.ice_servers.clone())
+            .filter(|s| !s.is_empty())
     }
 
     /// Max points a single score report may credit (master ball = 1, BallBT split
@@ -248,6 +274,27 @@ impl SignalHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn ice_servers_cache_round_trips_and_reports_empty_as_none() {
+        let hub = SignalHub::default();
+        // Nothing cached (room doesn't even exist) → None.
+        assert!(hub.ice_servers("ABC").await.is_none());
+
+        let set = vec![crate::turn::IceServer {
+            urls: vec!["turn:turn.cloudflare.com:3478?transport=udp".into()],
+            username: Some("user".into()),
+            credential: Some("pass".into()),
+        }];
+        hub.set_ice_servers("ABC", set).await;
+        let cached = hub.ice_servers("ABC").await.expect("cached set");
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].username.as_deref(), Some("user"));
+
+        // An empty cache entry reads as None, so identify's mint-on-miss fires.
+        hub.set_ice_servers("ABC", Vec::new()).await;
+        assert!(hub.ice_servers("ABC").await.is_none());
+    }
 
     #[tokio::test]
     async fn join_room_returns_a_receiver_and_registers_the_sender() {

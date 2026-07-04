@@ -18,6 +18,7 @@
 //! blocking match starts.
 
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::config::Config;
@@ -68,13 +69,17 @@ pub async fn mint_ice_servers(cfg: &Config) -> Vec<IceServer> {
         cfg.turn_key_id.trim()
     );
 
-    let client = match reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("turn: failed to build http client: {e}");
-            return Vec::new();
-        }
-    };
+    // One process-wide client so repeated mints reuse its connection pool /
+    // TLS session instead of paying setup each time. Building with only a
+    // timeout cannot fail (reqwest::Client::new() unwraps the same builder
+    // internally), so the expect is unreachable in practice.
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    let client = CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .expect("default reqwest client construction cannot fail")
+    });
 
     let response = match client
         .post(&url)

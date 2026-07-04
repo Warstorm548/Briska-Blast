@@ -34,10 +34,11 @@ public partial class SignalingClient : Node
     /// started) used to lay out portals. <c>usernames</c> maps player_id → display
     /// name for the ids in this frame (host + self + peers); ids with no server
     /// username are absent, so consumers fall back to <c>Player &lt;id&gt;</c>.
-    /// <c>iceServers</c> is only populated on a mid-game rejoin identify (the
-    /// server minted this fresh process its own TURN credentials); empty in the
-    /// lobby, on old servers, and when TURN is off — feed it to
-    /// <see cref="WebRtcMeshTransport.SetIceServers"/> before connecting.</summary>
+    /// <c>iceServers</c> is only populated on a mid-game identify (the server
+    /// resends the match's TURN credential set so a process-death rejoiner can
+    /// re-mesh); empty in the lobby, on old servers, and when TURN is off — feed
+    /// it to <see cref="WebRtcMeshTransport.SetIceServers"/> before
+    /// connecting.</summary>
     public event Action<string, string[], string[], bool, Dictionary<string, string>, IceServerDto[]>? Identified;
     /// <summary>A peer completed identify. Carries (playerId, username); username
     /// is empty when none is on file.</summary>

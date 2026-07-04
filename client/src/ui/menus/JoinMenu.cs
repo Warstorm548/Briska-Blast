@@ -128,9 +128,9 @@ public partial class JoinMenu : Control
         IceServerDto[] iceServers)
     {
         // A rejoiner is a fresh process that missed the TURN credentials in
-        // start_signaling; the server minted this identify its own set. Apply
-        // before Connect below — safe ordering, peers only start offering to us
-        // after this same Identify triggers their PeerJoined.
+        // start_signaling; the server resends the match's credential set on this
+        // identify. Apply before Connect below — safe ordering, peers only start
+        // offering to us after this same Identify triggers their PeerJoined.
         _rejoinTransport!.SetIceServers(iceServers);
         var ctx = SessionContext.Instance;
         ctx.MergeUsernames(usernames);

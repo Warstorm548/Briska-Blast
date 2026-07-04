@@ -54,7 +54,7 @@ The `Identified` reply carries the lobby roster (`peers`) plus a `usernames` map
 STUN-only ICE cannot connect peers behind symmetric/endpoint-dependent NATs, so the server mints short-lived STUN+TURN credentials from Cloudflare's managed TURN service (`server/src/turn.rs`, `TURN_KEY_ID`/`TURN_API_TOKEN` env — the API token never leaves the server) and delivers them as an `ice_servers` array (`[{urls, username?, credential?}]`) on two frames:
 
 - **`start_signaling`** — one fresh credential set per match (4 h TTL, outlives any match), shared by every member; clients feed it to the WebRTC transport before building the mesh.
-- **`identified`** — populated **only when `seat_order` is non-empty** (the match already started ⇒ this is a process-death rejoiner, a fresh process that missed the Start broadcast); the rejoiner gets a mint of its own. Empty on lobby identifies.
+- **`identified`** — populated **only when `seat_order` is non-empty** (the match already started ⇒ a process-death rejoiner that missed the Start broadcast, or a transient WS reconnect that will ignore it); serves the match's set cached in-memory on the signaling room at `/start`, so repeated identifies never re-hit Cloudflare. A cache miss (server restarted mid-match) re-mints once and re-caches. Empty on lobby identifies.
 
 Fail-open: when TURN is unconfigured or the Cloudflare mint fails, `ice_servers` is empty and clients keep their built-in STUN-only fallback — playable on friendly NATs, degraded exactly to pre-TURN behavior. Credentials are never stored in the Redis `Session` (minted on demand), which also sidesteps the lua-cjson empty-array re-encode pitfall.
 

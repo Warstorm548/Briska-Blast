@@ -20,11 +20,13 @@ hole punching cannot traverse those NATs, so the mesh needs relay candidates.
   Fail-open: unconfigured TURN or a failed mint returns an empty list with a
   warn, and clients keep their built-in STUN-only fallback.
 - **`ice_servers` on two signaling frames**: `StartSignaling` carries the
-  match's credential set (one mint shared by the whole match), and `Identified`
-  carries a fresh set **only** for a mid-game rejoiner (`seat_order` non-empty)
-  — a fresh process that missed the Start broadcast. Lobby identifies skip the
-  mint. Nothing is stored in the Redis `Session` (deliberately avoids the
-  lua-cjson empty-array re-encode pitfall).
+  match's credential set (one mint shared by the whole match, cached in-memory
+  on the signaling room), and `Identified` carries that same cached set **only**
+  on a mid-game identify (`seat_order` non-empty — a process-death rejoiner or
+  a transient WS reconnect), so repeated identifies never re-hit Cloudflare; a
+  cache miss after a mid-match server restart re-mints once and re-caches.
+  Lobby identifies skip the mint. Nothing is stored in the Redis `Session`
+  (deliberately avoids the lua-cjson empty-array re-encode pitfall).
 - **`TURN_KEY_ID` / `TURN_API_TOKEN` env config** (`.env` /
   `docker-compose.yml`, optional): both unset disables minting with a one-time
   boot warn — the game still works on friendly NATs, so absence must not
