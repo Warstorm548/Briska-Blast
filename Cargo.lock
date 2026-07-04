@@ -2427,7 +2427,7 @@ dependencies = [
 
 [[package]]
 name = "launcher"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "chrono",
  "directories",
@@ -4057,6 +4057,8 @@ version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "469a3970061380c19852269f393e74c0fe607a4e23d85267382cf25486aa8de5"
 dependencies = [
+ "either",
+ "flate2",
  "hyper",
  "indicatif",
  "log",
@@ -4066,6 +4068,7 @@ dependencies = [
  "self-replace",
  "semver",
  "serde_json",
+ "tar",
  "tempfile",
  "urlencoding",
  "zip",
@@ -6447,6 +6450,7 @@ version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dba6063ff82cdbd9a765add16d369abe81e520f836054e997c2db217ceca40c0"
 dependencies = [
+ "base64",
  "ed25519-dalek",
  "thiserror 2.0.18",
 ]

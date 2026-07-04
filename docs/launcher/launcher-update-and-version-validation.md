@@ -72,6 +72,37 @@ The Rust crate `self_update` handles:
 
 Roughly 50 lines of integration code for the full flow. GitHub Releases acts as the source of truth — GitHub Actions builds binaries for each target on tag, publishes them to Releases with checksums, and the launcher queries the Releases API on demand.
 
+> **Feature-flag gotcha (bit us in ≤0.19.0):** `self_update` only extracts the archive
+> kinds its cargo features enable. With just `archive-zip`/`compression-zip-deflate`,
+> the Linux/macOS `.tar.gz` assets fail at extraction — self-update silently worked on
+> Windows only. `archive-tar` + `compression-flate2` are now enabled too.
+
+### Per-Platform Swap Mechanics (v0.20.0)
+
+The rename trick assumes "the launcher" is one writable file. That is only true on
+Windows. `run_self_update` (`launcher/src/updater/github.rs`) dispatches per OS:
+
+| Platform / install | Mechanism |
+|---|---|
+| Windows (NSIS install) | `self_update` rename-trick exe swap — unchanged since 0.x |
+| macOS `.app` (the `.dmg` install) | **Whole-bundle swap** (`updater/macos_bundle.rs`): download the CI-signed `briskablast-launcher-<ver>-macos-app.tar.gz`, extract to a dot-prefixed staging dir beside the bundle, `codesign --verify` (re-sign ad-hoc locally on failure — `codesign --sign -` needs no certificate), rename live bundle aside → rename new bundle in → roll back on failure. Old bundle is removed by next-launch cleanup. |
+| macOS bare binary | `self_update` rename-trick (fallback; not a normal install shape) |
+| Linux bare binary (tar.gz) | `self_update` rename-trick |
+| Linux AppImage | **Outer-file replacement** (`updater/appimage.rs`): the exe runs from a read-only squashfs mount, so the `.AppImage` file at env `APPIMAGE` is downloaded fresh, `chmod 755`, and atomically renamed over the old one |
+| Linux `.deb` (`/usr/bin`) | Refused with a "download the new .deb from GitHub Releases" message — root-owned path, an unelevated swap can only fail. A permission-denied from the plain swap maps to the same message as a safety net. |
+
+Why whole-bundle on macOS: the app is **ad-hoc signed** (no Developer ID cert yet).
+Swapping only `Contents/MacOS/<binary>` breaks the bundle's signature seal, and Apple
+Silicon then refuses the next launch ("damaged"). Replacing the entire bundle keeps the
+CI-produced seal intact (codesign data survives tar — it lives in the Mach-O +
+`_CodeSignature`, not xattrs) and also updates `Info.plist`/icon. Crucially, files the
+launcher downloads itself carry **no quarantine xattr**, so Gatekeeper never re-assesses
+a self-updated app — the one-time right-click-open only applies to the original `.dmg`.
+
+The `-macos-app.tar.gz` asset name deliberately omits the target triple: the bare-binary
+fallback still uses `self_update`, which matches assets by triple, and must never grab
+the bundle tarball.
+
 ---
 
 ## User-Initiated Update Flow
@@ -330,12 +361,16 @@ The update system is entirely additive — every piece slots into infrastructure
 
 ### Launcher Side (Rust)
 
-**Cargo.toml dependency:**
+**Cargo.toml dependency** (as shipped — zip features for the Windows asset, tar
+features for the Linux/macOS assets; dropping the tar features breaks non-Windows
+self-update at extraction):
 ```toml
 [dependencies]
-self_update = { version = "0.39", features = ["archive-tar", "compression-flate2"] }
-reqwest = { version = "0.11", features = ["json"] }
-semver = "1.0"
+self_update = { version = "0.41", default-features = false, features = [
+    "rustls", "compression-zip-deflate", "archive-zip", "archive-tar", "compression-flate2",
+] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+semver = "1"
 ```
 
 **Version constant access:**
