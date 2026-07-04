@@ -85,6 +85,8 @@ WATCHTOWER_TOKEN=replace-with-your-own-random-token
 | `WATCHTOWER_TOKEN` | **(required, no default)** | Shared secret between the server and Watchtower. `docker compose up` fails fast if missing. Generate with `openssl rand -base64 32`. |
 | `WATCHTOWER_URL` | `http://watchtower:25921` | Internal Docker network address of Watchtower. Set automatically from `WATCHTOWER_PORT` in docker-compose. |
 | `GITHUB_TOKEN` | *(unset)* | **Optional.** When set, the update check authenticates to the GitHub Releases API, raising the rate limit from 60 req/hr/IP to 5000 req/hr. Any classic PAT with no scopes works. |
+| `TURN_KEY_ID` | *(unset)* | **Optional.** Cloudflare TURN key id (dashboard: Realtime → TURN keys). With both TURN vars set, the server mints short-lived TURN relay credentials for game clients at match start, so symmetric-NAT peer pairs can connect. Unset ⇒ TURN disabled (boot warn, STUN-only fallback). |
+| `TURN_API_TOKEN` | *(unset)* | **Optional.** API token belonging to `TURN_KEY_ID`. Server-side only — clients never see it, only the minted short-lived credentials. |
 
 > **Note:** `MIN_LAUNCHER_VERSION`, `MIN_GAME_VERSION`, and `ADMIN_PASSWORD` are only written
 > to Redis on the very first boot (`SET NX`). After that, Redis is authoritative — use the

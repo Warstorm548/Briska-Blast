@@ -13,8 +13,11 @@ namespace BriskaBlast.Net;
 /// Negotiation rides the existing <see cref="SignalingClient"/> (offer/answer/ice
 /// relayed by the server). Glare is avoided by a deterministic rule: in each
 /// pair the lexicographically-smaller player_id is the offerer (and creates the
-/// data channel); the other answers. STUN only (no TURN yet) — symmetric-NAT
-/// peers will fail until the TURN work lands.
+/// data channel); the other answers. ICE servers come from the server-minted
+/// Cloudflare STUN+TURN list (<see cref="SetIceServers"/>, delivered in
+/// <c>start_signaling</c> / rejoin <c>identified</c>); without one — old server,
+/// TURN unconfigured, or a failed mint — the built-in STUN-only fallback applies
+/// and symmetric-NAT peers will fail.
 /// </summary>
 public partial class WebRtcMeshTransport : Node, IPeerTransport
 {
@@ -23,7 +26,13 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
     public event Action<string>? PeerDisconnected;
     public event Action<string>? PeerFailed;
 
-    private static readonly Godot.Collections.Dictionary IceConfig = new()
+    /// <summary>Active ICE config, applied to every subsequently created peer
+    /// connection — so <see cref="SetIceServers"/> must run before
+    /// <see cref="Connect"/> / <see cref="ResyncPeer"/>. Starts as the STUN-only
+    /// fallback.</summary>
+    private Godot.Collections.Dictionary _iceConfig = FallbackIceConfig();
+
+    private static Godot.Collections.Dictionary FallbackIceConfig() => new()
     {
         {
             "iceServers", new Godot.Collections.Array
@@ -35,6 +44,42 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
             }
         },
     };
+
+    /// <summary>Adopt the server-minted ICE-server list (STUN entries bare, TURN
+    /// entries with their short-lived credentials). An empty list is a no-op —
+    /// the STUN-only fallback stays — so callers can pass whatever the frame
+    /// carried without checking.</summary>
+    public void SetIceServers(IceServerDto[] servers)
+    {
+        if (servers.Length == 0)
+        {
+            Log.Info("net.webrtc", "no server-provided ice servers — STUN-only fallback (turn=no)");
+            return;
+        }
+
+        var list = new Godot.Collections.Array();
+        bool hasTurn = false;
+        foreach (var server in servers)
+        {
+            var urls = new Godot.Collections.Array();
+            foreach (var url in server.Urls)
+            {
+                urls.Add(url);
+                hasTurn |= url.StartsWith("turn:", StringComparison.Ordinal)
+                    || url.StartsWith("turns:", StringComparison.Ordinal);
+            }
+            var entry = new Godot.Collections.Dictionary { { "urls", urls } };
+            if (server.Username is { } user)
+                entry["username"] = user;
+            if (server.Credential is { } cred)
+                entry["credential"] = cred;
+            list.Add(entry);
+        }
+        _iceConfig = new Godot.Collections.Dictionary { { "iceServers", list } };
+        // The field-log tell for NAT diagnosis: turn=yes means relay candidates
+        // are possible, so a still-failing pair is no longer a STUN-only gap.
+        Log.Info("net.webrtc", $"using {servers.Length} server-provided ice servers (turn={(hasTurn ? "yes" : "no")})");
+    }
 
     private sealed class PeerLink
     {
@@ -154,7 +199,7 @@ public partial class WebRtcMeshTransport : Node, IPeerTransport
     private PeerLink NewLink(string pid)
     {
         var pc = new WebRtcPeerConnection();
-        if (pc.Initialize(IceConfig) != Error.Ok)
+        if (pc.Initialize(_iceConfig) != Error.Ok)
             Log.Warn("net.webrtc", $"Initialize failed for peer {pid} — is the webrtc-native extension installed?");
 
         var link = new PeerLink { Pc = pc };

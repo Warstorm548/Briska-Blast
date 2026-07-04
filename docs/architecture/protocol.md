@@ -49,6 +49,15 @@ The client must send `{"type":"identify","player_id":"…","secret_token":"…"}
 
 The `Identified` reply carries the lobby roster (`peers`) plus a `usernames` map — `player_id → display name` for the ids in the frame (self, host, peers), resolved from Redis `player:<id>:username`. Ids with no stored username are omitted, so the client labels the lobby roster and in-game scoreboard by username and falls back to `Player <id>` only when a name is unavailable. The numeric `player_id` stays an internal identifier and is never shown to players otherwise.
 
+### TURN credentials (`ice_servers`)
+
+STUN-only ICE cannot connect peers behind symmetric/endpoint-dependent NATs, so the server mints short-lived STUN+TURN credentials from Cloudflare's managed TURN service (`server/src/turn.rs`, `TURN_KEY_ID`/`TURN_API_TOKEN` env — the API token never leaves the server) and delivers them as an `ice_servers` array (`[{urls, username?, credential?}]`) on two frames:
+
+- **`start_signaling`** — one fresh credential set per match (4 h TTL, outlives any match), shared by every member; clients feed it to the WebRTC transport before building the mesh.
+- **`identified`** — populated **only when `seat_order` is non-empty** (the match already started ⇒ a process-death rejoiner that missed the Start broadcast, or a transient WS reconnect that will ignore it); serves the match's set cached in-memory on the signaling room at `/start`, so repeated identifies never re-hit Cloudflare. A cache miss (server restarted mid-match) re-mints once and re-caches. Empty on lobby identifies.
+
+Fail-open: when TURN is unconfigured or the Cloudflare mint fails, `ice_servers` is empty and clients keep their built-in STUN-only fallback — playable on friendly NATs, degraded exactly to pre-TURN behavior. Credentials are never stored in the Redis `Session` (minted on demand), which also sidesteps the lua-cjson empty-array re-encode pitfall.
+
 Close codes (4xxx, app-defined):
 
 | Code | Reason | When |
@@ -98,6 +107,8 @@ Host                    Server                Joiner(s)
  |<======= direct WebRTC peer connection =======>|
  |======= server is no longer in the path =======|
 ```
+
+`start_signaling` (and a rejoiner's `identified`) carries the `ice_servers` TURN credential list described above; when a peer pair has no direct path, their traffic flows via Cloudflare's TURN relay instead of the arrow labeled "direct" — the game server is still not in the media path either way.
 
 Multi-peer sessions follow the same pattern but every pair exchanges its own offer/answer/ICE — `n` players form an `n*(n-1)/2` mesh.
 

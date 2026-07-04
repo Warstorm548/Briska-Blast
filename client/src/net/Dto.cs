@@ -69,6 +69,16 @@ public sealed record SpawnSettingsDto(int SplitterIntervalSecs, bool ChainSplit)
     public static SpawnSettingsDto Default => new(IntervalDefault, ChainSplitDefault);
 }
 
+/// <summary>
+/// Mirror of the Rust <c>IceServer</c> struct (<c>server/src/turn.rs</c>): one
+/// WebRTC <c>iceServers</c> entry, minted by the server from Cloudflare's TURN
+/// service and delivered in the <c>start_signaling</c> / <c>identified</c>
+/// frames. STUN entries carry no credentials (<c>Username</c>/<c>Credential</c>
+/// null); TURN entries carry the short-lived pair. The Cloudflare API token
+/// itself never reaches the client.
+/// </summary>
+public sealed record IceServerDto(string[] Urls, string? Username, string? Credential);
+
 public sealed record HostRequest(
     string PlayerId,
     string SecretToken,

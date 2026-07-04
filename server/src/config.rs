@@ -13,6 +13,14 @@ pub struct Config {
     /// Log output format: `json` for machine-parseable lines (feeds the future
     /// admin Logs tab / log shippers), anything else for human-readable `pretty`.
     pub log_format: String,
+    /// Cloudflare TURN key id + API token (dashboard: Realtime → TURN keys).
+    /// Both empty ⇒ TURN minting is disabled and clients fall back to their
+    /// built-in STUN-only config — playable on friendly NATs, so absence warns
+    /// at boot instead of panicking (contrast WATCHTOWER_TOKEN above). The
+    /// token never leaves the server: clients only ever see the short-lived
+    /// credentials minted from it (see `turn.rs`).
+    pub turn_key_id: String,
+    pub turn_api_token: String,
 }
 
 impl Config {
@@ -62,6 +70,8 @@ impl Config {
                 )
             }),
             log_format: env::var("LOG_FORMAT").unwrap_or_else(|_| "pretty".to_string()),
+            turn_key_id: env::var("TURN_KEY_ID").unwrap_or_default(),
+            turn_api_token: env::var("TURN_API_TOKEN").unwrap_or_default(),
         }
     }
 }

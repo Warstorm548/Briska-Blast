@@ -124,8 +124,14 @@ public partial class JoinMenu : Control
     /// mesh, hand the live net to <see cref="SessionContext"/>, and enter the game
     /// scene.</summary>
     private void OnRejoinIdentified(string hostId, string[] peers, string[] seatOrder,
-        bool isHost, System.Collections.Generic.Dictionary<string, string> usernames)
+        bool isHost, System.Collections.Generic.Dictionary<string, string> usernames,
+        IceServerDto[] iceServers)
     {
+        // A rejoiner is a fresh process that missed the TURN credentials in
+        // start_signaling; the server resends the match's credential set on this
+        // identify. Apply before Connect below — safe ordering, peers only start
+        // offering to us after this same Identify triggers their PeerJoined.
+        _rejoinTransport!.SetIceServers(iceServers);
         var ctx = SessionContext.Instance;
         ctx.MergeUsernames(usernames);
         ctx.HostPlayerId = hostId;

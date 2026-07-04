@@ -157,6 +157,11 @@ pub async fn start_session(
 
         match outcome {
             StartOutcome::Ok => {
+                // Redis work is done for good on this path — return the pooled
+                // connection now rather than holding it across the external
+                // TURN mint (an HTTPS round-trip, up to 5s) and the broadcast.
+                drop(conn);
+
                 // Seed the in-memory room with the win target so the scoring path
                 // can detect game over. Every member is WS-ready here (checked
                 // above), so the room exists. Lost on a server restart along with
@@ -165,6 +170,20 @@ pub async fn start_session(
                     .signal_hub
                     .set_win_target(&code, session.win_condition.target() as i64)
                     .await;
+
+                // One credential set shared by the whole match (TTL outlives
+                // it — see turn.rs); empty on mint failure or when TURN is
+                // unconfigured, in which case clients keep their built-in
+                // STUN-only fallback rather than the start being blocked.
+                // Cached on the room so later mid-game identifies (rejoins and
+                // transient WS reconnects) reuse it instead of re-minting.
+                let ice_servers = crate::turn::mint_ice_servers(&state.config).await;
+                if !ice_servers.is_empty() {
+                    state
+                        .signal_hub
+                        .set_ice_servers(&code, ice_servers.clone())
+                        .await;
+                }
 
                 // Best-effort broadcast. Clients that miss it can re-poll
                 // /session/:code to discover the new Starting status.
@@ -178,6 +197,7 @@ pub async fn start_session(
                             spawn_settings: session.spawn_settings,
                             player_count: session.player_count,
                             peers: session_members,
+                            ice_servers,
                         },
                         None,
                     )

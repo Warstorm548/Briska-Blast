@@ -83,8 +83,11 @@ public partial class SessionLobby : Control
     /// empty before Start, so it's captured later in <see cref="OnStartSignaling"/>.)
     /// </summary>
     private void OnIdentified(string hostId, string[] peers, string[] seatOrder,
-        bool isHost, System.Collections.Generic.Dictionary<string, string> usernames)
+        bool isHost, System.Collections.Generic.Dictionary<string, string> usernames,
+        IceServerDto[] iceServers)
     {
+        // iceServers is always empty on a lobby identify (TURN credentials are
+        // minted at Start and arrive in start_signaling); nothing to do with it.
         // seatOrder is empty in the lobby (it's frozen at Start); the seating
         // roster is captured in OnStartSignaling. Nothing to do with it here.
         var ctx = SessionContext.Instance;
@@ -168,7 +171,8 @@ public partial class SessionLobby : Control
     /// the WebRTC mesh, hand the live net to <see cref="SessionContext"/>, and enter
     /// the game scene. One-shot — guards against a duplicate frame.</summary>
     private void OnStartSignaling(string gamemode, WinConditionDto winCondition,
-        SpawnSettingsDto spawnSettings, int playerCount, string[] peers)
+        SpawnSettingsDto spawnSettings, int playerCount, string[] peers,
+        IceServerDto[] iceServers)
     {
         // One-shot transition: guard against a duplicate start_signaling and
         // against firing while we're already leaving.
@@ -199,6 +203,9 @@ public partial class SessionLobby : Control
         {
             _transport = new WebRtcMeshTransport();
             _transport.Init(_signaling);
+            // Adopt the match's server-minted STUN+TURN list before any peer
+            // connection exists — the config is baked into each at creation.
+            _transport.SetIceServers(iceServers);
             AddChild(_transport);
             _transport.Connect(ctx.PlayerId, peers);
         }
