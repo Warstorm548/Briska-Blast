@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.20.1] — 2026-07-04
+
+Verification target for the 0.20.0 per-OS self-update work — **no functional changes**.
+A launcher installed from 0.20.0-dev.1 reports version `0.20.0`, and semver ranks a
+prerelease of the *same* version (`0.20.0-dev.2`) below it, so testing the new update
+paths needs a strictly newer version to update **to**. This release is that target:
+install 0.20.0-dev.1 fresh (dmg / AppImage / installer), then run the in-app update
+to land here.
+
 ## [0.20.0] — 2026-07-04
 
 Makes launcher self-update work on **every supported OS**. Windows already worked and
