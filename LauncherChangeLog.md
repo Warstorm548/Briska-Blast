@@ -5,6 +5,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.20.0] — 2026-07-04
+
+Makes launcher self-update work on **every supported OS**. Windows already worked and
+its logic is untouched; macOS and Linux were both broken — `self_update` was built
+without tar support, so it could not even extract their `.tar.gz` update assets, and on
+macOS the binary-in-bundle swap additionally destroyed the ad-hoc signature seal.
+
+### Fixed
+
+- **`self_update` can now extract tar.gz assets** (`archive-tar` +
+  `compression-flate2` features enabled). This alone repairs the Linux bare-binary
+  swap; the Windows zip path is unaffected.
+- **macOS: whole-bundle self-update** (`updater/macos_bundle.rs`). When running from
+  `BriskaBlast Launcher.app`, the update downloads the new release's ad-hoc-signed
+  `.app` tarball (new CI asset `briskablast-launcher-<ver>-macos-app.tar.gz`), verifies
+  the signature with `codesign` (re-signing ad-hoc locally if the seal didn't survive),
+  and atomically swaps the **entire bundle** — old bundle moved aside, new one renamed
+  into place, rollback on failure. Replacing the whole bundle keeps the ad-hoc seal
+  valid (a binary-only swap gets the app killed as "damaged" on Apple Silicon) and
+  updates `Info.plist`/icon too. Self-updated bundles carry no quarantine xattr, so
+  Gatekeeper's right-click-open dance only ever applies to the first `.dmg` install.
+  A bare (non-bundle) binary still uses the plain binary swap.
+- **Linux: AppImage self-update** (`updater/appimage.rs`). An AppImage runs from a
+  read-only squashfs mount, so the in-place swap can never work; the launcher now
+  downloads the release's `.AppImage` and atomically replaces the outer file at
+  `$APPIMAGE` instead (executable bit preserved). System-wide installs (the `.deb`,
+  root-owned `/usr/bin`) get a clear "download the new .deb" message up front instead
+  of a cryptic permission error.
+
+### Added
+
+- Startup cleanup now also mops up macOS bundle-swap leftovers
+  (`.<name>.app.old-*` / `.staging-*` sibling dirs) and stale AppImage staging files.
+- Release workflow publishes the signed-bundle tarball
+  `briskablast-launcher-<ver>-macos-app.tar.gz` (name deliberately omits the target
+  triple so the bare-binary fallback's triple matching can never pick it).
+
 ## [0.19.0] — 2026-07-03
 
 Adds a **Logs button** so users can open the game's per-run log folder and send it

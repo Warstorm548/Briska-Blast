@@ -14,8 +14,12 @@
 #     briskablast-launcher-<ver>-x86_64-pc-windows-msvc.zip        (self_update)
 #     BriskaBlast-Launcher-Setup-<ver>.exe                         (NSIS installer)
 #   macOS   : (Apple Silicon / aarch64; ad-hoc signed — tester-grade, not notarized)
-#     briskablast-launcher-<ver>-aarch64-apple-darwin.tar.gz       (self_update)
+#     briskablast-launcher-<ver>-aarch64-apple-darwin.tar.gz       (bare binary; non-bundle fallback)
+#     briskablast-launcher-<ver>-macos-app.tar.gz                  (signed .app; in-app self-update)
 #     briskablast-launcher-<ver>-aarch64-apple-darwin.dmg          (.app installer)
+#   The -macos-app.tar.gz name deliberately omits the target triple: the
+#   launcher's non-bundle fallback path still uses self_update, which matches
+#   assets by triple, and must never grab the .app tarball by mistake.
 #
 # Tag schema: launcher-v<semver>  e.g. launcher-v0.3.0-dev.1
 # Schema is launcher-only — server's `v*.*.*-dev.N` tag stream is unaffected
@@ -267,11 +271,22 @@ jobs:
             launcher/assets/icon.png \
             dist-macos
 
+      - name: Package .app tar.gz (in-app self-update asset)
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          # Tar the ALREADY ad-hoc-signed bundle — codesign signatures live in
+          # the Mach-O + _CodeSignature, not in xattrs, so they survive tar.
+          # The launcher's macOS self-update downloads this, verifies the
+          # signature, and atomically swaps the whole bundle into place.
+          tar czf "dist-macos/briskablast-launcher-${VERSION}-macos-app.tar.gz" \
+            -C dist-macos "BriskaBlast Launcher.app"
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: launcher-macos
           path: |
             launcher/briskablast-launcher-*-aarch64-apple-darwin.tar.gz
+            dist-macos/briskablast-launcher-*-macos-app.tar.gz
             dist-macos/*.dmg
 
   release:
