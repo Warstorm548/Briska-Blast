@@ -42,6 +42,7 @@ public partial class SessionLobby : Control
         GetNode<Button>("%StartSessionButton").Pressed += OnStartPressed;
         GetNode<Button>("%CancelSessionButton").Pressed += OnCancelOrLeavePressed;
         GetNode<Button>("%ReturnToSetupButton").Pressed += OnReturnToSetupPressed;
+        GetNode<TextureButton>("%CopyCodeButton").Pressed += OnCopyCode;
 
         // Lobby chat: Enter in the input sends (LineEdit.TextSubmitted). The log
         // starts empty (drop the scene's sample line) and fills only from
@@ -74,6 +75,22 @@ public partial class SessionLobby : Control
         _signaling.Connect(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
 
         Render();
+    }
+
+    /// <summary>Copy the session code to the OS clipboard and flash a brief confirmation.</summary>
+    private void OnCopyCode()
+    {
+        var code = SessionContext.Instance?.SessionCode;
+        if (string.IsNullOrEmpty(code))
+            return;
+        DisplayServer.ClipboardSet(code);
+        var flash = GetNode<Label>("%CopiedFlash");
+        flash.Visible = true;
+        GetTree().CreateTimer(1.2).Timeout += () =>
+        {
+            if (GodotObject.IsInstanceValid(flash))
+                flash.Visible = false;
+        };
     }
 
     // ---- signaling callbacks (main thread) ----

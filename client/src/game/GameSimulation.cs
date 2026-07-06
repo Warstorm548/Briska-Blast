@@ -212,53 +212,60 @@ public static class GameSimulation
         return false;
     }
 
-    /// <summary>Bounce a ball off any corner barrier it overlaps. Each barrier rect is
-    /// Minkowski-inflated by the ball radius (circle↔rect = point↔inflated-rect); if the
-    /// centre is inside, the ball is pushed out along the least-penetrated face and that
-    /// velocity component is negated — the same reflection walls use. The barriers hug
-    /// the walls, so the ball only ever meets one inner face and single-axis resolution
-    /// is stable. Like the wall/goal checks this is position-based (no sweep), so a very
-    /// fast ball could tunnel a thin foot in one step — an accepted parity limitation.</summary>
+    /// <summary>Bounce a ball off any corner barrier triangle it overlaps. Circle↔triangle:
+    /// find the closest point on the triangle to the ball centre, and if it's within the
+    /// radius, push the ball out along the surface normal and reflect its velocity across that
+    /// normal (<c>v − 2(v·n)n</c>) — but only when it's moving into the surface, so a ball
+    /// already leaving isn't yanked back (which would make it stick). On the diagonal
+    /// hypotenuse this gives a true angled deflection, turning shots away from the goal corner.
+    /// A centre that has fully penetrated the solid is pushed back out along its shallowest
+    /// edge. Like the wall/goal checks this is position-based (no sweep), so a very fast ball
+    /// could tunnel in one step — an accepted parity limitation. Barriers are simulated
+    /// per-screen and never handed off across peers, so this float reflection needs no
+    /// cross-peer determinism.</summary>
     private static void ResolveBarriers(GameState state, Ball ball)
     {
         var barriers = state.Barriers;
         float r = ball.Radius;
         for (int i = 0; i < barriers.Count; i++)
         {
-            var rect = barriers[i];
-            float minX = rect.Position.X - r, maxX = rect.End.X + r;
-            float minY = rect.Position.Y - r, maxY = rect.End.Y + r;
+            var t = barriers[i];
             var c = ball.Pos;
-            if (c.X <= minX || c.X >= maxX || c.Y <= minY || c.Y >= maxY)
-                continue; // not overlapping this barrier
+            Vector2 n;
+            float push;
 
-            // Penetration to each inflated face; exit along the shallowest. Only negate
-            // the velocity if it points into the barrier, so a ball already leaving
-            // isn't yanked back (which would make it stick).
-            float penL = c.X - minX, penR = maxX - c.X;
-            float penT = c.Y - minY, penB = maxY - c.Y;
-            float min = Mathf.Min(Mathf.Min(penL, penR), Mathf.Min(penT, penB));
-
-            if (min == penL)
+            if (CornerBarrier.PointInside(c, in t))
             {
-                ball.Pos = new Vector2(minX, c.Y);
-                if (ball.Vel.X > 0) ball.Vel = new Vector2(-ball.Vel.X, ball.Vel.Y);
-            }
-            else if (min == penR)
-            {
-                ball.Pos = new Vector2(maxX, c.Y);
-                if (ball.Vel.X < 0) ball.Vel = new Vector2(-ball.Vel.X, ball.Vel.Y);
-            }
-            else if (min == penT)
-            {
-                ball.Pos = new Vector2(c.X, minY);
-                if (ball.Vel.Y > 0) ball.Vel = new Vector2(ball.Vel.X, -ball.Vel.Y);
+                // Centre fully inside the solid: exit along the shallowest edge.
+                (n, float depth) = CornerBarrier.NearestEdgeExit(c, in t);
+                push = depth + r;
             }
             else
             {
-                ball.Pos = new Vector2(c.X, maxY);
-                if (ball.Vel.Y < 0) ball.Vel = new Vector2(ball.Vel.X, -ball.Vel.Y);
+                var p = CornerBarrier.ClosestPoint(c, in t);
+                var d = c - p;
+                float dist2 = d.LengthSquared();
+                if (dist2 >= r * r)
+                    continue; // circle doesn't reach this barrier
+
+                float dist = Mathf.Sqrt(dist2);
+                if (dist < 1e-5f)
+                {
+                    // Sitting on the boundary — fall back to the nearest-edge normal.
+                    (n, float depth) = CornerBarrier.NearestEdgeExit(c, in t);
+                    push = depth + r;
+                }
+                else
+                {
+                    n = d / dist;
+                    push = r - dist;
+                }
             }
+
+            ball.Pos = c + n * push;
+            float vn = ball.Vel.Dot(n);
+            if (vn < 0f)
+                ball.Vel -= 2f * vn * n;
         }
     }
 

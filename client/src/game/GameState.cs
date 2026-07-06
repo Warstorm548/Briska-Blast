@@ -124,11 +124,11 @@ public sealed class GameState
     /// when false only the master ball can trigger a split. Host-configured.</summary>
     public bool ChainSplitEnabled = true;
 
-    /// <summary>Solid corner-barrier collision rects in arena pixels (the arm + foot of
-    /// each corner's L, 8 total). Static local geometry like the wall edges — balls
-    /// bounce off them but never hand off across them, so they're never networked.
-    /// Built once in <c>GameScene._Ready</c> via <see cref="CornerBarrier.AppendRects"/>.</summary>
-    public readonly List<Rect2> Barriers = new();
+    /// <summary>Solid corner-barrier collision triangles in arena pixels (one right triangle
+    /// per corner, 4 total). Static local geometry like the wall edges — balls bounce off them
+    /// but never hand off across them, so they're never networked. Built once in
+    /// <c>GameScene._Ready</c> via <see cref="CornerBarrier.AppendTriangles"/>.</summary>
+    public readonly List<CornerBarrier.BarrierTri> Barriers = new();
 
     /// <summary>Per-edge mapping for this screen. Bottom is always
     /// <see cref="EdgeTarget.Goal"/>; Top/Right/Left are Portal or Wall.</summary>

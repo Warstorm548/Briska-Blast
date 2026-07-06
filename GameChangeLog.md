@@ -9,6 +9,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.22.0] — 2026-07-06
+
+Reshapes the corner barriers from an **L into a right triangle** (new
+`Cornerbarrier.png` art) and gives players a one-click way to **copy the session
+code** from the lobby and the in-game pause menu.
+
+### Changed
+
+- **Corner-barrier collider is now a triangle.** `CornerBarrier` emits one right
+  triangle per corner (`AppendTriangles` → `List<BarrierTri>`) instead of two
+  axis-aligned `Rect2` bars, mapped through the exact same pivot + 90°-rotation
+  transform the view uses, so art and collider still can't drift. The collision
+  surface is inset **1px into the solid** (uniform incenter scale) so the ball
+  overlaps the art slightly before bouncing.
+- **`GameSimulation.ResolveBarriers` is now circle-vs-triangle.** Closest-point-on-
+  triangle (Ericson) + true-normal reflection `v − 2(v·n)n`, applied only when the
+  ball moves into the surface. On the diagonal hypotenuse this gives an **angled
+  deflection** that turns shots away from the goal corner, replacing the old flat
+  X/Y-axis bounce. A deeply-penetrated centre exits along its shallowest edge.
+  Shared geometry helpers (`PointInside`, `ClosestPoint`, `NearestEdgeExit`,
+  `Overlaps`) live on `CornerBarrier`; the splitter spawn-guard reuses `Overlaps`.
+
+### Added
+
+- **Copy-session-code button** beside the code in the **lobby**
+  (`SessionLobby.tscn`) and the **ESC/pause menu** (`PauseMenu.tscn`) — an
+  icon-only, transparent `TextureButton` using a new generated clipboard glyph
+  (`src/assets/sprites/ui/CopyIcon.png`). Copies to the OS clipboard via
+  `DisplayServer.ClipboardSet` and flashes a brief **"Copied!"** confirmation. No
+  button on the play field.
+
 ## [0.21.0] — 2026-07-04
 
 Consumes the server-minted **Cloudflare TURN credentials** (server 0.22.0), so
