@@ -42,6 +42,7 @@ public partial class SessionLobby : Control
         GetNode<Button>("%StartSessionButton").Pressed += OnStartPressed;
         GetNode<Button>("%CancelSessionButton").Pressed += OnCancelOrLeavePressed;
         GetNode<Button>("%ReturnToSetupButton").Pressed += OnReturnToSetupPressed;
+        GetNode<TextureButton>("%CopyCodeButton").Pressed += OnCopyCode;
 
         // Lobby chat: Enter in the input sends (LineEdit.TextSubmitted). The log
         // starts empty (drop the scene's sample line) and fills only from
@@ -75,6 +76,11 @@ public partial class SessionLobby : Control
 
         Render();
     }
+
+    /// <summary>Copy the session code to the OS clipboard and flash a brief confirmation.</summary>
+    private void OnCopyCode() =>
+        ClipboardCopy.CopyWithFlash(GetTree(), SessionContext.Instance?.SessionCode,
+            GetNode<Label>("%CopiedFlash"));
 
     // ---- signaling callbacks (main thread) ----
 

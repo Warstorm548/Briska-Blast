@@ -30,6 +30,10 @@ public partial class PauseMenu : CanvasLayer
         GetNode<Button>("%ExitButton").Pressed += () => ExitToMenuRequested?.Invoke();
         GetNode<Button>("%QuitButton").Pressed += () => QuitRequested?.Invoke();
 
+        var flash = GetNode<Label>("%CopiedFlash");
+        GetNode<TextureButton>("%CopyCodeButton").Pressed +=
+            () => ClipboardCopy.CopyWithFlash(GetTree(), SessionContext.Instance?.SessionCode, flash);
+
         // Land focus on the safe default so a keyboard player can resume without
         // tabbing onto a leave action first.
         GetNode<Button>("%ReturnButton").GrabFocus();

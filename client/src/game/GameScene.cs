@@ -124,10 +124,10 @@ public partial class GameScene : Node2D
 
         BuildEdges(ctx);
 
-        // Solid L barriers in all four corners (same on every screen). Static local
+        // Solid triangle barriers in all four corners (same on every screen). Static local
         // geometry — built once here so the sim can bounce balls off them and the view
         // can place the sprites from the shared CornerBarrier layout.
-        CornerBarrier.AppendRects(_state.Barriers, arena.X, arena.Y);
+        CornerBarrier.AppendTriangles(_state.Barriers, arena.X, arena.Y);
 
         // Arm the random-spawn cadence from the host's settings (broadcast at start
         // and applied by every client), falling back to the defaults if absent.
@@ -626,8 +626,8 @@ public partial class GameScene : Node2D
     /// <summary>True if a circle at <paramref name="pos"/> overlaps any corner barrier.</summary>
     private bool OverlapsBarrier(Vector2 pos, float radius)
     {
-        foreach (var rect in _state.Barriers)
-            if (rect.Grow(radius).HasPoint(pos))
+        foreach (var tri in _state.Barriers)
+            if (CornerBarrier.Overlaps(tri, pos, radius))
                 return true;
         return false;
     }
