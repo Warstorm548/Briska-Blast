@@ -78,20 +78,9 @@ public partial class SessionLobby : Control
     }
 
     /// <summary>Copy the session code to the OS clipboard and flash a brief confirmation.</summary>
-    private void OnCopyCode()
-    {
-        var code = SessionContext.Instance?.SessionCode;
-        if (string.IsNullOrEmpty(code))
-            return;
-        DisplayServer.ClipboardSet(code);
-        var flash = GetNode<Label>("%CopiedFlash");
-        flash.Visible = true;
-        GetTree().CreateTimer(1.2).Timeout += () =>
-        {
-            if (GodotObject.IsInstanceValid(flash))
-                flash.Visible = false;
-        };
-    }
+    private void OnCopyCode() =>
+        ClipboardCopy.CopyWithFlash(GetTree(), SessionContext.Instance?.SessionCode,
+            GetNode<Label>("%CopiedFlash"));
 
     // ---- signaling callbacks (main thread) ----
 

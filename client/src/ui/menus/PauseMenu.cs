@@ -31,25 +31,11 @@ public partial class PauseMenu : CanvasLayer
         GetNode<Button>("%QuitButton").Pressed += () => QuitRequested?.Invoke();
 
         var flash = GetNode<Label>("%CopiedFlash");
-        GetNode<TextureButton>("%CopyCodeButton").Pressed += () => CopyCode(flash);
+        GetNode<TextureButton>("%CopyCodeButton").Pressed +=
+            () => ClipboardCopy.CopyWithFlash(GetTree(), SessionContext.Instance?.SessionCode, flash);
 
         // Land focus on the safe default so a keyboard player can resume without
         // tabbing onto a leave action first.
         GetNode<Button>("%ReturnButton").GrabFocus();
-    }
-
-    /// <summary>Copy the session code to the OS clipboard and flash a brief confirmation.</summary>
-    private void CopyCode(Label flash)
-    {
-        var code = SessionContext.Instance?.SessionCode;
-        if (string.IsNullOrEmpty(code))
-            return;
-        DisplayServer.ClipboardSet(code);
-        flash.Visible = true;
-        GetTree().CreateTimer(1.2).Timeout += () =>
-        {
-            if (GodotObject.IsInstanceValid(flash))
-                flash.Visible = false;
-        };
     }
 }
