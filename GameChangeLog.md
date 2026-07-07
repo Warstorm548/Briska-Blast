@@ -9,6 +9,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.25.0] — 2026-07-07
+
+Adopts the server's **pause-on-rejoin** — Stage C, the final stage of the
+handoff rework (`docs/architecture/match-lifecycle.md`). Requires server
+**0.24.0** (`min_game_version` is bumped alongside).
+
+### Added
+
+- **Rejoin identifies declare themselves**: the `identify` frame carries
+  `rejoin: true` on the process-death rejoin paths (`BeginRejoin`, the lobby
+  poll's recovery into an `active` match) so the server pauses the live match
+  while this client re-meshes. The flag is cleared the moment the client
+  enters the match, so a later transient WS blip re-identifies as a normal
+  member and can never pause anyone.
+- **Match freeze + pause overlay**: on `match_paused`, `GameScene` freezes the
+  whole tick (input, spawns, sim, handoffs — mirroring the `_gameOver` latch)
+  behind the reused `PreparingPanel` as an overlay — "Waiting for {name} to
+  reconnect…", no Cancel. A second rejoiner just updates the name; the match
+  stays frozen until the **last** hold clears server-side.
+- **3-2-1 resume countdown**: on `match_resumed`, the overlay counts the
+  server's `countdown_secs` down and every screen unfreezes together. The
+  rejoiner itself is still on the connecting screen through all of this — its
+  own go-signal remains `match_started` (it typically lands mid-countdown).
+
 ## [0.24.0] — 2026-07-07
 
 Adopts the server's **ready barrier** and adds a **lobby safety-net poll** —
