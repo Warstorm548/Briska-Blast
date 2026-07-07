@@ -8,6 +8,7 @@ use chrono::Utc;
 use crate::{
     api::fetch_usernames,
     signaling::protocol::{ClientMsg, ServerMsg},
+    signaling::ReadyOutcome,
     state::AppState,
 };
 
@@ -181,6 +182,34 @@ pub(super) async fn handle_client_frame(
                     None,
                 )
                 .await;
+        }
+        ClientMsg::ClientReady => {
+            // The ready barrier (template: ReportScore — thin arm, testable hub
+            // method). The hub's `match_started` latch guarantees AllReady is
+            // handed to exactly one caller, so the broadcast + activation can't
+            // double-fire against the grace valve.
+            match state.signal_hub.record_ready(code, from_player).await {
+                ReadyOutcome::AllReady => {
+                    tracing::info!("ws: all players ready — starting match");
+                    super::session_ops::start_match(state, code).await;
+                }
+                ReadyOutcome::AlreadyStarted => {
+                    // Straggler (barrier timed out, a poll-fallback recovery, or
+                    // a future mid-match rejoiner): converge it with a direct
+                    // reply rather than leaving it waiting for a broadcast that
+                    // already happened.
+                    state
+                        .signal_hub
+                        .send_to(code, from_player, ServerMsg::MatchStarted {})
+                        .await;
+                }
+                ReadyOutcome::Pending => {
+                    tracing::debug!("ws: client ready — waiting on others");
+                }
+                ReadyOutcome::NotSeated => {
+                    tracing::debug!("ws: client_ready from unseated player — ignored");
+                }
+            }
         }
         ClientMsg::Leave => return false,
     }

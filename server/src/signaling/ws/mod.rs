@@ -16,6 +16,10 @@ mod frame;
 mod identify;
 mod session_ops;
 
+/// The ready-barrier grace valve, re-exported for `/start` (the barrier is
+/// seeded and armed there, but resolves in this module's frame handling).
+pub(crate) use session_ops::spawn_ready_barrier;
+
 use axum::{
     extract::{
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},

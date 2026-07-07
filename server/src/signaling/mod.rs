@@ -1,7 +1,7 @@
 pub mod protocol;
 pub mod ws;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{mpsc, oneshot, RwLock};
 
@@ -29,6 +29,22 @@ pub struct SignalHub {
     /// `Reconnect` slot-hold — so neither cancels the other. Ephemeral, like the
     /// rooms map.
     grace: RwLock<HashMap<(String, String, GraceKind), oneshot::Sender<()>>>,
+}
+
+/// What a `ClientReady` meant for the barrier (see [`SignalHub::record_ready`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadyOutcome {
+    /// Recorded; other seated players are still unready. Wait.
+    Pending,
+    /// This ready completed the barrier — the caller (alone) broadcasts
+    /// `MatchStarted` and activates the session.
+    AllReady,
+    /// The barrier already resolved (all-ready or the valve). The caller sends
+    /// this straggler a direct `MatchStarted` so it converges.
+    AlreadyStarted,
+    /// The sender isn't in the seeded roster (or the room/barrier doesn't
+    /// exist). Ignored.
+    NotSeated,
 }
 
 /// Which grace window an entry represents (see [`SignalHub::grace`]).
@@ -69,6 +85,19 @@ struct Room {
     /// In-memory like `scores`; after a server restart the first mid-game
     /// identify re-mints and re-caches (see `ws/mod.rs`).
     ice_servers: Vec<crate::turn::IceServer>,
+    /// The players whose `ClientReady` the ready barrier waits on — the
+    /// authoritative start-time roster, seeded at `/start` via
+    /// [`SignalHub::set_ready_roster`]. Empty until seeded (a `ClientReady`
+    /// then reads as `NotSeated`). In-memory like `scores`: a server restart
+    /// mid-barrier loses it and the clients' own Preparing deadline recovers.
+    ready_roster: Vec<String>,
+    /// Which seated players have reported `ClientReady` so far.
+    ready: HashSet<String>,
+    /// Latches true when the barrier resolves — every seated player ready, or
+    /// the grace valve fired. The single-winner mechanism between the all-ready
+    /// path and the valve timer: whichever flips it acts (broadcast + activate),
+    /// the other sees it set and does nothing.
+    match_started: bool,
 }
 
 impl SignalHub {
@@ -212,6 +241,59 @@ impl SignalHub {
             None
         };
         Some((room.scores.clone(), winner))
+    }
+
+    /// Seed (or reseed) the ready barrier for `code`'s room with the frozen
+    /// start-time roster. Called by `/start` beside `set_win_target`. Clears any
+    /// prior ready set and the `match_started` latch, so the barrier always
+    /// reflects exactly this start.
+    pub async fn set_ready_roster(&self, code: &str, roster: Vec<String>) {
+        let mut rooms = self.rooms.write().await;
+        let room = rooms.entry(code.to_string()).or_default();
+        room.ready_roster = roster;
+        room.ready.clear();
+        room.match_started = false;
+    }
+
+    /// Record `player_id`'s `ClientReady` against `code`'s barrier and classify
+    /// what the caller must do (see [`ReadyOutcome`]). `AllReady` is returned to
+    /// exactly one caller — it flips the `match_started` latch — so the
+    /// broadcast + activation can never run twice.
+    pub async fn record_ready(&self, code: &str, player_id: &str) -> ReadyOutcome {
+        let mut rooms = self.rooms.write().await;
+        let Some(room) = rooms.get_mut(code) else {
+            return ReadyOutcome::NotSeated;
+        };
+        if room.match_started {
+            return ReadyOutcome::AlreadyStarted;
+        }
+        if !room.ready_roster.iter().any(|p| p == player_id) {
+            return ReadyOutcome::NotSeated;
+        }
+        room.ready.insert(player_id.to_string());
+        if room.ready_roster.iter().all(|p| room.ready.contains(p)) {
+            room.match_started = true;
+            ReadyOutcome::AllReady
+        } else {
+            ReadyOutcome::Pending
+        }
+    }
+
+    /// The grace valve's half of the barrier: start the match now regardless of
+    /// who is still unready. Returns true iff this call won the latch (room
+    /// still exists and the barrier hadn't already resolved) — the caller then
+    /// broadcasts `MatchStarted` and activates the session; a false means the
+    /// all-ready path (or an earlier valve) already did.
+    pub async fn force_match_start(&self, code: &str) -> bool {
+        let mut rooms = self.rooms.write().await;
+        let Some(room) = rooms.get_mut(code) else {
+            return false;
+        };
+        if room.match_started {
+            return false;
+        }
+        room.match_started = true;
+        true
     }
 
     /// Snapshot of player_ids currently identified in the room. Used by
@@ -540,6 +622,88 @@ mod tests {
         // One double-point goal meets a target of 2 immediately.
         let (_, winner) = hub.record_score("ABC", "0000001", 2).await.unwrap();
         assert_eq!(winner.as_deref(), Some("0000001"));
+    }
+
+    #[tokio::test]
+    async fn record_ready_pends_until_all_then_all_ready_exactly_once() {
+        let hub = SignalHub::default();
+        let (_, _rx1) = hub.join_room("ABC", "0000001").await;
+        let (_, _rx2) = hub.join_room("ABC", "0000002").await;
+        hub.set_ready_roster("ABC", vec!["0000001".into(), "0000002".into()])
+            .await;
+
+        assert_eq!(hub.record_ready("ABC", "0000001").await, ReadyOutcome::Pending);
+        // A duplicate ready from the same player is still just Pending.
+        assert_eq!(hub.record_ready("ABC", "0000001").await, ReadyOutcome::Pending);
+        // The last seat completes the barrier — exactly one AllReady…
+        assert_eq!(hub.record_ready("ABC", "0000002").await, ReadyOutcome::AllReady);
+        // …and anything after it converges via AlreadyStarted.
+        assert_eq!(
+            hub.record_ready("ABC", "0000002").await,
+            ReadyOutcome::AlreadyStarted
+        );
+        assert_eq!(
+            hub.record_ready("ABC", "0000001").await,
+            ReadyOutcome::AlreadyStarted
+        );
+    }
+
+    #[tokio::test]
+    async fn record_ready_rejects_unseated_and_unknown_room() {
+        let hub = SignalHub::default();
+        let (_, _rx) = hub.join_room("ABC", "0000001").await;
+        hub.set_ready_roster("ABC", vec!["0000001".into()]).await;
+
+        // Not in the frozen roster (e.g. joined after Start) → ignored.
+        assert_eq!(hub.record_ready("ABC", "0000099").await, ReadyOutcome::NotSeated);
+        // Unknown room → ignored.
+        assert_eq!(hub.record_ready("NOPE", "0000001").await, ReadyOutcome::NotSeated);
+        // An unseeded room (a ready that raced ahead of /start) → ignored.
+        let (_, _rx2) = hub.join_room("XYZ", "0000002").await;
+        assert_eq!(hub.record_ready("XYZ", "0000002").await, ReadyOutcome::NotSeated);
+    }
+
+    #[tokio::test]
+    async fn force_match_start_wins_the_latch_exactly_once() {
+        let hub = SignalHub::default();
+        let (_, _rx) = hub.join_room("ABC", "0000001").await;
+        hub.set_ready_roster("ABC", vec!["0000001".into(), "0000002".into()])
+            .await;
+
+        // The valve fires first: it wins the latch once, then never again.
+        assert!(hub.force_match_start("ABC").await);
+        assert!(!hub.force_match_start("ABC").await);
+        // A ready arriving after the valve converges as a straggler.
+        assert_eq!(
+            hub.record_ready("ABC", "0000001").await,
+            ReadyOutcome::AlreadyStarted
+        );
+        // Unknown room → the valve does nothing.
+        assert!(!hub.force_match_start("NOPE").await);
+    }
+
+    #[tokio::test]
+    async fn all_ready_beats_a_later_valve() {
+        let hub = SignalHub::default();
+        let (_, _rx) = hub.join_room("ABC", "0000001").await;
+        hub.set_ready_roster("ABC", vec!["0000001".into()]).await;
+
+        assert_eq!(hub.record_ready("ABC", "0000001").await, ReadyOutcome::AllReady);
+        // The grace valve then finds the barrier already resolved.
+        assert!(!hub.force_match_start("ABC").await);
+    }
+
+    #[tokio::test]
+    async fn set_ready_roster_reseeds_and_clears_the_latch() {
+        let hub = SignalHub::default();
+        let (_, _rx) = hub.join_room("ABC", "0000001").await;
+        hub.set_ready_roster("ABC", vec!["0000001".into()]).await;
+        assert_eq!(hub.record_ready("ABC", "0000001").await, ReadyOutcome::AllReady);
+
+        // A later re-seed (a fresh /start on the same room) resets the barrier.
+        hub.set_ready_roster("ABC", vec!["0000001".into(), "0000002".into()])
+            .await;
+        assert_eq!(hub.record_ready("ABC", "0000001").await, ReadyOutcome::Pending);
     }
 
     #[tokio::test]

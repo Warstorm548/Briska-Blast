@@ -171,6 +171,17 @@ pub async fn start_session(
                     .set_win_target(&code, session.win_condition.target() as i64)
                     .await;
 
+                // Seed the ready barrier with the same frozen roster and arm its
+                // grace valve: the session stays Starting until every member's
+                // mesh is up (each sends `client_ready`) or the valve fires,
+                // whereupon it flips to Active and `MatchStarted` is broadcast.
+                // In-memory like the win target, with the same restart caveat.
+                state
+                    .signal_hub
+                    .set_ready_roster(&code, session_members.clone())
+                    .await;
+                crate::signaling::ws::spawn_ready_barrier(state.clone(), code.clone());
+
                 // One credential set shared by the whole match (TTL outlives
                 // it — see turn.rs); empty on mint failure or when TURN is
                 // unconfigured, in which case clients keep their built-in
