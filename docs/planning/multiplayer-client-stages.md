@@ -141,9 +141,11 @@ IPeerTransport and scores over the signaling socket. Neither touches the view.
 - **3D later** = implement `View3D` and map `(x, y)` → `Vector3`; simulation and
   networking are untouched.
 
-**Deferred from Stage 3** (see `extended-mode.md`): multi-ball (needs
-globally-unique ball ids), solo/AI opponent, a ball-speed cap, and a serve gate
-until peers connect.
+**Deferred from Stage 3** (see `extended-mode.md`): ~~multi-ball~~ (shipped in
+game v0.18.0 with the ball splitter), solo/AI opponent, a ball-speed cap, and
+~~a serve gate until peers connect~~ (shipped client-side in game v0.23.0 —
+Stage 6's Preparing phase holds the game scene, and with it the serve, until
+the mesh is up).
 
 ---
 
@@ -233,6 +235,37 @@ again. Shipped as server **v0.10.0** + game **v0.8.0**.
   broadcasts a `BallAlive` heartbeat over the mesh; after a gap the lowest-id
   connected player serves one. Fast-follow.
 - **Grace windows as runtime config** (still constants).
+
+---
+
+## Stage 6 — MatchFlow lifecycle orchestrator (handoff rework, Stage A) ✅
+
+**Delivers:** the lobby → game handoff rebuilt for long-term maintainability
+around a single client-side lifecycle state machine, plus the long-deferred
+serve gate. Shipped as game **v0.23.0** (client-only). Full reference:
+[`../architecture/match-lifecycle.md`](../architecture/match-lifecycle.md).
+
+- **`MatchFlow` autoload** (`core/MatchFlow.cs`): `Idle → InLobby → Preparing →
+  InMatch → PostMatch`, one legal-transition gate (logged as `match.flow`),
+  sole ownership of the `SignalingClient` + transport (no more
+  `AdoptNet` reparenting), sole subscriber of lifecycle-mutating signaling
+  events, ONE start sequence + ONE rejoin sequence converging in `Preparing`,
+  and ONE teardown. The duplicated start choreography in `SessionLobby` /
+  `JoinMenu` is gone; the scenes are thin views.
+- **Preparing phase**: a "Connecting to players…" screen counts per-peer data
+  channels against the start roster (30s deadline, early fail on definitive ICE
+  failure); `GameScene` is only constructed post-mesh, so the host can't serve
+  into an unopened channel.
+- **Failure surfacing**: every abnormal end lands on the main menu with a
+  read-once reason (`TakeFlowError`).
+
+**This is Stage A of the three-stage handoff rework.** Planned next:
+- **Stage B — server ready-barrier**: `client_ready` / `match_started` frames,
+  the session finally flips `starting → active`, a ~20s server valve, and a
+  lobby poll fallback for a missed `start_signaling`.
+- **Stage C — pause/resume on mid-match rejoin**: `match_paused` /
+  `match_resumed` reusing the same barrier + `PreparingPanel` as an in-game
+  overlay, with a ~25s auto-resume valve.
 
 ---
 
