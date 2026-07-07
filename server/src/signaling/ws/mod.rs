@@ -75,10 +75,11 @@ pub async fn ws_handler(
 #[tracing::instrument(skip(socket, state, code), fields(session = %code, player = tracing::field::Empty))]
 async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
     // Phase 1: Identify-frame auth with deadline.
-    let (player_id, is_host, host_player_id) = match identify(&mut socket, &code, &state).await {
-        Ok(triple) => triple,
-        Err(_) => return, // identify() already closed the socket with the right code
-    };
+    let (player_id, is_host, host_player_id, rejoin) =
+        match identify(&mut socket, &code, &state).await {
+            Ok(quad) => quad,
+            Err(_) => return, // identify() already closed the socket with the right code
+        };
     tracing::Span::current().record("player", player_id.as_str());
 
     // Phase 2: Register with SignalHub and announce arrival.
@@ -166,7 +167,7 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
             &code,
             ServerMsg::PeerJoined {
                 player_id: player_id.clone(),
-                username: self_username,
+                username: self_username.clone(),
             },
             Some(&player_id),
         )
@@ -206,6 +207,41 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
             )
             .await;
         tracing::info!("ws: host {} reconnected to session {} within grace", player_id, code);
+    }
+
+    // A process-death rejoiner re-entering a *live* match (barrier already
+    // resolved) pauses everyone while it re-meshes, so balls sent at its edge
+    // don't bounce off a temporary wall. Only the client's explicit rejoin
+    // declaration triggers this — a transient WS auto-reconnect (same process,
+    // mesh intact) and the initial drop itself never pause. Released by the
+    // rejoiner's ClientReady, its disconnect, or the valve, whichever first.
+    if rejoin {
+        match state.signal_hub.pause_for(&code, &player_id).await {
+            crate::signaling::PauseOutcome::Paused => {
+                state
+                    .signal_hub
+                    .broadcast(
+                        &code,
+                        ServerMsg::MatchPaused {
+                            player_id: player_id.clone(),
+                            username: self_username.clone(),
+                            resume_timeout_secs: session_ops::PAUSE_VALVE_SECS,
+                        },
+                        None,
+                    )
+                    .await;
+                session_ops::spawn_pause_valve(state.clone(), code.clone(), player_id.clone());
+                tracing::info!(
+                    "ws: session {} paused for rejoining player {} (valve {}s)",
+                    code, player_id, session_ops::PAUSE_VALVE_SECS
+                );
+            }
+            // Same rejoiner blipped again mid-rejoin: overlay already up, valve
+            // already armed. A rejoin into a not-yet-started match needs no
+            // pause — the whole room is still behind the connecting screen.
+            crate::signaling::PauseOutcome::AlreadyPaused
+            | crate::signaling::PauseOutcome::NotStarted => {}
+        }
     }
 
     // Phase 3: Pump messages in both directions until either side closes.
@@ -267,6 +303,11 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
     // socket that re-bound this player_id (duplicate identify) isn't
     // evicted by our late cleanup.
     state.signal_hub.leave_room(&code, &player_id, conn_id).await;
+
+    // A paused-for rejoiner that died again must not hold the match frozen
+    // for the valve's full window — release its hold now. No-op for anyone
+    // without a pause hold (i.e. almost every disconnect).
+    session_ops::resume_if_cleared(&state, &code, &player_id).await;
 
     if is_host {
         // The host always announces departure (peers update their roster /

@@ -24,12 +24,14 @@ const IDENTIFY_DEADLINE: Duration = Duration::from_secs(5);
 
 /// Reads the first frame, validates the token, confirms membership.
 /// Closes the socket with the appropriate 4xxx code on any failure.
-/// On success returns `(player_id, is_host, host_player_id)`.
+/// On success returns `(player_id, is_host, host_player_id, rejoin)` —
+/// `rejoin` is the client's own process-death-rejoin declaration (see
+/// `ClientMsg::Identify`), which the caller uses to trigger pause-on-rejoin.
 pub(super) async fn identify(
     socket: &mut WebSocket,
     code: &str,
     state: &AppState,
-) -> Result<(String, bool, String), ()> {
+) -> Result<(String, bool, String, bool), ()> {
     let first = match tokio::time::timeout(IDENTIFY_DEADLINE, socket.recv()).await {
         Ok(Some(Ok(Message::Text(text)))) => text,
         _ => {
@@ -38,8 +40,10 @@ pub(super) async fn identify(
         }
     };
 
-    let (player_id, secret_token) = match serde_json::from_str::<ClientMsg>(&first) {
-        Ok(ClientMsg::Identify { player_id, secret_token }) => (player_id, secret_token),
+    let (player_id, secret_token, rejoin) = match serde_json::from_str::<ClientMsg>(&first) {
+        Ok(ClientMsg::Identify { player_id, secret_token, rejoin }) => {
+            (player_id, secret_token, rejoin)
+        }
         _ => {
             close_with(socket, CLOSE_BAD_INITIAL, "identify_required").await;
             return Err(());
@@ -87,7 +91,7 @@ pub(super) async fn identify(
     }
 
     let is_host = session.host_player_id == player_id;
-    Ok((player_id, is_host, session.host_player_id))
+    Ok((player_id, is_host, session.host_player_id, rejoin))
 }
 
 /// Session roster snapshot for the Identified frame, so the client needs no

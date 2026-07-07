@@ -195,9 +195,12 @@ pub(super) async fn handle_client_frame(
                 }
                 ReadyOutcome::AlreadyStarted => {
                     // Straggler (barrier timed out, a poll-fallback recovery, or
-                    // a future mid-match rejoiner): converge it with a direct
-                    // reply rather than leaving it waiting for a broadcast that
-                    // already happened.
+                    // a mid-match rejoiner): converge it with a direct reply
+                    // rather than leaving it waiting for a broadcast that
+                    // already happened. A rejoiner's ready also releases its
+                    // pause hold — resume the room BEFORE the go-signal so the
+                    // countdown is already running when the rejoiner lands.
+                    super::session_ops::resume_if_cleared(state, code, from_player).await;
                     state
                         .signal_hub
                         .send_to(code, from_player, ServerMsg::MatchStarted {})
