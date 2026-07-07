@@ -19,6 +19,9 @@ public partial class PreparingScreen : Control
         _panel = GetNode<PreparingPanel>("%Panel");
         _panel.ShowCancel(true);
         _panel.CancelPressed += OnCancel;
+        // Progress may already have advanced before this scene loaded (events
+        // fire from the orchestrator, not this view) — paint the current line.
+        _panel.SetStatus(MatchFlow.Instance.PreparingStatus);
         MatchFlow.Instance.PreparingProgress += OnProgress;
     }
 

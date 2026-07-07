@@ -11,11 +11,6 @@ public partial class JoinMenu : Control
     private Button _joinButton = null!;
     private Label _status = null!;
 
-    // Live nodes built during a rejoin-into-match attempt (process-death
-    // recovery). Handed to SessionContext on success, torn down on failure.
-    private SignalingClient? _rejoinSignaling;
-    private WebRtcMeshTransport? _rejoinTransport;
-
     public override void _Ready()
     {
         _codeInput = GetNode<LineEdit>("%CodeInput");
@@ -64,8 +59,8 @@ public partial class JoinMenu : Control
 
         // The session is already live. If we're still a member (we dropped and
         // are rejoining within our window), the WS will let us back in; if not,
-        // it rejects us and we surface a friendly message. Either way this is the
-        // process-death rejoin path, not a fresh join.
+        // it rejects us and MatchFlow surfaces a friendly message on the main
+        // menu. Either way this is the process-death rejoin path, not a fresh join.
         if (result.ErrorCode == "session_already_active")
         {
             BeginRejoin(code);
@@ -89,8 +84,9 @@ public partial class JoinMenu : Control
     private async void BeginRejoin(string code)
     {
         SetBusy(true, "Rejoining match…");
-        // Need the gamemode + player count to seed SessionContext; the
-        // authoritative roster/host come from the WS Identified frame.
+        // Need the gamemode + rules to seed SessionContext; the authoritative
+        // roster/host/seating come from the WS Identified frame, which
+        // MatchFlow consumes on its way into Preparing.
         var info = await SessionContext.Instance.Api.GetSessionAsync(code);
         Callable.From(() => OnRejoinInfo(info, code)).CallDeferred();
     }
@@ -105,97 +101,11 @@ public partial class JoinMenu : Control
             return;
         }
 
-        var ctx = SessionContext.Instance;
-        ctx.StartRejoinSession(code, s.Gamemode, s.PlayerCount, s.WinCondition, s.SpawnSettings);
-
-        _rejoinSignaling = new SignalingClient();
-        AddChild(_rejoinSignaling);
-        _rejoinTransport = new WebRtcMeshTransport();
-        _rejoinTransport.Init(_rejoinSignaling);
-        AddChild(_rejoinTransport);
-
-        _rejoinSignaling.Identified += OnRejoinIdentified;
-        _rejoinSignaling.Closed += OnRejoinClosed;
-        _rejoinSignaling.Connect(code, ctx.PlayerId, ctx.SecretToken);
-    }
-
-    /// <summary>Handle the rejoin <c>Identified</c> frame (process-death recovery):
-    /// restore host, roster, and the frozen seating order, re-establish the WebRTC
-    /// mesh, hand the live net to <see cref="SessionContext"/>, and enter the game
-    /// scene.</summary>
-    private void OnRejoinIdentified(string hostId, string[] peers, string[] seatOrder,
-        bool isHost, System.Collections.Generic.Dictionary<string, string> usernames,
-        IceServerDto[] iceServers)
-    {
-        // A rejoiner is a fresh process that missed the TURN credentials in
-        // start_signaling; the server resends the match's credential set on this
-        // identify. Apply before Connect below — safe ordering, peers only start
-        // offering to us after this same Identify triggers their PeerJoined.
-        _rejoinTransport!.SetIceServers(iceServers);
-        var ctx = SessionContext.Instance;
-        ctx.MergeUsernames(usernames);
-        ctx.HostPlayerId = hostId;
-        // Reproduce the exact seating the match froze at Start. The server's
-        // Identified frame carries the frozen, self-inclusive seat_order (the live
-        // session may have re-ordered after a host promotion while we were gone),
-        // so our portals line up with everyone still in the match. See BuildEdges.
-        ctx.SetSeatOrder(seatOrder);
-        ctx.PlayerIds.Clear();
-        if (!string.IsNullOrEmpty(hostId))
-            ctx.PlayerIds.Add(hostId);
-        if (ctx.PlayerId != hostId)
-            ctx.PlayerIds.Add(ctx.PlayerId);
-        foreach (var p in peers)
-            if (p != hostId && p != ctx.PlayerId && !ctx.PlayerIds.Contains(p))
-                ctx.PlayerIds.Add(p);
-
-        // Re-establish the mesh to every current peer, then hand the live net to
-        // SessionContext (survives the scene change) and enter the game.
-        _rejoinTransport!.Connect(ctx.PlayerId, peers);
-
-        _rejoinSignaling!.Identified -= OnRejoinIdentified;
-        _rejoinSignaling.Closed -= OnRejoinClosed;
-        ctx.AdoptNet(_rejoinSignaling, _rejoinTransport);
-        _rejoinSignaling = null;
-        _rejoinTransport = null;
-
-        if (GetTree().ChangeSceneToFile("res://src/game/GameScene.tscn") != Error.Ok)
-        {
-            GD.PushError("[join] failed to enter GameScene on rejoin — returning to menu.");
-            ctx.TeardownNet();
-            ctx.ClearSession();
-            GetTree().ChangeSceneToFile("res://src/ui/menus/MainMenu.tscn");
-        }
-    }
-
-    private void OnRejoinClosed(int closeCode, string reason)
-    {
-        TeardownRejoinAttempt();
-        SessionContext.Instance.ClearSession();
-        SetBusy(false, closeCode switch
-        {
-            4403 => "You're not part of that match.",
-            4404 => "That match no longer exists.",
-            _ => "Could not rejoin the match.",
-        });
-    }
-
-    private void TeardownRejoinAttempt()
-    {
-        if (_rejoinSignaling != null)
-        {
-            _rejoinSignaling.Identified -= OnRejoinIdentified;
-            _rejoinSignaling.Closed -= OnRejoinClosed;
-            _rejoinSignaling.CloseConnection();
-            _rejoinSignaling.QueueFree();
-            _rejoinSignaling = null;
-        }
-        if (_rejoinTransport != null)
-        {
-            _rejoinTransport.Close();
-            _rejoinTransport.QueueFree();
-            _rejoinTransport = null;
-        }
+        SessionContext.Instance.StartRejoinSession(code, s.Gamemode, s.PlayerCount, s.WinCondition, s.SpawnSettings);
+        // MatchFlow owns the rest: fresh signaling socket, seat restore from the
+        // Identified frame, mesh bring-up behind the connecting screen, and the
+        // failure path (rejection lands on the main menu with the reason).
+        MatchFlow.Instance.BeginRejoin();
     }
 
     private void SetBusy(bool busy, string message)

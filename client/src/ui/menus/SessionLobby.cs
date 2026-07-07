@@ -1,27 +1,25 @@
 using Godot;
 using BriskaBlast.Core;
-using BriskaBlast.Net;
 
 namespace BriskaBlast.UI.Menus;
 
 /// <summary>
-/// Live lobby. Opens a signaling WebSocket on entry, drives the roster from
-/// server events (Identified / PeerJoined / PeerLeft / HostChanged), and
-/// backs the buttons with the REST endpoints. On <c>start_signaling</c> it
-/// builds the WebRTC mesh, hands the live signaling + transport to
-/// <see cref="SessionContext"/> (so they survive the scene change), and enters
-/// <c>GameScene</c>.
+/// Live lobby — a thin view over <see cref="MatchFlow"/>. On entry it hands the
+/// lifecycle to the orchestrator (<see cref="MatchFlow.EnterLobby"/>), renders
+/// the roster whenever MatchFlow reports it changed, and backs the buttons with
+/// the REST endpoints. Everything stateful — the signaling socket, the start
+/// choreography, teardown, scene transitions — lives in MatchFlow; this scene
+/// only subscribes to the pure-UI signaling events (chat, reconnect status).
 /// </summary>
 public partial class SessionLobby : Control
 {
     private HBoxContainer[] _slots = null!;
-    private SignalingClient _signaling = null!;
     private Label _status = null!;
-    private bool _leaving;
 
-    // Built on start_signaling, then handed to SessionContext (AdoptNet) so it
-    // outlives this scene. Null until then.
-    private WebRtcMeshTransport? _transport;
+    // The signaling instance this scene subscribed to for pure-UI events.
+    // Captured (not re-read from MatchFlow) so _ExitTree unsubscribes from the
+    // same object even after a teardown already nulled MatchFlow.Signaling.
+    private Net.SignalingClient? _signaling;
 
     public override void _Ready()
     {
@@ -54,27 +52,38 @@ public partial class SessionLobby : Control
         _status = new Label { HorizontalAlignment = HorizontalAlignment.Center, Visible = false };
         GetNode("LeftPanel/LeftMargins/LeftContent").AddChild(_status);
 
-        // Connect signaling. The SignalingClient is a child so it polls on the
-        // main thread — every callback below runs on the main thread and may
-        // touch the tree directly.
-        _signaling = new SignalingClient();
-        AddChild(_signaling);
-        _signaling.Identified += OnIdentified;
-        _signaling.PeerJoined += OnPeerJoined;
-        _signaling.PeerLeft += OnPeerLeft;
-        _signaling.HostChanged += OnHostChanged;
-        _signaling.StartSignaling += OnStartSignaling;
-        _signaling.SessionEnded += OnSessionEnded;
-        _signaling.Kicked += OnKicked;
-        _signaling.Closed += OnClosed;
-        _signaling.Reconnecting += OnReconnecting;
-        _signaling.Reconnected += OnReconnected;
-        _signaling.ChatMessage += OnChatMessage;
+        // Hand the lifecycle to the orchestrator: it opens the signaling socket,
+        // owns the roster mutations, and will swap scenes on start_signaling.
+        var flow = MatchFlow.Instance;
+        flow.EnterLobby();
+        flow.RosterChanged += Render;
 
-        var ctx = SessionContext.Instance;
-        _signaling.Connect(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
+        // Pure-UI signaling events stay view-subscribed (chat lines, transient
+        // reconnect status). Lifecycle events are MatchFlow's alone.
+        _signaling = flow.Signaling;
+        if (_signaling != null)
+        {
+            _signaling.ChatMessage += OnChatMessage;
+            _signaling.Reconnecting += OnReconnecting;
+            _signaling.Reconnected += OnReconnected;
+        }
 
         Render();
+    }
+
+    public override void _ExitTree()
+    {
+        // Detach from the orchestrator and the surviving socket so neither
+        // calls into a freed scene (the socket lives on across the change to
+        // the Preparing/game scenes).
+        MatchFlow.Instance.RosterChanged -= Render;
+        if (_signaling != null)
+        {
+            _signaling.ChatMessage -= OnChatMessage;
+            _signaling.Reconnecting -= OnReconnecting;
+            _signaling.Reconnected -= OnReconnected;
+            _signaling = null;
+        }
     }
 
     /// <summary>Copy the session code to the OS clipboard and flash a brief confirmation.</summary>
@@ -82,54 +91,7 @@ public partial class SessionLobby : Control
         ClipboardCopy.CopyWithFlash(GetTree(), SessionContext.Instance?.SessionCode,
             GetNode<Label>("%CopiedFlash"));
 
-    // ---- signaling callbacks (main thread) ----
-
-    /// <summary>Handle the lobby's <c>Identified</c> frame: refresh usernames, the
-    /// host, and the roster from the server's snapshot and re-render. (seatOrder is
-    /// empty before Start, so it's captured later in <see cref="OnStartSignaling"/>.)
-    /// </summary>
-    private void OnIdentified(string hostId, string[] peers, string[] seatOrder,
-        bool isHost, System.Collections.Generic.Dictionary<string, string> usernames,
-        IceServerDto[] iceServers)
-    {
-        // iceServers is always empty on a lobby identify (TURN credentials are
-        // minted at Start and arrive in start_signaling); nothing to do with it.
-        // seatOrder is empty in the lobby (it's frozen at Start); the seating
-        // roster is captured in OnStartSignaling. Nothing to do with it here.
-        var ctx = SessionContext.Instance;
-        ctx.MergeUsernames(usernames);
-        ctx.HostPlayerId = hostId;
-        ctx.PlayerIds.Clear();
-        if (!string.IsNullOrEmpty(hostId))
-            ctx.PlayerIds.Add(hostId);
-        if (ctx.PlayerId != hostId)
-            ctx.PlayerIds.Add(ctx.PlayerId);
-        foreach (var p in peers)
-            if (p != hostId && p != ctx.PlayerId && !ctx.PlayerIds.Contains(p))
-                ctx.PlayerIds.Add(p);
-        Render();
-    }
-
-    private void OnPeerJoined(string playerId, string username)
-    {
-        var ctx = SessionContext.Instance;
-        ctx.SetUsername(playerId, username);
-        if (!ctx.PlayerIds.Contains(playerId))
-            ctx.PlayerIds.Add(playerId);
-        Render();
-    }
-
-    private void OnPeerLeft(string playerId, string reason)
-    {
-        SessionContext.Instance.PlayerIds.Remove(playerId);
-        Render();
-    }
-
-    private void OnHostChanged(string playerId)
-    {
-        SessionContext.Instance.HostPlayerId = playerId;
-        Render();
-    }
+    // ---- pure-UI signaling callbacks (main thread) ----
 
     // The WS dropped but the client is re-dialing (transient blip) rather than
     // leaving — surface it on the status line instead of bouncing to the menu.
@@ -137,16 +99,16 @@ public partial class SessionLobby : Control
 
     private void OnReconnected() => ShowStatus("");
 
-    // Enter pressed in the chat input. Trim, send through signaling (the server
-    // echoes it back to everyone, including us, so we render on receipt rather
-    // than locally — keeping all clients' transcripts identical), then clear the
-    // field. Empty/whitespace input is dropped without a round-trip.
+    // Enter pressed in the chat input. Trim, send through the orchestrator (the
+    // server echoes it back to everyone, including us, so we render on receipt
+    // rather than locally — keeping all clients' transcripts identical), then
+    // clear the field. Empty/whitespace input is dropped without a round-trip.
     private void OnChatSubmitted(string text)
     {
         var input = GetNode<LineEdit>("%ChatInput");
         var trimmed = text.Trim();
-        if (trimmed.Length > 0 && _signaling != null)
-            _signaling.SendChatMessage(trimmed);
+        if (trimmed.Length > 0)
+            MatchFlow.Instance.SendChat(trimmed);
         input.Clear();
     }
 
@@ -173,102 +135,6 @@ public partial class SessionLobby : Control
         log.AddText($": {text}\n");
     }
 
-    /// <summary>Handle <c>start_signaling</c>: freeze the seating roster, bring up
-    /// the WebRTC mesh, hand the live net to <see cref="SessionContext"/>, and enter
-    /// the game scene. One-shot — guards against a duplicate frame.</summary>
-    private void OnStartSignaling(string gamemode, WinConditionDto winCondition,
-        SpawnSettingsDto spawnSettings, int playerCount, string[] peers,
-        IceServerDto[] iceServers)
-    {
-        // One-shot transition: guard against a duplicate start_signaling and
-        // against firing while we're already leaving.
-        if (_transport != null || _leaving)
-            return;
-
-        GetNode<Button>("%StartSessionButton").Disabled = true;
-        ShowStatus("Starting…");
-
-        var ctx = SessionContext.Instance;
-
-        // Adopt the authoritative win condition + random-spawn rules from the start
-        // frame (the host's own already match; a joiner learns them here) so the game
-        // scene applies the same rules the server enforces / broadcasts.
-        ctx.ApplyWinCondition(winCondition);
-        ctx.ApplySpawnSettings(spawnSettings);
-
-        // Freeze the seating roster for Extended-mode portal layout. `peers` here
-        // is the server's authoritative, self-inclusive start-time roster
-        // ([host, …joiners] in join order) — identical on every client — so each
-        // screen lays out portals consistently. See GameScene.BuildEdges.
-        ctx.SetSeatOrder(peers);
-
-        // Establish the WebRTC mesh to every peer. Negotiation rides the
-        // signaling socket and continues in the background after the transition
-        // (both nodes keep polling under the SessionContext autoload).
-        if (peers.Length > 0)
-        {
-            _transport = new WebRtcMeshTransport();
-            _transport.Init(_signaling);
-            // Adopt the match's server-minted STUN+TURN list before any peer
-            // connection exists — the config is baked into each at creation.
-            _transport.SetIceServers(iceServers);
-            AddChild(_transport);
-            _transport.Connect(ctx.PlayerId, peers);
-        }
-
-        // Hand the live signaling + transport to SessionContext so they survive
-        // ChangeSceneToFile, then enter the game. Unsubscribe our own handlers
-        // first: the socket lives on, but this lobby is about to be freed.
-        UnsubscribeSignaling();
-        ctx.AdoptNet(_signaling, _transport);
-        _signaling = null!;
-        _transport = null;
-        _leaving = true; // handing off, not tearing down
-
-        // If the scene change fails we've already handed off our signaling, so
-        // this lobby can't continue safely — tear the net down and fall back to
-        // the main menu rather than linger with a null socket.
-        if (GetTree().ChangeSceneToFile("res://src/game/GameScene.tscn") != Error.Ok)
-        {
-            GD.PushError("[lobby] failed to enter GameScene — returning to menu.");
-            ctx.TeardownNet();
-            ctx.ClearSession();
-            GetTree().ChangeSceneToFile("res://src/ui/menus/MainMenu.tscn");
-        }
-    }
-
-    /// <summary>Detach every signaling handler this lobby installed. The socket
-    /// is being handed to SessionContext and keeps emitting; this scene must not
-    /// be called after it is freed. (The transport's own offer/answer/ice
-    /// subscriptions live on the transport node and travel with it.)</summary>
-    private void UnsubscribeSignaling()
-    {
-        _signaling.Identified -= OnIdentified;
-        _signaling.PeerJoined -= OnPeerJoined;
-        _signaling.PeerLeft -= OnPeerLeft;
-        _signaling.HostChanged -= OnHostChanged;
-        _signaling.StartSignaling -= OnStartSignaling;
-        _signaling.SessionEnded -= OnSessionEnded;
-        _signaling.Kicked -= OnKicked;
-        _signaling.Closed -= OnClosed;
-        _signaling.Reconnecting -= OnReconnecting;
-        _signaling.Reconnected -= OnReconnected;
-        _signaling.ChatMessage -= OnChatMessage;
-    }
-
-    private void OnSessionEnded(string reason) => LeaveToMenu($"Session ended ({reason}).");
-
-    private void OnKicked(string reason) => LeaveToMenu($"Removed from session ({reason}).");
-
-    private void OnClosed(int code, string reason)
-    {
-        if (_leaving)
-            return;
-        // 1000 is a normal close; anything else (4xxx app codes, 1006 abnormal)
-        // means we lost the lobby unexpectedly.
-        LeaveToMenu(code == 1000 ? "Disconnected from session." : $"Connection closed ({code}).");
-    }
-
     // ---- buttons ----
 
     private async void OnStartPressed()
@@ -285,7 +151,8 @@ public partial class SessionLobby : Control
             };
             Callable.From(() => ShowStatus(why)).CallDeferred();
         }
-        // Success → the server broadcasts start_signaling; OnStartSignaling handles it.
+        // Success → the server broadcasts start_signaling; MatchFlow handles it
+        // (rule adoption, seat freeze, mesh, and the scene change).
     }
 
     private async void OnCancelOrLeavePressed()
@@ -293,15 +160,15 @@ public partial class SessionLobby : Control
         var ctx = SessionContext.Instance;
         if (ctx.LocalPlayerIsHost)
         {
-            // Host cancels → tear the session down server-side.
+            // Host cancels → tear the session down server-side, then leave
+            // locally. No leave frame — the session is being deleted anyway.
             await ctx.Api.CloseSessionAsync(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
-            Callable.From(() => LeaveToMenu("")).CallDeferred();
+            Callable.From(() => MatchFlow.Instance.LeaveSession(sendLeaveFrame: false)).CallDeferred();
         }
         else
         {
             // Joiner leaves → explicit Leave frees the slot in the lobby.
-            _signaling.SendLeave();
-            LeaveToMenu("");
+            MatchFlow.Instance.LeaveSession(sendLeaveFrame: true);
         }
     }
 
@@ -310,12 +177,7 @@ public partial class SessionLobby : Control
         var ctx = SessionContext.Instance;
         await ctx.Api.CloseSessionAsync(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
         Callable.From(() =>
-        {
-            _leaving = true;
-            _signaling.CloseConnection();
-            SessionContext.Instance.ClearSession();
-            GetTree().ChangeSceneToFile("res://src/ui/menus/HostSetupMenu.tscn");
-        }).CallDeferred();
+            MatchFlow.Instance.EndMatchTo("res://src/ui/menus/HostSetupMenu.tscn")).CallDeferred();
     }
 
     private async void OnPromote(int slotIndex)
@@ -332,7 +194,8 @@ public partial class SessionLobby : Control
             ctx.SessionCode, ctx.PlayerId, ctx.SecretToken, target);
         if (!result.Ok)
             Callable.From(() => ShowStatus($"Promote failed: {result.ErrorCode}")).CallDeferred();
-        // Success → server broadcasts host_changed; OnHostChanged updates all clients.
+        // Success → server broadcasts host_changed; MatchFlow updates the
+        // roster and fires RosterChanged on every client.
     }
 
     // ---- rendering ----
@@ -369,18 +232,5 @@ public partial class SessionLobby : Control
     {
         _status.Text = message;
         _status.Visible = !string.IsNullOrEmpty(message);
-    }
-
-    private void LeaveToMenu(string message)
-    {
-        if (_leaving)
-            return;
-        _leaving = true;
-        if (!string.IsNullOrEmpty(message))
-            GD.Print($"[lobby] {message}");
-        _transport?.Close();
-        _signaling.CloseConnection();
-        SessionContext.Instance.ClearSession();
-        GetTree().ChangeSceneToFile("res://src/ui/menus/MainMenu.tscn");
     }
 }
