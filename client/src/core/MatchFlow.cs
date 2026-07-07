@@ -106,6 +106,16 @@ public partial class MatchFlow : Node
     // have been lost mid-reconnect; the server answers a duplicate directly).
     private bool _readySent;
 
+    /// <summary>Lobby safety-net poll cadence. `start_signaling` is a
+    /// best-effort broadcast — a client whose WS is mid-reconnect at Start
+    /// misses it and would otherwise sit in the lobby forever; this poll spots
+    /// the session leaving `waiting` and recovers. 7s keeps a full 4-player
+    /// lobby behind one NAT at ~34 req/min, under the server's shared 60/min
+    /// per-IP session limiter with headroom for real actions.</summary>
+    private const ulong LobbyPollIntervalMsec = 7_000;
+    private ulong _nextLobbyPollMsec;
+    private bool _lobbyPollInFlight;
+
     // Legal transitions. Anything else is logged and ignored — this table is
     // the single replacement for the per-scene one-shot guards (_leaving,
     // duplicate-start checks, late-SessionEnded checks).
@@ -125,6 +135,12 @@ public partial class MatchFlow : Node
 
     public override void _Process(double delta)
     {
+        if (State == MatchFlowState.InLobby)
+        {
+            MaybePollLobby();
+            return;
+        }
+
         if (State != MatchFlowState.Preparing)
             return;
 
@@ -169,6 +185,9 @@ public partial class MatchFlow : Node
         // while Idle — so the state must already be InLobby for an immediate
         // connect failure to fail the flow instead of being swallowed.
         TransitionTo(MatchFlowState.InLobby, "entered lobby");
+        // First safety-net poll one interval out — the WS broadcast is the
+        // normal path; the poll only exists to catch a missed one.
+        _nextLobbyPollMsec = Time.GetTicksMsec() + LobbyPollIntervalMsec;
         OpenSignaling(SessionContext.Instance);
     }
 
@@ -325,12 +344,15 @@ public partial class MatchFlow : Node
         ctx.HostPlayerId = hostId;
         RebuildRoster(ctx, hostId, peers);
 
-        // Rejoin flavor, first identify only (Transport not yet built): restore
-        // the frozen seating the match started with and re-mesh to the current
-        // members. seat_order is non-empty for any started match; empty means
-        // the server predates it or the session isn't actually live — fail
-        // rather than lay out portals from nothing.
-        if (State == MatchFlowState.Preparing && IsRejoin && Transport == null)
+        // First identify of a Preparing entered without start_signaling
+        // (Transport not yet built): a process-death rejoin, or the lobby
+        // poll's missed-start recovery. Restore the frozen seating the match
+        // started with and mesh to the current members. The normal start path
+        // never lands here — OnStartSignaling builds the transport before any
+        // later identify. seat_order is non-empty for any started match; empty
+        // means the server predates it or the session isn't actually live —
+        // fail rather than lay out portals from nothing.
+        if (State == MatchFlowState.Preparing && Transport == null)
         {
             if (seatOrder.Length == 0)
             {
@@ -456,6 +478,73 @@ public partial class MatchFlow : Node
         }
     }
 
+    // ---- lobby safety-net poll (missed start_signaling) ----
+
+    /// <summary>Fire the next lobby poll when due. Best-effort: a failed poll
+    /// just waits for the next interval — real session failures arrive as WS
+    /// terminal events, never through here.</summary>
+    private async void MaybePollLobby()
+    {
+        if (_lobbyPollInFlight || Time.GetTicksMsec() < _nextLobbyPollMsec)
+            return;
+        _lobbyPollInFlight = true;
+        _nextLobbyPollMsec = Time.GetTicksMsec() + LobbyPollIntervalMsec;
+
+        var ctx = SessionContext.Instance;
+        var code = ctx.SessionCode;
+        var result = await ctx.Api.GetSessionAsync(code);
+        // Not on the main thread here — marshal back before touching state.
+        Callable.From(() => OnLobbyPollResult(result, code)).CallDeferred();
+    }
+
+    private void OnLobbyPollResult(ApiResult<SessionPollResponse> result, string code)
+    {
+        _lobbyPollInFlight = false;
+        // Only act if we're still in the same lobby the poll was sent from.
+        if (State != MatchFlowState.InLobby || SessionContext.Instance.SessionCode != code)
+            return;
+        if (!result.Ok || result.Value is not { } info)
+            return;
+        if (info.Status is not ("starting" or "active"))
+            return;
+
+        RecoverMissedStart(info);
+    }
+
+    /// <summary>The session left `waiting` but no <c>start_signaling</c> ever
+    /// arrived (our WS was mid-reconnect at Start). Converge through the rejoin
+    /// sequence: adopt the rules the broadcast would have carried, replace the
+    /// lobby socket with a fresh identify — whose <c>Identified</c> frame
+    /// carries the frozen <c>seat_order</c> and the match's cached TURN
+    /// credentials — and mesh behind the connecting screen.</summary>
+    private void RecoverMissedStart(SessionPollResponse info)
+    {
+        Log.Warn("match.flow",
+            $"lobby poll: session is '{info.Status}' but start_signaling never arrived — recovering.");
+
+        var ctx = SessionContext.Instance;
+        ctx.ApplyWinCondition(info.WinCondition);
+        ctx.ApplySpawnSettings(info.SpawnSettings);
+
+        // `active` means the barrier already resolved — a ball may be in play,
+        // so the game scene must not serve (rejoin semantics). `starting` means
+        // nobody is in-match yet; a recovered host still serves normally.
+        IsRejoin = info.Status == "active";
+
+        CloseSignaling(sendLeaveFrame: false);
+        TransitionTo(MatchFlowState.Preparing, "recovered missed start");
+        _prepareDeadlineMsec = Time.GetTicksMsec() + PrepareTimeoutMsec;
+        EmitPreparing("Connecting to match…");
+
+        if (GetTree().ChangeSceneToFile(PreparingScene) != Error.Ok)
+        {
+            FailFlow("Could not open the connecting screen.");
+            return;
+        }
+
+        OpenSignaling(ctx);
+    }
+
     // ---- roster events (SessionContext is mutated only here) ----
 
     /// <summary>Rebuild the display roster from an Identified snapshot: host
@@ -555,9 +644,10 @@ public partial class MatchFlow : Node
         LeaveSession(sendLeaveFrame: false);
     }
 
-    /// <summary>Close and free the live net, clear the session, return to Idle.
-    /// Every exit — voluntary, failure, quit — funnels through here.</summary>
-    private void Teardown(bool sendLeaveFrame, string why)
+    /// <summary>Unhook, close, and free the live signaling socket. Shared by
+    /// the one teardown and the lobby poll's missed-start recovery (which
+    /// replaces the socket with a fresh identify without ending the session).</summary>
+    private void CloseSignaling(bool sendLeaveFrame)
     {
         if (Signaling is { } s)
         {
@@ -574,7 +664,17 @@ public partial class MatchFlow : Node
             s.Reconnected -= OnReconnected;
             if (sendLeaveFrame)
                 s.SendLeave();
+            s.CloseConnection();
+            s.QueueFree();
         }
+        Signaling = null;
+    }
+
+    /// <summary>Close and free the live net, clear the session, return to Idle.
+    /// Every exit — voluntary, failure, quit — funnels through here.</summary>
+    private void Teardown(bool sendLeaveFrame, string why)
+    {
+        CloseSignaling(sendLeaveFrame);
 
         if (Transport is { } t)
         {
@@ -586,10 +686,6 @@ public partial class MatchFlow : Node
                 tn.QueueFree();
         }
         Transport = null;
-
-        Signaling?.CloseConnection();
-        Signaling?.QueueFree();
-        Signaling = null;
 
         SessionContext.Instance?.ClearSession();
         IsRejoin = false;
