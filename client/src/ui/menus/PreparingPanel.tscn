@@ -1,0 +1,72 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://src/ui/menus/PreparingPanel.cs" id="1_script"]
+[ext_resource type="Theme" path="res://src/ui/theme/MenuTheme.tres" id="2_theme"]
+[ext_resource type="Texture2D" path="res://src/assets/sprites/ui/CopyIcon.png" id="3_copyicon"]
+
+[node name="PreparingPanel" type="PanelContainer"]
+theme = ExtResource("2_theme")
+script = ExtResource("1_script")
+
+[node name="Margins" type="MarginContainer" parent="."]
+layout_mode = 2
+theme_override_constants/margin_left = 48
+theme_override_constants/margin_top = 48
+theme_override_constants/margin_right = 48
+theme_override_constants/margin_bottom = 48
+
+[node name="Content" type="VBoxContainer" parent="Margins"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="TitleLabel" type="Label" parent="Margins/Content"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Connecting to players…"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 48
+
+[node name="StatusLabel" type="Label" parent="Margins/Content"]
+unique_name_in_owner = true
+layout_mode = 2
+text = ""
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 32
+
+[node name="CodeRow" type="HBoxContainer" parent="Margins/Content"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 16
+
+[node name="CodeHeader" type="Label" parent="Margins/Content/CodeRow"]
+layout_mode = 2
+text = "Code:"
+theme_override_font_sizes/font_size = 32
+
+[node name="CodeValue" type="Label" parent="Margins/Content/CodeRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "------"
+theme_override_font_sizes/font_size = 32
+
+[node name="CopyCodeButton" type="TextureButton" parent="Margins/Content/CodeRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+size_flags_vertical = 4
+texture_normal = ExtResource("3_copyicon")
+ignore_texture_size = true
+stretch_mode = 5
+
+[node name="CopiedFlash" type="Label" parent="Margins/Content"]
+unique_name_in_owner = true
+layout_mode = 2
+visible = false
+text = "Copied!"
+horizontal_alignment = 1
+
+[node name="CancelButton" type="Button" parent="Margins/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 64)
+layout_mode = 2
+text = "Cancel"

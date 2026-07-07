@@ -9,6 +9,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.23.0] — 2026-07-07
+
+Reworks the **lobby → game handoff** around a single lifecycle orchestrator —
+the long-term replacement for the quick-step transition that entered the game
+before the WebRTC mesh existed. Stage A of the three-stage handoff rework (next:
+a server ready-barrier, then pause-on-rejoin); see
+`docs/architecture/match-lifecycle.md`.
+
+### Added
+
+- **`MatchFlow` autoload** (`src/core/MatchFlow.cs`) — a lifecycle state machine
+  (`Idle → InLobby → Preparing → InMatch → PostMatch`) with a single legal-
+  transition gate (logged under the new `match.flow` category; duplicate or late
+  frames are ignored there instead of by per-scene one-shot flags). It owns the
+  `SignalingClient` + `WebRtcMeshTransport` as its own children for their whole
+  life, is the sole subscriber of lifecycle-mutating signaling events, and has
+  **one** start sequence, **one** rejoin sequence (both converge in `Preparing`),
+  and **one** teardown (`LeaveSession` / `EndMatchTo` / `QuitGame`) that
+  preserves the deliberate leave-frame vs transient-drop distinction.
+- **"Connecting to players…" phase** — a new `PreparingScreen` (wrapping a
+  reusable `PreparingPanel`, later reused as the pause-on-rejoin overlay) shows
+  while per-peer data channels open, counted against the start roster, with a
+  **30s deadline**; the phase also short-circuits before the deadline once
+  every expected peer has either connected or definitively failed (with at
+  least one failure) — a single failed peer doesn't abort while others are
+  still negotiating. The
+  game scene is only constructed once the mesh is up, so the host can no longer
+  serve into an unopened channel (the long-deferred **serve gate**, client-side
+  half).
+- **Main-menu failure line** — every abnormal session end (connect timeout,
+  kick, session closed, rejoin refused) lands on the main menu with a read-once
+  reason from `MatchFlow.TakeFlowError()`.
+
+### Changed
+
+- **`SessionLobby` / `JoinMenu` / `GameScene` are thin views now.** The start
+  choreography that existed twice (the lobby's `OnStartSignaling` and the
+  ~80%-duplicate rejoin path in `JoinMenu`) moved into MatchFlow once; the
+  scenes keep only pure-UI subscriptions (chat, reconnect overlays, score
+  paints) and route every exit through the one teardown.
+- **`SessionContext` is pure data again** — `AdoptNet`/`TeardownNet` (the
+  node-reparenting trick that carried the live net across scene changes), the
+  `Signaling`/`Transport` properties, and the `RejoinInProgress` flag are gone;
+  MatchFlow replaces them all (`MatchFlow.IsRejoin` covers the rejoin flavor).
+
 ## [0.22.0] — 2026-07-06
 
 Reshapes the corner barriers from an **L into a right triangle** (new

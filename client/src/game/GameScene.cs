@@ -10,10 +10,13 @@ namespace BriskaBlast.Game;
 /// <summary>
 /// Runs one player's screen of an Extended-mode round. Owns the authoritative
 /// <see cref="GameState"/> for this screen, steps <see cref="GameSimulation"/>
-/// each physics frame, and drives a <see cref="View2D"/>. Entered from the lobby
-/// once the WebRTC mesh is up (never standalone). The ball handoff over the
-/// transport and the score report to the server are wired in Slice D — marked
-/// below.
+/// each physics frame, and drives a <see cref="View2D"/>. Entered by
+/// <see cref="MatchFlow"/> once the WebRTC mesh is up (never standalone); the
+/// live signaling + transport are read from the orchestrator, and every exit
+/// (menu, quit, host-again) routes back through its one teardown. Lifecycle
+/// events (session end, kick, terminal close, game over) are MatchFlow's —
+/// this scene subscribes only to the pure-UI signaling events (reconnect
+/// overlays) and to MatchFlow's typed <c>MatchEnded</c>.
 /// </summary>
 public partial class GameScene : Node2D
 {
@@ -74,7 +77,6 @@ public partial class GameScene : Node2D
 
     private SignalingClient? _signaling;
     private NetGameController? _controller;
-    private bool _leaving;
 
     // Esc-bound pause menu (the design mockup). Null while closed; while open the
     // match stays live underneath but local paddle/serve input is suspended.
@@ -148,17 +150,16 @@ public partial class GameScene : Node2D
 
         BuildOverlay();
 
-        // Subscribe to the adopted signaling socket's lifecycle so a mid-game
-        // session end / kick / terminal drop returns to the menu instead of
-        // stranding us. HostChanged / *Reconnecting keep our host notion and the
-        // overlay honest as the server's host-loss grace plays out (Stage 4).
-        _signaling = ctx?.Signaling;
+        // The live net belongs to MatchFlow (this scene is only entered by it,
+        // post-mesh). Lifecycle events — session end, kick, terminal close —
+        // are the orchestrator's; here we take the game-over relay plus the
+        // pure-UI reconnect overlays. HostChanged is overlay-clear only: the
+        // roster mutation is MatchFlow's.
+        var flow = MatchFlow.Instance;
+        flow.MatchEnded += OnGameOver;
+        _signaling = flow.Signaling;
         if (_signaling != null)
         {
-            _signaling.SessionEnded += OnSessionEnded;
-            _signaling.GameOver += OnGameOver;
-            _signaling.Kicked += OnKicked;
-            _signaling.Closed += OnClosed;
             _signaling.HostChanged += OnHostChangedInGame;
             _signaling.HostReconnecting += OnHostReconnecting;
             _signaling.HostReconnected += OnHostReconnected;
@@ -170,17 +171,14 @@ public partial class GameScene : Node2D
         // Net glue: handoff send/receive over the transport + server-relayed
         // score channel. Only meaningful with both a transport and a signaling
         // socket; without them this is the defensive no-peer fallback.
-        if (ctx?.Transport != null && _signaling != null)
-            _controller = new NetGameController(_state, ctx.Transport, _signaling, _ballRadius);
+        if (flow.Transport != null && _signaling != null)
+            _controller = new NetGameController(_state, flow.Transport, _signaling, _ballRadius);
 
         // On a fresh start the host serves the first ball; everyone else starts
         // empty and receives a ball via handoff or when they're scored on. On a
         // REjoin the ball is already in play elsewhere, so a returning host must
-        // NOT spawn a second one — consume the flag either way.
-        bool isRejoin = ctx?.RejoinInProgress == true;
-        if (ctx != null)
-            ctx.RejoinInProgress = false;
-        if (ctx?.LocalPlayerIsHost == true && !isRejoin)
+        // NOT spawn a second one.
+        if (ctx?.LocalPlayerIsHost == true && !flow.IsRejoin)
             SpawnServeBall();
 
         _view.Render(_state);
@@ -192,12 +190,9 @@ public partial class GameScene : Node2D
         // emits another event after we leave.
         _controller?.Dispose();
         _controller = null;
+        MatchFlow.Instance.MatchEnded -= OnGameOver;
         if (_signaling != null)
         {
-            _signaling.SessionEnded -= OnSessionEnded;
-            _signaling.GameOver -= OnGameOver;
-            _signaling.Kicked -= OnKicked;
-            _signaling.Closed -= OnClosed;
             _signaling.HostChanged -= OnHostChangedInGame;
             _signaling.HostReconnecting -= OnHostReconnecting;
             _signaling.HostReconnected -= OnHostReconnected;
@@ -208,23 +203,11 @@ public partial class GameScene : Node2D
         }
     }
 
-    private void OnSessionEnded(string reason)
-    {
-        // After a win the server hands cleanup to SessionEnded right behind the
-        // GameOver frame. Once the end screen is up it owns navigation — don't let
-        // this auto-leave tear it down. Every other reason behaves as before.
-        if (_gameOver)
-            return;
-        LeaveToMenu($"Session ended ({reason}).");
-    }
-
-    private void OnKicked(string reason) => LeaveToMenu($"Removed from session ({reason}).");
-
-    // ---- end-of-match (server GameOver) ----
+    // ---- end-of-match (MatchFlow's GameOver relay) ----
 
     private void OnGameOver(string winnerPlayerId, Dictionary<string, int> scores)
     {
-        if (_gameOver || _leaving)
+        if (_gameOver)
             return;
         _gameOver = true;
 
@@ -248,37 +231,13 @@ public partial class GameScene : Node2D
         _endGameMenu.Populate(winnerPlayerId, scores);
     }
 
-    // "Return to Main Menu": same clean teardown as any leave.
-    private void OnEndGameMainMenu() => LeaveToMenu("");
+    // "Return to Main Menu": the one MatchFlow teardown (idempotent — a second
+    // press or a racing lifecycle event finds the flow already Idle).
+    private void OnEndGameMainMenu() => MatchFlow.Instance.LeaveSession(sendLeaveFrame: false);
 
     // "Host Game": tear the finished session down, then go set up a new one.
-    private void OnEndGameHost()
-    {
-        if (_leaving)
-            return;
-        _leaving = true;
-        var ctx = SessionContext.Instance;
-        ctx?.TeardownNet();
-        ctx?.ClearSession();
-        GetTree().ChangeSceneToFile("res://src/ui/menus/HostSetupMenu.tscn");
-    }
-
-    private void OnClosed(int code, string reason) => LeaveToMenu(
-        code == 1000 ? "Disconnected from session." : $"Connection closed ({code}).");
-
-    private void LeaveToMenu(string message)
-    {
-        if (_leaving)
-            return;
-        _leaving = true;
-        if (!string.IsNullOrEmpty(message))
-            Log.Info("game", message);
-
-        var ctx = SessionContext.Instance;
-        ctx?.TeardownNet();
-        ctx?.ClearSession();
-        GetTree().ChangeSceneToFile("res://src/ui/menus/MainMenu.tscn");
-    }
+    private void OnEndGameHost() =>
+        MatchFlow.Instance.EndMatchTo("res://src/ui/menus/HostSetupMenu.tscn");
 
     // ---- Esc pause menu ----
 
@@ -292,8 +251,9 @@ public partial class GameScene : Node2D
 
     private void OpenPauseMenu()
     {
-        // Mid-leave the scene is on its way out — don't pop a menu over it.
-        if (_leaving || _pauseMenu != null)
+        // Only while actually playing — mid-leave (flow already Idle) or
+        // post-match the scene is on its way out; don't pop a menu over it.
+        if (MatchFlow.Instance.State != MatchFlowState.InMatch || _pauseMenu != null)
             return;
         _pauseMenu = GD.Load<PackedScene>("res://src/ui/menus/PauseMenu.tscn")
             .Instantiate<PauseMenu>();
@@ -320,34 +280,22 @@ public partial class GameScene : Node2D
     // "Exit to main menu": leave WITHOUT an explicit `leave` frame, so the server
     // treats us as a transient drop — holding our slot for the 2-min reconnect
     // window and, if we were host, running the 30s promotion grace, exactly as if
-    // we'd dropped. LeaveToMenu's TeardownNet does the clean WS close that arms
-    // that path (contrast a deliberate Leave, which would promote immediately).
-    private void OnExitToMenu() => LeaveToMenu("");
+    // we'd dropped (contrast a deliberate Leave, which would promote immediately).
+    private void OnExitToMenu() => MatchFlow.Instance.LeaveSession(sendLeaveFrame: false);
 
     // "Quit Game": same transient-drop teardown (peers keep our slot and run the
     // grace timers), then fully close the app. Even if the clean close doesn't
     // flush before exit, the dropped socket is still a non-`leave` disconnect, so
     // the server arms the same grace.
-    private void OnQuitGame()
-    {
-        if (_leaving)
-            return;
-        _leaving = true;
-        var ctx = SessionContext.Instance;
-        ctx?.TeardownNet();
-        ctx?.ClearSession();
-        GetTree().Quit();
-    }
+    private void OnQuitGame() => MatchFlow.Instance.QuitGame();
 
     // ---- host-loss grace UI (Stage 4) ----
 
     private void OnHostChangedInGame(string playerId)
     {
-        // Promotion landed (or a voluntary transfer): keep our host notion
-        // current and clear the "host reconnecting…" overlay.
-        var ctx = SessionContext.Instance;
-        if (ctx != null)
-            ctx.HostPlayerId = playerId;
+        // Promotion landed (or a voluntary transfer): clear the "host
+        // reconnecting…" overlay. The roster/host mutation itself is
+        // MatchFlow's — this handler is pure UI.
         _hostReconnecting = false;
         UpdateOverlay();
     }

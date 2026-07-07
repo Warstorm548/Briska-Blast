@@ -232,6 +232,7 @@ Re-binding through settings is future work.
 | Central sprite/asset lookup | `client/src/core/SpriteRegistry.cs` (see [`asset-registry.md`](asset-registry.md)) |
 | Corner-barrier layout (shared collision + sprite geometry) | `client/src/game/CornerBarrier.cs` |
 | Scene host: input, serve, sim loop | `client/src/game/GameScene.cs` |
+| Session lifecycle (lobby → Preparing → match, rejoin, teardown) | `client/src/core/MatchFlow.cs` (see [`match-lifecycle.md`](match-lifecycle.md)) |
 | Handoff packet wire format | `client/src/game/net/GamePacket.cs` |
 | Net glue (handoff/score over `IPeerTransport` + signaling) | `client/src/game/net/NetGameController.cs` |
 | Server score channel | `server/src/signaling/{protocol,ws,mod}.rs` |
@@ -245,8 +246,14 @@ Re-binding through settings is future work.
   intentionally disabled.
 - **Ball-speed cap** — speed is currently preserved on every bounce with no cap;
   a cap is wanted so the ball can never get too fast for the eye to track.
-- **Serve gate** — if a player serves before the WebRTC channel is open, the
-  first handoff packet is dropped silently; a "wait for peers" gate is wanted.
+- ~~**Serve gate** — if a player serves before the WebRTC channel is open, the
+  first handoff packet is dropped silently; a "wait for peers" gate is wanted.~~
+  **Done (game v0.23.0, client-side):** `MatchFlow` holds everyone on a
+  "Connecting to players…" screen until every peer data channel is open (30s
+  deadline), so `GameScene` — and with it the host's serve — only exists once
+  handoffs can flow. See
+  [`match-lifecycle.md`](match-lifecycle.md); the server-authoritative half
+  (ready barrier) is the planned Stage B.
 - **Server-side trajectory validation** and **TURN relay** (symmetric-NAT peers)
   remain in [`../planning/roadmap.md`](../planning/roadmap.md). (**Usernames in the
   roster** shipped in game v0.12.0 / server v0.15.0 — the lobby and scoreboard now
