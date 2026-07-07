@@ -23,6 +23,7 @@ SettingsManager="*res://src/core/SettingsManager.cs"
 SingleInstance="*res://src/core/SingleInstance.cs"
 Log="*res://src/core/Log.cs"
 SessionContext="*res://src/core/SessionContext.cs"
+MatchFlow="*res://src/core/MatchFlow.cs"
 
 [display]
 
