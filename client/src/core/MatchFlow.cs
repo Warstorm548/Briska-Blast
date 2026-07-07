@@ -43,9 +43,11 @@ public partial class MatchFlow : Node
     private const string GameScene = "res://src/game/GameScene.tscn";
 
     /// <summary>How long Preparing may take (signaling identify on a rejoin +
-    /// full mesh bring-up) before the attempt fails back to the main menu.
-    /// Sized to the signaling reconnect window / server promotion grace, with
-    /// room for TURN-relay ICE.</summary>
+    /// full mesh bring-up + the server's ready barrier) before the attempt
+    /// fails back to the main menu. Sized to the signaling reconnect window /
+    /// server promotion grace, with room for TURN-relay ICE; the server's own
+    /// barrier valve (20s) always resolves under this deadline, so waiting on
+    /// <c>match_started</c> can only time out if the server is unreachable.</summary>
     private const ulong PrepareTimeoutMsec = 30_000;
 
     public static MatchFlow Instance { get; private set; } = null!;
@@ -97,6 +99,12 @@ public partial class MatchFlow : Node
     private readonly HashSet<string> _connectedPeers = new();
     private readonly HashSet<string> _failedPeers = new();
     private ulong _prepareDeadlineMsec;
+
+    // True once this client's mesh completed and its `client_ready` went out.
+    // From then on Preparing waits solely on the server's `match_started` —
+    // the only door into InMatch — and a WS blip re-sends the ready (it may
+    // have been lost mid-reconnect; the server answers a duplicate directly).
+    private bool _readySent;
 
     // Legal transitions. Anything else is logged and ignored — this table is
     // the single replacement for the per-scene one-shot guards (_leaving,
@@ -266,6 +274,8 @@ public partial class MatchFlow : Node
         s.Kicked += OnKicked;
         s.Closed += OnClosed;
         s.GameOver += OnGameOver;
+        s.MatchStarted += OnMatchStarted;
+        s.Reconnected += OnReconnected;
         Signaling = s;
         s.Connect(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
     }
@@ -344,6 +354,7 @@ public partial class MatchFlow : Node
         _expectedPeers.Clear();
         _connectedPeers.Clear();
         _failedPeers.Clear();
+        _readySent = false;
         foreach (var p in expectedPeers)
             if (p != ctx.PlayerId)
                 _expectedPeers.Add(p);
@@ -398,7 +409,31 @@ public partial class MatchFlow : Node
         if (!_expectedPeers.IsSubsetOf(_connectedPeers))
             return;
 
-        if (!TransitionTo(MatchFlowState.InMatch, "mesh complete"))
+        // Mesh up ≠ match on: everyone else's mesh must be up too. Report
+        // ready and hold for the server's match_started (broadcast when all
+        // are ready or its 20s valve fires — always under our deadline).
+        if (_readySent)
+            return;
+        _readySent = true;
+        Log.Info("match.flow", "mesh complete — client_ready sent, waiting for match_started.");
+        Signaling?.SendClientReady();
+        EmitPreparing("Waiting for other players…");
+    }
+
+    /// <summary>The server's <c>match_started</c> — the ready barrier resolved
+    /// (or a direct reply to a straggler's ready). The only door into InMatch.</summary>
+    private void OnMatchStarted()
+    {
+        // If the barrier's valve started the match while our own mesh is still
+        // coming up, stay in Preparing: our ready will be answered directly
+        // with another match_started once the mesh completes.
+        if (State != MatchFlowState.Preparing || !_readySent)
+        {
+            Log.Debug("match.flow", $"match_started ignored (state {State}, readySent {_readySent}).");
+            return;
+        }
+
+        if (!TransitionTo(MatchFlowState.InMatch, "match started"))
             return;
         if (GetTree().ChangeSceneToFile(GameScene) != Error.Ok)
         {
@@ -406,6 +441,18 @@ public partial class MatchFlow : Node
             Log.Error("match.flow", "failed to enter GameScene.");
             LastFlowError = "Could not start the match.";
             LeaveSession(sendLeaveFrame: false);
+        }
+    }
+
+    /// <summary>A WS blip healed mid-Preparing: the ready we sent may have been
+    /// lost with the old socket, so send it again — the server answers a
+    /// duplicate (or post-start) ready with a direct <c>match_started</c>.</summary>
+    private void OnReconnected()
+    {
+        if (State == MatchFlowState.Preparing && _readySent)
+        {
+            Log.Info("match.flow", "reconnected during Preparing — re-sending client_ready.");
+            Signaling?.SendClientReady();
         }
     }
 
@@ -523,6 +570,8 @@ public partial class MatchFlow : Node
             s.Kicked -= OnKicked;
             s.Closed -= OnClosed;
             s.GameOver -= OnGameOver;
+            s.MatchStarted -= OnMatchStarted;
+            s.Reconnected -= OnReconnected;
             if (sendLeaveFrame)
                 s.SendLeave();
         }
@@ -548,6 +597,7 @@ public partial class MatchFlow : Node
         _expectedPeers.Clear();
         _connectedPeers.Clear();
         _failedPeers.Clear();
+        _readySent = false;
         TransitionTo(MatchFlowState.Idle, why);
     }
 

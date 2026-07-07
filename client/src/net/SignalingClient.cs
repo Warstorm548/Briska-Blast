@@ -62,6 +62,13 @@ public partial class SignalingClient : Node
     /// end-game leaderboard. The server tears the session down via a following
     /// <see cref="SessionEnded"/>, which the game scene ignores once game-over.</summary>
     public event Action<string, Dictionary<string, int>>? GameOver;
+    /// <summary>The ready barrier resolved: every player's mesh is up (or the
+    /// server's grace valve fired) and the match is on. The client holds on the
+    /// connecting screen after its own mesh completes until this arrives —
+    /// broadcast at barrier resolution, or a direct reply to a late
+    /// <see cref="SendClientReady"/> — so nobody serves into a mesh a slower
+    /// peer hasn't finished opening.</summary>
+    public event Action? MatchStarted;
     /// <summary>A lobby chat message arrived. Carries (from, username, text):
     /// <c>from</c> is the server-attested sender id and <c>username</c> their
     /// display name (empty when none — fall back to <c>Player &lt;id&gt;</c>). The
@@ -135,6 +142,7 @@ public partial class SignalingClient : Node
     private sealed record ReportScoreFrame(string Type, string ScoringPlayerId, int Points);
     private sealed record TimeSyncFrame(string Type, long ClientSendMs);
     private sealed record SendChatFrame(string Type, string Text);
+    private sealed record ClientReadyFrame(string Type);
 
     /// <summary>Open the WS for <paramref name="code"/> and begin identifying.</summary>
     public void Connect(string code, string playerId, string secretToken)
@@ -211,6 +219,14 @@ public partial class SignalingClient : Node
     /// whole room (including this client). No-op if the socket isn't open.</summary>
     public void SendChatMessage(string text) =>
         SendFrame(new SendChatFrame("send_chat", text));
+
+    /// <summary>Report that this client's WebRTC mesh is fully up — its half of
+    /// the ready barrier. The server answers with <see cref="MatchStarted"/>
+    /// once everyone is ready (or immediately if the match already started).
+    /// Safe to re-send (e.g. after a WS reconnect); the server treats a
+    /// duplicate as a straggler and replies directly.</summary>
+    public void SendClientReady() =>
+        SendFrame(new ClientReadyFrame("client_ready"));
 
     /// <summary>Current time in the server-synced frame (ms). Both ends of a ball
     /// handoff stamp/compare with this so cross-machine wall-clock skew cancels
@@ -447,6 +463,9 @@ public partial class SignalingClient : Node
                     break;
                 case "chat_message":
                     ChatMessage?.Invoke(Str(root, "from"), Str(root, "username"), Str(root, "text"));
+                    break;
+                case "match_started":
+                    MatchStarted?.Invoke();
                     break;
                 case "time_sync":
                     // T4 = now; fold this round-trip into the server-clock offset.
