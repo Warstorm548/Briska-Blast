@@ -69,6 +69,14 @@ public partial class SignalingClient : Node
     /// <see cref="SendClientReady"/> — so nobody serves into a mesh a slower
     /// peer hasn't finished opening.</summary>
     public event Action? MatchStarted;
+    /// <summary>A process-death rejoiner is re-entering the live match: the
+    /// server paused everyone while it re-meshes. Carries (playerId, username,
+    /// resumeTimeoutSecs) — username empty when none on file. Resolved by
+    /// <see cref="MatchResumed"/> within at most resumeTimeoutSecs.</summary>
+    public event Action<string, string, int>? MatchPaused;
+    /// <summary>The pause ended (rejoiner meshed, dropped again, or the server's
+    /// valve fired). Carries countdownSecs — run a countdown, then unfreeze.</summary>
+    public event Action<int>? MatchResumed;
     /// <summary>A lobby chat message arrived. Carries (from, username, text):
     /// <c>from</c> is the server-attested sender id and <c>username</c> their
     /// display name (empty when none — fall back to <c>Player &lt;id&gt;</c>). The
@@ -133,7 +141,7 @@ public partial class SignalingClient : Node
     private readonly ServerClock _clock = new();
     private ulong _nextSyncMsec;
 
-    private sealed record IdentifyFrame(string Type, string PlayerId, string SecretToken);
+    private sealed record IdentifyFrame(string Type, string PlayerId, string SecretToken, bool Rejoin);
     private sealed record LeaveFrame(string Type);
     private sealed record OfferFrame(string Type, string To, string Sdp);
     private sealed record AnswerFrame(string Type, string To, string Sdp);
@@ -228,6 +236,14 @@ public partial class SignalingClient : Node
     public void SendClientReady() =>
         SendFrame(new ClientReadyFrame("client_ready"));
 
+    /// <summary>Declare this connection's identifies as a process-death rejoin
+    /// into a live match — the server then pauses the match while this client
+    /// re-meshes. Set by <see cref="Core.MatchFlow"/> only on its rejoin paths
+    /// (never for a lobby connect) and cleared once the client is in-match, so
+    /// a later transient WS auto-reconnect re-identifies as a normal member and
+    /// can't wrongly pause everyone.</summary>
+    public bool IdentifyAsRejoin { get; set; }
+
     /// <summary>Current time in the server-synced frame (ms). Both ends of a ball
     /// handoff stamp/compare with this so cross-machine wall-clock skew cancels
     /// and the transit fast-forward reflects only real network delay. Only
@@ -287,7 +303,7 @@ public partial class SignalingClient : Node
         if (_identifySent)
             return;
         _ws.SendText(JsonSerializer.Serialize(
-            new IdentifyFrame("identify", _playerId, _secretToken), Json.Options));
+            new IdentifyFrame("identify", _playerId, _secretToken, IdentifyAsRejoin), Json.Options));
         _identifySent = true;
     }
 
@@ -466,6 +482,15 @@ public partial class SignalingClient : Node
                     break;
                 case "match_started":
                     MatchStarted?.Invoke();
+                    break;
+                case "match_paused":
+                    MatchPaused?.Invoke(
+                        Str(root, "player_id"),
+                        Str(root, "username"),
+                        IntProp(root, "resume_timeout_secs"));
+                    break;
+                case "match_resumed":
+                    MatchResumed?.Invoke(IntProp(root, "countdown_secs"));
                     break;
                 case "time_sync":
                     // T4 = now; fold this round-trip into the server-clock offset.

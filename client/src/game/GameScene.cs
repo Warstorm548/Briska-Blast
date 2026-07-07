@@ -89,6 +89,17 @@ public partial class GameScene : Node2D
     private EndGameMenu? _endGameMenu;
     private bool _gameOver;
 
+    // Pause-on-rejoin freeze (server match_paused/match_resumed): while set,
+    // _PhysicsProcess steps nothing — every screen freezes together so balls
+    // aren't sent at the rejoiner's still-walled edge. Mirrors the _gameOver
+    // latch; resolved by the resume countdown reaching zero. The PreparingPanel
+    // is reused as the overlay ("Waiting for {name}…", no Cancel — mid-match
+    // there is nothing local to cancel).
+    private PreparingPanel? _pausePanel;
+    private bool _flowPaused;
+    private bool _resumeCountdownActive;
+    private ulong _resumeAtMsec;
+
     // Reconnect grace overlay. A client shows at most one message at a time:
     // its own socket dropped (self), the host's (host), or a peer's (peer).
     private CanvasLayer _overlayLayer = null!;
@@ -157,6 +168,8 @@ public partial class GameScene : Node2D
         // roster mutation is MatchFlow's.
         var flow = MatchFlow.Instance;
         flow.MatchEnded += OnGameOver;
+        flow.MatchPausedFor += OnMatchPaused;
+        flow.MatchResumedIn += OnMatchResumed;
         _signaling = flow.Signaling;
         if (_signaling != null)
         {
@@ -191,6 +204,8 @@ public partial class GameScene : Node2D
         _controller?.Dispose();
         _controller = null;
         MatchFlow.Instance.MatchEnded -= OnGameOver;
+        MatchFlow.Instance.MatchPausedFor -= OnMatchPaused;
+        MatchFlow.Instance.MatchResumedIn -= OnMatchResumed;
         if (_signaling != null)
         {
             _signaling.HostChanged -= OnHostChangedInGame;
@@ -218,10 +233,14 @@ public partial class GameScene : Node2D
             _state.Scores[pid] = pts;
         _view.Render(_state); // one last paint, then the sim freezes (_PhysicsProcess early-returns)
 
-        // The match is over: drop the pause overlay if it was open, then show the
-        // end screen on top of the frozen game.
+        // The match is over: drop the pause overlays if they were open (the Esc
+        // menu and a pause-on-rejoin hold alike — the end screen supersedes
+        // both), then show it on top of the frozen game.
         if (_pauseMenu != null)
             ClosePauseMenu();
+        _flowPaused = false;
+        _resumeCountdownActive = false;
+        RemovePausePanel();
 
         _endGameMenu = GD.Load<PackedScene>("res://src/ui/menus/EndGameMenu.tscn")
             .Instantiate<EndGameMenu>();
@@ -288,6 +307,68 @@ public partial class GameScene : Node2D
     // flush before exit, the dropped socket is still a non-`leave` disconnect, so
     // the server arms the same grace.
     private void OnQuitGame() => MatchFlow.Instance.QuitGame();
+
+    // ---- pause-on-rejoin (MatchFlow's match_paused/match_resumed relays) ----
+
+    private void OnMatchPaused(string displayName)
+    {
+        if (_gameOver)
+            return;
+        _flowPaused = true;
+        // A second rejoiner while already paused just updates the name; a pause
+        // landing mid-countdown cancels the countdown (a new hold arrived).
+        _resumeCountdownActive = false;
+
+        if (_pausePanel == null)
+        {
+            _pausePanel = GD.Load<PackedScene>("res://src/ui/menus/PreparingPanel.tscn")
+                .Instantiate<PreparingPanel>();
+            _overlayLayer.AddChild(_pausePanel);
+            _pausePanel.SetAnchorsPreset(Control.LayoutPreset.Center);
+            _pausePanel.ShowCancel(false);
+        }
+        _pausePanel.SetTitle("Match paused");
+        _pausePanel.SetStatus($"Waiting for {displayName} to reconnect…");
+    }
+
+    private void OnMatchResumed(int countdownSecs)
+    {
+        if (_gameOver || !_flowPaused)
+            return;
+        _resumeCountdownActive = true;
+        _resumeAtMsec = Time.GetTicksMsec() + (ulong)Mathf.Max(countdownSecs, 0) * 1000UL;
+    }
+
+    private void RemovePausePanel()
+    {
+        _pausePanel?.QueueFree();
+        _pausePanel = null;
+    }
+
+    /// <summary>Drive the frozen phase each physics tick: paint the resume
+    /// countdown once it's running and unfreeze when it reaches zero. Returns
+    /// true while the sim must stay frozen.</summary>
+    private bool TickFlowPause()
+    {
+        if (!_flowPaused)
+            return false;
+        if (!_resumeCountdownActive)
+            return true; // waiting on the rejoiner / the server valve
+
+        ulong now = Time.GetTicksMsec();
+        if (now < _resumeAtMsec)
+        {
+            int remaining = (int)((_resumeAtMsec - now + 999) / 1000);
+            _pausePanel?.SetTitle("Match resuming");
+            _pausePanel?.SetStatus($"Resuming in {remaining}…");
+            return true;
+        }
+
+        _flowPaused = false;
+        _resumeCountdownActive = false;
+        RemovePausePanel();
+        return false;
+    }
 
     // ---- host-loss grace UI (Stage 4) ----
 
@@ -437,6 +518,11 @@ public partial class GameScene : Node2D
         // Match over: the simulation is frozen behind the end screen. Step nothing,
         // accept no input — the last paint in OnGameOver stays on screen.
         if (_gameOver)
+            return;
+
+        // Paused for a rejoiner: every screen freezes together (input, spawns,
+        // sim, handoffs) until the resume countdown runs out.
+        if (TickFlowPause())
             return;
 
         var dt = (float)delta;
