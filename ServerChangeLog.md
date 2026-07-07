@@ -5,6 +5,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.23.0] — 2026-07-07
+
+Adds the **ready barrier** — Stage B of the three-stage lobby → game handoff
+rework (`docs/architecture/match-lifecycle.md`). The session status
+`starting → active` transition finally becomes real: the match starts when
+every player's WebRTC mesh is actually up, not when the host's `/start`
+returns, closing the server-side half of the serve gate.
+
+### Added
+
+- **`client_ready` / `match_started` signaling frames**: each client reports
+  `client_ready` once its mesh is fully up (every expected data channel open);
+  when all seated players are ready the server broadcasts `match_started` and
+  flips the session `starting → active` (a Lua CAS modeled on `/start`'s
+  script). Clients hold on the connecting screen until `match_started`, so
+  nobody can serve into a mesh a slower peer hasn't finished opening.
+- **Ready-barrier state on the signaling room** (in-memory, like scores): the
+  frozen start roster is seeded at `/start` beside the win target;
+  `record_ready` classifies each ready (`Pending` / `AllReady` /
+  `AlreadyStarted` / `NotSeated`) and a `match_started` latch makes barrier
+  resolution single-winner. A ready arriving **after** resolution (a barrier
+  timeout straggler, a poll-fallback recovery, or a future Stage C rejoiner)
+  gets a **direct `match_started` reply**, so every client converges on the
+  same "send ready, wait for match_started" contract.
+- **20s grace valve** (`READY_GRACE_SECS`): a plain spawned timer armed at
+  `/start` starts the match anyway if someone never readies up — sized under
+  the clients' own 30s Preparing deadline so a slow-but-alive lobby always
+  resolves server-side first. Deliberately not the `arm_grace` map (that
+  refuses to arm while the player has a live socket, which everyone here does);
+  the latch is the single-winner mechanism.
+
+### Rollout
+
+- **Bump `min_game_version` to `0.24.0`** when deploying: an older client never
+  sends `client_ready`, so a mixed lobby would only start via the 20s valve —
+  with the old client already playing alone while the rest wait. A server
+  restart mid-barrier loses the in-memory ready state (like scores); the
+  clients' Preparing deadline then fails them back to the menu cleanly.
+
 ## [0.22.0] — 2026-07-04
 
 Adds **TURN relay support via Cloudflare's managed TURN service**, fixing the

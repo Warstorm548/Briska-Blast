@@ -10,12 +10,13 @@ was silently dropped.
 This is **Stage A** of a three-stage rework agreed 2026-07 (this doc grows with
 each stage):
 
-- **Stage A (game 0.23.0, shipped here)** — client `MatchFlow` state machine +
+- **Stage A (game 0.23.0, shipped)** — client `MatchFlow` state machine +
   the `Preparing` connecting phase.
-- **Stage B (planned)** — server ready-barrier: a `client_ready` frame after
-  mesh-up, the server flips the session `starting → active` and broadcasts
-  `match_started` when all members are ready (or a ~20s grace elapses), plus a
-  lobby poll fallback so a client that misses `start_signaling` recovers.
+- **Stage B (server 0.23.0 / game 0.24.0, shipped here)** — server
+  ready-barrier: a `client_ready` frame after mesh-up, the server flips the
+  session `starting → active` and broadcasts `match_started` when all members
+  are ready (or a 20s grace valve fires), plus a lobby poll fallback so a
+  client that misses `start_signaling` recovers.
 - **Stage C (planned)** — pause/resume on a mid-match rejoin: the server
   broadcasts `match_paused` while a process-death rejoiner re-meshes (everyone
   freezes behind the same `PreparingPanel` as an overlay) and `match_resumed`
@@ -86,15 +87,40 @@ while still in the lobby) is logged and ignored. There are no per-scene
   per-peer `PeerConnected` events against the expected roster (start roster
   minus self), folding in `PeerFailed`/`PeerDisconnected`; a `PeerLeft` during
   Preparing removes that member from the expected set so a ghost can't hang the
-  phase. Completion = expected ⊆ connected → `InMatch` → `GameScene`.
+  phase. Mesh complete = expected ⊆ connected.
+- **The ready barrier (Stage B).** Mesh completion doesn't enter the match —
+  it sends `client_ready` and holds ("Waiting for other players…"). Server
+  side, the frozen start roster is seeded on the signaling room at `/start`
+  (beside the win target, in-memory like scores); when every seated player's
+  ready is in — or a **20s grace valve** (`READY_GRACE_SECS`, a plain spawned
+  timer; the `match_started` latch is the single-winner between the two) fires
+  first — the server broadcasts **`match_started`** and flips the session
+  `starting → active` via a Lua CAS. `match_started` is the **only door into
+  `InMatch`**; a ready arriving after resolution (straggler, poll recovery,
+  Stage C rejoiner) gets a direct reply, so everything converges on "send
+  ready, wait for match_started". A WS blip mid-wait re-sends the ready on
+  reconnect. Since `GameScene._Ready` (which spawns the host's serve ball) now
+  runs only after the barrier, the serve gate is **server-authoritative**.
 - **Deadline 30s** (`PrepareTimeoutMsec`; sized to the WS reconnect window /
-  server promotion grace, with room for TURN ICE), plus an early fail once every
-  expected peer resolved and any failed. Failure lands on the main menu with a
-  read-once reason (`TakeFlowError`).
-- Because `GameScene._Ready` (which builds `GameState` and spawns the host's
-  serve ball) only runs after completion, the host **cannot serve into an
-  unopened channel** anymore — the client-side half of the serve gate. Stage B
-  makes it server-authoritative.
+  server promotion grace, with room for TURN ICE — and above the server's 20s
+  valve, so the barrier wait itself can only time out if the server is
+  unreachable), plus an early fail once every expected peer resolved and any
+  failed. Failure lands on the main menu with a read-once reason
+  (`TakeFlowError`).
+- **Lobby safety-net poll.** `start_signaling` is a best-effort broadcast; a
+  client whose WS is mid-reconnect at Start misses it. While `InLobby`,
+  MatchFlow polls `GET /session/:code` every **7s** (a 4-player lobby behind
+  one NAT stays under the shared 60/min per-IP session limiter). If the
+  session left `waiting` with no `start_signaling` received, it recovers
+  through the rejoin convergence: adopt the poll's rules, swap the lobby
+  socket for a fresh identify (the `Identified` frame carries the frozen
+  `seat_order` + the match's cached TURN credentials), and mesh behind the
+  connecting screen. `IsRejoin` (no-serve semantics) is set only when the
+  session is already `active` — recovering into `starting` means nobody has
+  served yet, so a recovered **host** still serves normally. The
+  first-identify mesh bring-up keys on "in `Preparing` with no transport yet"
+  (the normal start path builds its transport synchronously in
+  `start_signaling`, so it never lands there).
 - Chat has no subscriber during Preparing; lines broadcast in that window are
   simply not shown to that client (deliberate — not worth buffering).
 
@@ -113,13 +139,17 @@ Every exit funnels through one private `Teardown`:
 - All failures (`FailFlow`) set `LastFlowError` and run `LeaveSession(false)`;
   the main menu shows the reason once.
 
-## Known limits (until Stages B/C land)
+## Known limits (until Stage C lands)
 
-- `start_signaling` is still a best-effort broadcast; a client that misses it
-  (WS mid-reconnect at Start) stays in the lobby. Stage B's poll fallback fixes
-  this.
-- The server still never sets `SessionStatus::Active`; matches live in
-  `Starting`. Stage B's ready-barrier makes `Active` real.
 - A mid-match rejoiner re-meshes while the game keeps running; balls sent at
   its edge before the mesh heals bounce off the temporary wall. Stage C pauses
   the match for the re-mesh instead.
+- A server restart mid-barrier loses the in-memory ready state (like scores):
+  no `match_started` ever comes, and clients fail back to the menu on their
+  30s Preparing deadline. Acceptable — a restart kills the live match anyway.
+- If the **host** misses `start_signaling` *and* the 20s valve starts the
+  match before its poll recovery lands, the host recovers with rejoin
+  (no-serve) semantics into a match nobody has served — a ball-less match.
+  Requires the host's WS to blip exactly across Start
+  plus a >20s recovery; revisit with Stage C's pause machinery if it ever
+  shows up in the field.
