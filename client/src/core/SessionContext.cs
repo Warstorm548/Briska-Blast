@@ -9,6 +9,9 @@ namespace BriskaBlast.Core;
 /// Process-wide session + identity state (autoload singleton). Holds the
 /// channel identity handed over by the launcher, owns the one
 /// <see cref="ServerApi"/> instance, and tracks the current lobby roster.
+/// Pure data: the live networking (signaling socket, peer transport) and the
+/// session lifecycle belong to <see cref="MatchFlow"/>, which is also the only
+/// place this state is mutated from signaling events.
 /// </summary>
 public partial class SessionContext : Node
 {
@@ -68,19 +71,6 @@ public partial class SessionContext : Node
     public bool HasIdentity => !string.IsNullOrEmpty(PlayerId) && !string.IsNullOrEmpty(SecretToken);
 
     public ServerApi Api { get; private set; } = null!;
-
-    /// <summary>True while we're rejoining a match already in progress (entered
-    /// from the Join screen, not the lobby Start). <see cref="Game.GameScene"/>
-    /// reads this in <c>_Ready</c> to skip the host's first serve — the ball is
-    /// already in play elsewhere — then clears it.</summary>
-    public bool RejoinInProgress { get; set; }
-
-    // ---- Live networking, carried across the lobby → game scene change ----
-    // The lobby creates the signaling socket + WebRTC mesh; on start_signaling
-    // it hands them here via AdoptNet so they survive ChangeSceneToFile and the
-    // game scene keeps using the same connection. Null until adopted.
-    public SignalingClient? Signaling { get; private set; }
-    public IPeerTransport? Transport { get; private set; }
 
     public override void _Ready()
     {
@@ -203,7 +193,8 @@ public partial class SessionContext : Node
 
     /// <summary>Set up local state for rejoining a live match by code (process-
     /// death recovery). The roster and host arrive authoritatively in the WS
-    /// <c>Identified</c> frame, so they start empty here.</summary>
+    /// <c>Identified</c> frame, so they start empty here; the rejoin flavor
+    /// itself is tracked by <see cref="MatchFlow.IsRejoin"/>.</summary>
     public void StartRejoinSession(string code, string mode, int maxPlayers,
         WinConditionDto winCondition, SpawnSettingsDto spawnSettings)
     {
@@ -216,7 +207,6 @@ public partial class SessionContext : Node
         SeatOrder.Clear();
         _usernames.Clear();
         HostPlayerId = "";
-        RejoinInProgress = true;
     }
 
     /// <summary>Capture the server-authoritative, frozen seating roster (join
@@ -271,7 +261,8 @@ public partial class SessionContext : Node
     }
 
     /// <summary>Reset all per-session state (code, mode, roster, seating, usernames,
-    /// host, rejoin flag) back to empty — called when a match ends or is left.</summary>
+    /// host) back to empty — called by <see cref="MatchFlow"/>'s teardown when a
+    /// match ends or is left.</summary>
     public void ClearSession()
     {
         SessionCode = "";
@@ -285,39 +276,6 @@ public partial class SessionContext : Node
         SeatOrder.Clear();
         _usernames.Clear();
         HostPlayerId = "";
-        RejoinInProgress = false;
-    }
-
-    /// <summary>Reparent the live signaling + transport under this autoload so
-    /// they outlive the lobby scene. Called by the lobby on start_signaling,
-    /// synchronously before it changes to the game scene.</summary>
-    public void AdoptNet(SignalingClient signaling, IPeerTransport? transport)
-    {
-        Reparent(signaling);
-        if (transport is Node transportNode)
-            Reparent(transportNode);
-        Signaling = signaling;
-        Transport = transport;
-    }
-
-    private void Reparent(Node node)
-    {
-        node.GetParent()?.RemoveChild(node);
-        AddChild(node);
-    }
-
-    /// <summary>Close and free the adopted signaling + transport (game exit or
-    /// session end). No-op when nothing was adopted.</summary>
-    public void TeardownNet()
-    {
-        Transport?.Close();
-        if (Transport is Node transportNode)
-            transportNode.QueueFree();
-        Transport = null;
-
-        Signaling?.CloseConnection();
-        Signaling?.QueueFree();
-        Signaling = null;
     }
 
     /// <summary>Record one peer's server-provided display name (from a
