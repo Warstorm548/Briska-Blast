@@ -162,8 +162,16 @@ public partial class SessionLobby : Control
         {
             // Host cancels → tear the session down server-side, then leave
             // locally. No leave frame — the session is being deleted anyway.
-            await ctx.Api.CloseSessionAsync(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
-            Callable.From(() => MatchFlow.Instance.LeaveSession(sendLeaveFrame: false)).CallDeferred();
+            // Only leave once the server actually closed it; otherwise stay so
+            // the lobby doesn't diverge from a still-live session.
+            var result = await ctx.Api.CloseSessionAsync(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
+            Callable.From(() =>
+            {
+                if (result.Ok)
+                    MatchFlow.Instance.LeaveSession(sendLeaveFrame: false);
+                else
+                    ShowStatus($"Could not close the session: {result.ErrorCode}");
+            }).CallDeferred();
         }
         else
         {
@@ -175,9 +183,14 @@ public partial class SessionLobby : Control
     private async void OnReturnToSetupPressed()
     {
         var ctx = SessionContext.Instance;
-        await ctx.Api.CloseSessionAsync(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
+        var result = await ctx.Api.CloseSessionAsync(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
         Callable.From(() =>
-            MatchFlow.Instance.EndMatchTo("res://src/ui/menus/HostSetupMenu.tscn")).CallDeferred();
+        {
+            if (result.Ok)
+                MatchFlow.Instance.EndMatchTo("res://src/ui/menus/HostSetupMenu.tscn");
+            else
+                ShowStatus($"Could not close the session: {result.ErrorCode}");
+        }).CallDeferred();
     }
 
     private async void OnPromote(int slotIndex)

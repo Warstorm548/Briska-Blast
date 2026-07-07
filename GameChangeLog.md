@@ -31,7 +31,10 @@ a server ready-barrier, then pause-on-rejoin); see
 - **"Connecting to players…" phase** — a new `PreparingScreen` (wrapping a
   reusable `PreparingPanel`, later reused as the pause-on-rejoin overlay) shows
   while per-peer data channels open, counted against the start roster, with a
-  **30s deadline** and an early-fail when a peer's ICE definitively fails. The
+  **30s deadline**; the phase also short-circuits before the deadline once
+  every expected peer has either connected or definitively failed (with at
+  least one failure) — a single failed peer doesn't abort while others are
+  still negotiating. The
   game scene is only constructed once the mesh is up, so the host can no longer
   serve into an unopened channel (the long-deferred **serve gate**, client-side
   half).

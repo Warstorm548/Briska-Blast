@@ -253,9 +253,10 @@ serve gate. Shipped as game **v0.23.0** (client-only). Full reference:
   and ONE teardown. The duplicated start choreography in `SessionLobby` /
   `JoinMenu` is gone; the scenes are thin views.
 - **Preparing phase**: a "Connecting to players…" screen counts per-peer data
-  channels against the start roster (30s deadline, early fail on definitive ICE
-  failure); `GameScene` is only constructed post-mesh, so the host can't serve
-  into an unopened channel.
+  channels against the start roster (30s deadline; it only fails early once
+  every expected peer has either connected or definitively failed — one failed
+  peer doesn't abort while others are still negotiating); `GameScene` is only
+  constructed post-mesh, so the host can't serve into an unopened channel.
 - **Failure surfacing**: every abnormal end lands on the main menu with a
   read-once reason (`TakeFlowError`).
 

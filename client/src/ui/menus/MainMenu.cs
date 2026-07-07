@@ -31,9 +31,14 @@ public partial class MainMenu : Control
                 Text = flowError,
                 HorizontalAlignment = HorizontalAlignment.Center,
             };
+            // Anchor to the bottom edge and lift it via offsets (not Position,
+            // which wouldn't track a window resize).
             status.SetAnchorsPreset(LayoutPreset.BottomWide);
-            status.Position = new Vector2(status.Position.X, status.Position.Y - 60);
+            status.OffsetTop = -100;
+            status.OffsetBottom = -60;
             status.AddThemeFontSizeOverride("font_size", 28);
+            // Warning tint so an abnormal session end reads as one at a glance.
+            status.AddThemeColorOverride("font_color", new Color(1f, 0.45f, 0.45f));
             AddChild(status);
         }
     }

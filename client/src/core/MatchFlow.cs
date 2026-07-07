@@ -156,9 +156,12 @@ public partial class MatchFlow : Node
             Teardown(sendLeaveFrame: false, why: "stale session on EnterLobby");
         }
 
-        var ctx = SessionContext.Instance;
-        OpenSignaling(ctx);
+        // Transition BEFORE dialing: SignalingClient.Connect emits Closed
+        // synchronously when the dial itself fails, and OnClosed ignores closes
+        // while Idle — so the state must already be InLobby for an immediate
+        // connect failure to fail the flow instead of being swallowed.
         TransitionTo(MatchFlowState.InLobby, "entered lobby");
+        OpenSignaling(SessionContext.Instance);
     }
 
     /// <summary>Rejoin a live match (process-death recovery): open a fresh
@@ -175,8 +178,10 @@ public partial class MatchFlow : Node
         }
 
         IsRejoin = true;
-        var ctx = SessionContext.Instance;
-        OpenSignaling(ctx);
+        // Transition + connecting screen BEFORE dialing (same reasoning as
+        // EnterLobby): a synchronous connect failure then lands in OnClosed
+        // with the state already Preparing, and its teardown's main-menu scene
+        // change — issued last — wins over the connecting screen.
         TransitionTo(MatchFlowState.Preparing, "rejoining live match");
 
         // The deadline covers identify + mesh together — a rejoin that can't
@@ -185,7 +190,12 @@ public partial class MatchFlow : Node
         EmitPreparing("Rejoining match…");
 
         if (GetTree().ChangeSceneToFile(PreparingScene) != Error.Ok)
+        {
             FailFlow("Could not open the connecting screen.");
+            return;
+        }
+
+        OpenSignaling(SessionContext.Instance);
     }
 
     /// <summary>Send a lobby chat line through the live signaling socket, so

@@ -42,7 +42,11 @@ public partial class SessionContext : Node
             ? $"First to {WinScoreTarget}"
             : WinConditionKind;
 
-    /// <summary>Roster as server player_ids, host first. Drives the lobby.</summary>
+    /// <summary>Roster as server player_ids — host first as of the last
+    /// Identified snapshot. Drives the lobby slots; a later promotion updates
+    /// <see cref="HostPlayerId"/> without reshuffling positions (the "Host" tag
+    /// moves, the slots stay put). Who is host is always answered by
+    /// <see cref="HostPlayerId"/>, never by position.</summary>
     public List<string> PlayerIds { get; } = new();
     /// <summary>Frozen Extended-mode seating roster — `[host, …joiners]` in join
     /// order, self-inclusive — captured once at match Start (from
