@@ -7,20 +7,20 @@ the start choreography existed twice (lobby start + process-death rejoin) and
 the game scene was entered before the WebRTC mesh existed, so an early serve
 was silently dropped.
 
-This is **Stage A** of a three-stage rework agreed 2026-07 (this doc grows with
-each stage):
+All three stages of the rework agreed 2026-07 have shipped:
 
-- **Stage A (game 0.23.0, shipped)** — client `MatchFlow` state machine +
+- **Stage A (game 0.23.0)** — client `MatchFlow` state machine +
   the `Preparing` connecting phase.
-- **Stage B (server 0.23.0 / game 0.24.0, shipped here)** — server
+- **Stage B (server 0.23.0 / game 0.24.0)** — server
   ready-barrier: a `client_ready` frame after mesh-up, the server flips the
   session `starting → active` and broadcasts `match_started` when all members
   are ready (or a 20s grace valve fires), plus a lobby poll fallback so a
   client that misses `start_signaling` recovers.
-- **Stage C (planned)** — pause/resume on a mid-match rejoin: the server
-  broadcasts `match_paused` while a process-death rejoiner re-meshes (everyone
-  freezes behind the same `PreparingPanel` as an overlay) and `match_resumed`
-  when the rejoiner readies up or a ~25s valve fires.
+- **Stage C (server 0.24.0 / game 0.25.0)** — pause/resume on a mid-match
+  rejoin: the server broadcasts `match_paused` while a process-death rejoiner
+  re-meshes (everyone freezes behind the same `PreparingPanel` as an overlay)
+  and `match_resumed` when the rejoiner readies up, drops again, or a 25s
+  valve fires.
 
 ## The state machine
 
@@ -60,14 +60,17 @@ while still in the lobby) is logged and ignored. There are no per-scene
 - **Event ownership split.** MatchFlow is the *sole* subscriber of
   lifecycle-mutating signaling events — `Identified`, `PeerJoined`, `PeerLeft`,
   `HostChanged` (the only code that mutates the `SessionContext` roster),
-  `StartSignaling`, `SessionEnded`, `Kicked`, `Closed`, `GameOver`. Views
+  `StartSignaling`, `SessionEnded`, `Kicked`, `Closed`, `GameOver`,
+  `MatchStarted`, `MatchPaused`/`MatchResumed` (plus `Reconnected`, for the
+  ready re-send below — views may also subscribe to that one). Views
   subscribe directly (via `MatchFlow.Signaling`) only to **pure-UI** events:
   `ChatMessage`, `Reconnecting`/`Reconnected`, the `Host/PeerReconnecting`
   overlays, and `ScoreUpdate` + the offer/answer/ICE relays consumed by
   `NetGameController`/the transport (net glue, not lifecycle).
 - **MatchFlow's typed surface for views:** `StateChanged`, `RosterChanged`
   (re-render the lobby), `PreparingProgress` (+ the pull-on-entry
-  `PreparingStatus`), `MatchEnded` (the GameOver relay `GameScene` consumes).
+  `PreparingStatus`), `MatchEnded` (the GameOver relay `GameScene` consumes),
+  and the pause relays `MatchPausedFor`/`MatchResumedIn` (InMatch only).
 - **`SessionContext` is pure data**: identity, the one `ServerApi`, and session
   fields (code/mode/rules/roster/seat order/usernames). `MatchFlow.IsRejoin`
   replaced `RejoinInProgress`.
@@ -139,17 +142,48 @@ Every exit funnels through one private `Teardown`:
 - All failures (`FailFlow`) set `LastFlowError` and run `LeaveSession(false)`;
   the main menu shows the reason once.
 
-## Known limits (until Stage C lands)
+## Pause-on-rejoin (Stage C)
 
-- A mid-match rejoiner re-meshes while the game keeps running; balls sent at
-  its edge before the mesh heals bounce off the temporary wall. Stage C pauses
-  the match for the re-mesh instead.
-- A server restart mid-barrier loses the in-memory ready state (like scores):
-  no `match_started` ever comes, and clients fail back to the menu on their
-  30s Preparing deadline. Acceptable — a restart kills the live match anyway.
+A process-death rejoin used to re-mesh while the game kept running — balls
+sent at the rejoiner's edge bounced off a temporary wall. Now the match
+freezes for the re-mesh:
+
+- **Only a true rejoin pauses.** The `identify` frame carries `rejoin: true`
+  exactly on the client's rejoin paths (`BeginRejoin`, the lobby poll's
+  recovery into an `active` match). It is **cleared the moment the client
+  enters the match**, so a later transient WS auto-reconnect — same process,
+  mesh intact — re-identifies as a normal member; and the *initial* mid-game
+  drop never pauses anything (peers just see the reconnect overlay, as
+  before).
+- **Server side**, a rejoin identify into a started match (the barrier's
+  `match_started` latch is the "started" test) places a **pause hold** on the
+  room and broadcasts `match_paused { player_id, username,
+  resume_timeout_secs: 25 }`. Holds are a set, so overlapping rejoiners stack
+  and the match resumes only when the **last** hold clears. Three racers
+  release a hold — the rejoiner's `client_ready` (released just before its
+  direct `match_started` reply, so the room's countdown is already running
+  when the rejoiner lands), the rejoiner disconnecting again, and a **25s
+  valve** (`PAUSE_VALVE_SECS`, under the rejoiner's own 30s Preparing
+  deadline) — all funneling through one `resume_if_cleared`, whose remove-wins
+  semantics make the `match_resumed { countdown_secs: 3 }` broadcast
+  single-shot.
+- **Client side**, MatchFlow relays these as typed `MatchPausedFor(name)` /
+  `MatchResumedIn(secs)` (fired only while `InMatch`). `GameScene` freezes the
+  whole physics tick behind a `_flowPaused` latch (mirroring `_gameOver`) and
+  shows the reused `PreparingPanel` as an overlay — "Waiting for {name} to
+  reconnect…", Cancel hidden. On resume it paints a 3-2-1 countdown, then
+  every screen unfreezes together. If the valve resumed before the rejoiner's
+  mesh healed, its edge is simply walled until the re-mesh completes (the
+  pre-Stage-C behavior, now bounded to that window).
+
+## Known limits
+
+- A server restart mid-barrier or mid-pause loses the in-memory ready/pause
+  state (like scores): clients fail back to the menu on their 30s Preparing
+  deadline, or unfreeze late via their own overlays. Acceptable — a restart
+  kills the live match anyway.
 - If the **host** misses `start_signaling` *and* the 20s valve starts the
   match before its poll recovery lands, the host recovers with rejoin
   (no-serve) semantics into a match nobody has served — a ball-less match.
   Requires the host's WS to blip exactly across Start
-  plus a >20s recovery; revisit with Stage C's pause machinery if it ever
-  shows up in the field.
+  plus a >20s recovery; revisit if it ever shows up in the field.

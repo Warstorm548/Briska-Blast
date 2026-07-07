@@ -92,6 +92,16 @@ public partial class MatchFlow : Node
     /// (winnerPlayerId, finalScores). Fires alongside InMatch → PostMatch.</summary>
     public event Action<string, Dictionary<string, int>>? MatchEnded;
 
+    /// <summary>The match paused for a process-death rejoiner (server
+    /// `match_paused`). Carries the rejoiner's display name for the "Waiting
+    /// for {name}…" overlay. Fired only while InMatch — the rejoiner itself is
+    /// in Preparing and its go-signal stays <c>match_started</c>.</summary>
+    public event Action<string>? MatchPausedFor;
+
+    /// <summary>The pause ended (server `match_resumed`). Carries the shared
+    /// unfreeze countdown in seconds. Fired only while InMatch.</summary>
+    public event Action<int>? MatchResumedIn;
+
     // Preparing bookkeeping: the mesh is "up" when every expected peer's data
     // channel has opened. The transport has no aggregate signal — we count its
     // per-peer events against the roster we handed it.
@@ -295,6 +305,12 @@ public partial class MatchFlow : Node
         s.GameOver += OnGameOver;
         s.MatchStarted += OnMatchStarted;
         s.Reconnected += OnReconnected;
+        s.MatchPaused += OnMatchPaused;
+        s.MatchResumed += OnMatchResumed;
+        // Declare a rejoin identify only on the rejoin paths (BeginRejoin /
+        // the poll recovery into an active match) — the server pauses the live
+        // match for us. A lobby connect must never pause anything.
+        s.IdentifyAsRejoin = IsRejoin;
         Signaling = s;
         s.Connect(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
     }
@@ -457,6 +473,10 @@ public partial class MatchFlow : Node
 
         if (!TransitionTo(MatchFlowState.InMatch, "match started"))
             return;
+        // In-match now: a later transient WS blip must re-identify as a normal
+        // member — only the not-yet-meshed rejoin identifies may pause the match.
+        if (Signaling != null)
+            Signaling.IdentifyAsRejoin = false;
         if (GetTree().ChangeSceneToFile(GameScene) != Error.Ok)
         {
             // Revert is impossible mid-flight — fail through the one path.
@@ -476,6 +496,28 @@ public partial class MatchFlow : Node
             Log.Info("match.flow", "reconnected during Preparing — re-sending client_ready.");
             Signaling?.SendClientReady();
         }
+    }
+
+    /// <summary>Relay the server's pause to the game view with a display name.
+    /// Only meaningful in-match: the rejoiner it announces is itself still in
+    /// Preparing and enters via <c>match_started</c>, not this.</summary>
+    private void OnMatchPaused(string playerId, string username, int resumeTimeoutSecs)
+    {
+        if (State != MatchFlowState.InMatch)
+            return;
+        var name = !string.IsNullOrEmpty(username)
+            ? username
+            : SessionContext.Instance.DisplayNameFor(playerId);
+        Log.Info("match.flow", $"match paused for rejoining {playerId} (valve {resumeTimeoutSecs}s).");
+        MatchPausedFor?.Invoke(name);
+    }
+
+    private void OnMatchResumed(int countdownSecs)
+    {
+        if (State != MatchFlowState.InMatch)
+            return;
+        Log.Info("match.flow", $"match resuming in {countdownSecs}s.");
+        MatchResumedIn?.Invoke(countdownSecs);
     }
 
     // ---- lobby safety-net poll (missed start_signaling) ----
@@ -662,6 +704,8 @@ public partial class MatchFlow : Node
             s.GameOver -= OnGameOver;
             s.MatchStarted -= OnMatchStarted;
             s.Reconnected -= OnReconnected;
+            s.MatchPaused -= OnMatchPaused;
+            s.MatchResumed -= OnMatchResumed;
             if (sendLeaveFrame)
                 s.SendLeave();
             s.CloseConnection();

@@ -47,6 +47,20 @@ pub enum ReadyOutcome {
     NotSeated,
 }
 
+/// What a rejoiner's pause attempt found (see [`SignalHub::pause_for`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PauseOutcome {
+    /// The hold was placed — the caller broadcasts `MatchPaused` and arms the
+    /// resume valve.
+    Paused,
+    /// This rejoiner already holds a pause (it blipped again mid-rejoin). The
+    /// overlay is already up and a valve already armed — nothing to do.
+    AlreadyPaused,
+    /// No live match to pause (room missing, or the ready barrier hasn't
+    /// resolved — a pre-start identify has the Preparing flow, not a pause).
+    NotStarted,
+}
+
 /// Which grace window an entry represents (see [`SignalHub::grace`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GraceKind {
@@ -98,6 +112,11 @@ struct Room {
     /// path and the valve timer: whichever flips it acts (broadcast + activate),
     /// the other sees it set and does nothing.
     match_started: bool,
+    /// The process-death rejoiners the match is currently paused for (a set so
+    /// overlapping rejoins stack: the match resumes only when the LAST hold
+    /// clears — see [`SignalHub::clear_pause`]). Only ever populated after
+    /// `match_started`; in-memory like everything else here.
+    paused_for: HashSet<String>,
 }
 
 impl SignalHub {
@@ -126,19 +145,22 @@ impl SignalHub {
     /// Remove `player_id` from `code`'s room IF the stored entry matches
     /// the given `conn_id`. The match check prevents an old WS handler's
     /// late cleanup from evicting a newer socket that already re-bound
-    /// the same player_id (the duplicate-identify race).
+    /// the same player_id (the duplicate-identify race). Returns whether
+    /// this call removed the entry — i.e. the departing socket was the
+    /// player's live one — so the caller can skip liveness-sensitive
+    /// cleanup (like releasing a pause hold) on a stale socket's behalf.
     ///
     /// Drops the room entirely once the last sender leaves, so the map
     /// doesn't accumulate empty rooms forever as sessions end.
-    pub async fn leave_room(&self, code: &str, player_id: &str, conn_id: u64) {
+    pub async fn leave_room(&self, code: &str, player_id: &str, conn_id: u64) -> bool {
         let mut rooms = self.rooms.write().await;
-        let Some(room) = rooms.get_mut(code) else { return };
-        if room.senders.get(player_id).map(|(id, _)| *id) == Some(conn_id) {
-            room.senders.remove(player_id);
-        }
+        let Some(room) = rooms.get_mut(code) else { return false };
+        let removed = room.senders.get(player_id).map(|(id, _)| *id) == Some(conn_id)
+            && room.senders.remove(player_id).is_some();
         if room.senders.is_empty() {
             rooms.remove(code);
         }
+        removed
     }
 
     /// Push a message to a single player. Returns true if delivered
@@ -294,6 +316,40 @@ impl SignalHub {
         }
         room.match_started = true;
         true
+    }
+
+    /// Place a pause hold for a rejoining `player_id` on `code`'s live match
+    /// (see [`PauseOutcome`]). Only a started match can pause — a rejoin into a
+    /// still-`starting` session already has the whole room on the connecting
+    /// screen, so there is nothing to freeze.
+    pub async fn pause_for(&self, code: &str, player_id: &str) -> PauseOutcome {
+        let mut rooms = self.rooms.write().await;
+        let Some(room) = rooms.get_mut(code) else {
+            return PauseOutcome::NotStarted;
+        };
+        if !room.match_started {
+            return PauseOutcome::NotStarted;
+        }
+        if room.paused_for.insert(player_id.to_string()) {
+            PauseOutcome::Paused
+        } else {
+            PauseOutcome::AlreadyPaused
+        }
+    }
+
+    /// Release `player_id`'s pause hold. Returns true iff the hold existed and
+    /// releasing it emptied the pause set — the caller then broadcasts
+    /// `MatchResumed`, exactly once per pause episode: the three release paths
+    /// (the rejoiner's `ClientReady`, its disconnect, the valve) all funnel
+    /// through here, and whichever removes the entry wins; the others find it
+    /// gone and do nothing. With overlapping rejoiners, only the last hold's
+    /// release resumes.
+    pub async fn clear_pause(&self, code: &str, player_id: &str) -> bool {
+        let mut rooms = self.rooms.write().await;
+        let Some(room) = rooms.get_mut(code) else {
+            return false;
+        };
+        room.paused_for.remove(player_id) && room.paused_for.is_empty()
     }
 
     /// Snapshot of player_ids currently identified in the room. Used by
@@ -455,7 +511,8 @@ mod tests {
     async fn leave_room_drops_empty_room() {
         let hub = SignalHub::default();
         let (conn_id, _rx) = hub.join_room("ABC", "0000001").await;
-        hub.leave_room("ABC", "0000001", conn_id).await;
+        // The live socket's own cleanup reports it removed the entry.
+        assert!(hub.leave_room("ABC", "0000001", conn_id).await);
         assert!(hub.room_members("ABC").await.is_empty());
         let delivered = hub
             .send_to("ABC", "0000001", ServerMsg::Kicked { reason: "test" })
@@ -506,8 +563,10 @@ mod tests {
         let (old_conn, _rx_old) = hub.join_room("ABC", "0000001").await;
         let (_new_conn, mut rx_new) = hub.join_room("ABC", "0000001").await;
 
-        // A1's late cleanup with the old conn_id.
-        hub.leave_room("ABC", "0000001", old_conn).await;
+        // A1's late cleanup with the old conn_id: a no-op, and it reports so —
+        // liveness-gated cleanup (e.g. releasing a pause hold) must not act on
+        // a stale socket's behalf.
+        assert!(!hub.leave_room("ABC", "0000001", old_conn).await);
 
         // A2 must still be registered.
         assert_eq!(hub.room_members("ABC").await, vec!["0000001".to_string()]);
@@ -704,6 +763,57 @@ mod tests {
         hub.set_ready_roster("ABC", vec!["0000001".into(), "0000002".into()])
             .await;
         assert_eq!(hub.record_ready("ABC", "0000001").await, ReadyOutcome::Pending);
+    }
+
+    #[tokio::test]
+    async fn pause_requires_a_started_match() {
+        let hub = SignalHub::default();
+        // Unknown room → nothing to pause.
+        assert_eq!(hub.pause_for("NOPE", "0000001").await, PauseOutcome::NotStarted);
+
+        // Room exists but the barrier hasn't resolved → still nothing to pause.
+        let (_, _rx) = hub.join_room("ABC", "0000001").await;
+        hub.set_ready_roster("ABC", vec!["0000001".into()]).await;
+        assert_eq!(hub.pause_for("ABC", "0000001").await, PauseOutcome::NotStarted);
+
+        // Once started, the pause hold lands — once; a re-blip is AlreadyPaused.
+        assert_eq!(hub.record_ready("ABC", "0000001").await, ReadyOutcome::AllReady);
+        assert_eq!(hub.pause_for("ABC", "0000002").await, PauseOutcome::Paused);
+        assert_eq!(hub.pause_for("ABC", "0000002").await, PauseOutcome::AlreadyPaused);
+    }
+
+    #[tokio::test]
+    async fn clear_pause_resumes_exactly_once() {
+        let hub = SignalHub::default();
+        let (_, _rx) = hub.join_room("ABC", "0000001").await;
+        hub.set_ready_roster("ABC", vec!["0000001".into()]).await;
+        hub.record_ready("ABC", "0000001").await;
+        assert_eq!(hub.pause_for("ABC", "0000002").await, PauseOutcome::Paused);
+
+        // First release (any of ready/disconnect/valve) empties the set → resume.
+        assert!(hub.clear_pause("ABC", "0000002").await);
+        // The losers of that race find the hold gone → no second resume.
+        assert!(!hub.clear_pause("ABC", "0000002").await);
+        // A clear for someone who never paused is a no-op.
+        assert!(!hub.clear_pause("ABC", "0000001").await);
+        // Unknown room → no-op.
+        assert!(!hub.clear_pause("NOPE", "0000002").await);
+    }
+
+    #[tokio::test]
+    async fn overlapping_rejoiners_resume_only_on_the_last_hold() {
+        let hub = SignalHub::default();
+        let (_, _rx) = hub.join_room("ABC", "0000001").await;
+        hub.set_ready_roster("ABC", vec!["0000001".into()]).await;
+        hub.record_ready("ABC", "0000001").await;
+
+        assert_eq!(hub.pause_for("ABC", "0000002").await, PauseOutcome::Paused);
+        assert_eq!(hub.pause_for("ABC", "0000003").await, PauseOutcome::Paused);
+
+        // Releasing the first hold leaves the second → still paused.
+        assert!(!hub.clear_pause("ABC", "0000002").await);
+        // Releasing the last hold resumes.
+        assert!(hub.clear_pause("ABC", "0000003").await);
     }
 
     #[tokio::test]

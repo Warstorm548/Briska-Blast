@@ -13,6 +13,45 @@ use crate::{signaling::protocol::ServerMsg, state::AppState};
 /// deadline so a slow-but-alive lobby always resolves server-side first.
 pub(crate) const READY_GRACE_SECS: u64 = 20;
 
+/// How long a pause-on-rejoin may hold the match frozen before the valve
+/// resumes it anyway (the rejoiner's edge then stays walled until its mesh
+/// heals). Sits under the rejoiner's own 30s Preparing deadline, so a rejoin
+/// that will ultimately fail can't freeze everyone for its full window.
+pub(super) const PAUSE_VALVE_SECS: u64 = 25;
+
+/// The shared unfreeze countdown clients run when a pause ends.
+pub(super) const RESUME_COUNTDOWN_SECS: u64 = 3;
+
+/// Release `player_id`'s pause hold and broadcast `MatchResumed` iff that
+/// emptied the pause set. The one resume funnel — the rejoiner's
+/// `ClientReady`, its disconnect cleanup, and the valve all call this, and
+/// `clear_pause`'s remove-wins semantics make the broadcast single-shot.
+pub(super) async fn resume_if_cleared(state: &AppState, code: &str, player_id: &str) {
+    if state.signal_hub.clear_pause(code, player_id).await {
+        state
+            .signal_hub
+            .broadcast(
+                code,
+                ServerMsg::MatchResumed { countdown_secs: RESUME_COUNTDOWN_SECS },
+                None,
+            )
+            .await;
+        tracing::info!("ws: session {} resuming ({}'s pause hold cleared)", code, player_id);
+    }
+}
+
+/// Arm the pause valve when a rejoiner pauses the match: after
+/// [`PAUSE_VALVE_SECS`], release its hold whether or not it finished
+/// re-meshing (same spawned-timer shape as the ready barrier's valve;
+/// `clear_pause` itself is the single-winner latch, so a rejoiner that
+/// already readied up or dropped makes this a no-op).
+pub(super) fn spawn_pause_valve(state: AppState, code: String, player_id: String) {
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(PAUSE_VALVE_SECS)).await;
+        resume_if_cleared(&state, &code, &player_id).await;
+    });
+}
+
 /// Resolve the ready barrier: tell the room the match is on and flip the
 /// session `starting → active`. Called by exactly one winner of the
 /// `match_started` latch — either the last `ClientReady` (`AllReady`) or the

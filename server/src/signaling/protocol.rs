@@ -21,9 +21,17 @@ fn default_score_points() -> i64 {
 pub enum ClientMsg {
     /// Must be the first frame after upgrade. Carries auth so the server
     /// can bind the WS connection to a player.
+    ///
+    /// `rejoin` distinguishes a **process-death rejoin** (a fresh process
+    /// re-entering a live match — the match pauses while it re-meshes, see
+    /// `MatchPaused`) from a transient WS auto-reconnect (same process, mesh
+    /// intact — never pauses). Clients set it only on their rejoin paths;
+    /// defaulted so older clients read as non-rejoin.
     Identify {
         player_id: String,
         secret_token: String,
+        #[serde(default)]
+        rejoin: bool,
     },
     /// SDP offer aimed at a specific peer in the same session.
     Offer { to: String, sdp: String },
@@ -225,6 +233,24 @@ pub enum ServerMsg {
     /// straggler whose `ClientReady` arrives after the fact. An empty struct
     /// (not a unit) so fields can be added compatibly later.
     MatchStarted {},
+    /// Broadcast when a process-death rejoiner (`Identify { rejoin: true }`)
+    /// re-enters a live match: everyone freezes their sim behind a "Waiting
+    /// for {username}…" overlay while the rejoiner re-meshes, so balls sent at
+    /// its edge don't bounce off a temporary wall. Resolved by `MatchResumed`
+    /// — fired by the rejoiner's `ClientReady`, by its disconnecting again, or
+    /// by the server's `resume_timeout_secs` valve, whichever is first.
+    /// `username` is the rejoiner's display name (empty when none on file).
+    /// Never fired for a transient WS reconnect or the initial mid-game drop.
+    MatchPaused {
+        player_id: String,
+        username: String,
+        resume_timeout_secs: u64,
+    },
+    /// Broadcast when the last outstanding pause hold clears (multi-rejoiner
+    /// safe): clients run a `countdown_secs` 3-2-1 and unfreeze together. The
+    /// rejoiner itself is still on the connecting screen when this fires — its
+    /// own go-signal stays `MatchStarted`.
+    MatchResumed { countdown_secs: u64 },
 }
 
 #[cfg(test)]
@@ -268,6 +294,42 @@ mod tests {
     fn client_ready_deserializes_from_bare_tag() {
         let msg: ClientMsg = serde_json::from_str(r#"{"type":"client_ready"}"#).unwrap();
         assert!(matches!(msg, ClientMsg::ClientReady));
+    }
+
+    /// `rejoin` on Identify is optional on the wire: absent (an old client, or
+    /// a normal lobby/reconnect identify) reads as false; a rejoin path sends
+    /// it explicitly.
+    #[test]
+    fn identify_rejoin_flag_defaults_to_false() {
+        let msg: ClientMsg = serde_json::from_str(
+            r#"{"type":"identify","player_id":"000000001","secret_token":"tok"}"#,
+        )
+        .unwrap();
+        assert!(matches!(msg, ClientMsg::Identify { rejoin: false, .. }));
+
+        let msg: ClientMsg = serde_json::from_str(
+            r#"{"type":"identify","player_id":"000000001","secret_token":"tok","rejoin":true}"#,
+        )
+        .unwrap();
+        assert!(matches!(msg, ClientMsg::Identify { rejoin: true, .. }));
+    }
+
+    /// Pause/resume wire shapes: field names the client parser matches on.
+    #[test]
+    fn match_paused_and_resumed_serialize_expected_fields() {
+        let json = serde_json::to_string(&ServerMsg::MatchPaused {
+            player_id: "000000002".into(),
+            username: "Zoe".into(),
+            resume_timeout_secs: 25,
+        })
+        .unwrap();
+        assert!(json.contains(r#""type":"match_paused""#));
+        assert!(json.contains(r#""player_id":"000000002""#));
+        assert!(json.contains(r#""username":"Zoe""#));
+        assert!(json.contains(r#""resume_timeout_secs":25"#));
+
+        let json = serde_json::to_string(&ServerMsg::MatchResumed { countdown_secs: 3 }).unwrap();
+        assert_eq!(json, r#"{"type":"match_resumed","countdown_secs":3}"#);
     }
 
     /// MatchStarted is an empty struct variant so later fields stay additive;

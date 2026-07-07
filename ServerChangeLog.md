@@ -5,6 +5,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.24.0] — 2026-07-07
+
+Adds **pause-on-rejoin** — Stage C, the final stage of the lobby → game
+handoff rework (`docs/architecture/match-lifecycle.md`). A process-death
+rejoiner re-entering a live match now freezes everyone while it re-meshes,
+instead of balls bouncing off its temporarily-walled edge.
+
+### Added
+
+- **`rejoin` flag on `Identify`** (`#[serde(default)]`, so older clients read
+  as non-rejoin): the client's own declaration that this is a process-death
+  rejoin. A transient WS auto-reconnect (same process, mesh intact) and the
+  initial mid-game drop never set it — only a true rejoin can pause.
+- **`match_paused` / `match_resumed` signaling frames**: on a rejoin identify
+  into a started match (`match_started` latch set), the server places a pause
+  hold, broadcasts `match_paused { player_id, username, resume_timeout_secs }`,
+  and arms a **25s valve** (`PAUSE_VALVE_SECS`, under the rejoiner's own 30s
+  Preparing deadline). The hold is released — and `match_resumed
+  { countdown_secs: 3 }` broadcast — by whichever comes first: the rejoiner's
+  `client_ready` (released just before its direct `match_started` reply, so
+  the countdown is already running when it lands), the rejoiner disconnecting
+  again, or the valve. `clear_pause`'s remove-wins semantics make the resume
+  single-shot across those three racers.
+- **Multi-rejoiner safe**: pause holds are a set (`Room.paused_for`) — with
+  overlapping rejoiners the match resumes only when the **last** hold clears.
+
+### Rollout
+
+- **Bump `min_game_version` to `0.25.0`** when deploying: an older client
+  ignores `match_paused` and keeps playing while everyone else freezes. Pause
+  state is in-memory like the ready barrier — a server restart mid-pause
+  drops it, and no pause can outlive its 25s valve anyway.
+
 ## [0.23.0] — 2026-07-07
 
 Adds the **ready barrier** — Stage B of the three-stage lobby → game handoff
