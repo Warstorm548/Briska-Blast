@@ -113,7 +113,7 @@ while still in the lobby) is logged and ignored. There are no per-scene
   one NAT stays under the shared 60/min per-IP session limiter). If the
   session left `waiting` with no `start_signaling` received, it recovers
   through the rejoin convergence: adopt the poll's rules, swap the lobby
-  socket for a fresh identify (the `Identified` frame carries the frozen
+  socket for a fresh `Identify` (whose `Identified` reply carries the frozen
   `seat_order` + the match's cached TURN credentials), and mesh behind the
   connecting screen. `IsRejoin` (no-serve semantics) is set only when the
   session is already `active` — recovering into `starting` means nobody has
