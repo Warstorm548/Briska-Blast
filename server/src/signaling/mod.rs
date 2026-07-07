@@ -145,19 +145,22 @@ impl SignalHub {
     /// Remove `player_id` from `code`'s room IF the stored entry matches
     /// the given `conn_id`. The match check prevents an old WS handler's
     /// late cleanup from evicting a newer socket that already re-bound
-    /// the same player_id (the duplicate-identify race).
+    /// the same player_id (the duplicate-identify race). Returns whether
+    /// this call removed the entry — i.e. the departing socket was the
+    /// player's live one — so the caller can skip liveness-sensitive
+    /// cleanup (like releasing a pause hold) on a stale socket's behalf.
     ///
     /// Drops the room entirely once the last sender leaves, so the map
     /// doesn't accumulate empty rooms forever as sessions end.
-    pub async fn leave_room(&self, code: &str, player_id: &str, conn_id: u64) {
+    pub async fn leave_room(&self, code: &str, player_id: &str, conn_id: u64) -> bool {
         let mut rooms = self.rooms.write().await;
-        let Some(room) = rooms.get_mut(code) else { return };
-        if room.senders.get(player_id).map(|(id, _)| *id) == Some(conn_id) {
-            room.senders.remove(player_id);
-        }
+        let Some(room) = rooms.get_mut(code) else { return false };
+        let removed = room.senders.get(player_id).map(|(id, _)| *id) == Some(conn_id)
+            && room.senders.remove(player_id).is_some();
         if room.senders.is_empty() {
             rooms.remove(code);
         }
+        removed
     }
 
     /// Push a message to a single player. Returns true if delivered
@@ -508,7 +511,8 @@ mod tests {
     async fn leave_room_drops_empty_room() {
         let hub = SignalHub::default();
         let (conn_id, _rx) = hub.join_room("ABC", "0000001").await;
-        hub.leave_room("ABC", "0000001", conn_id).await;
+        // The live socket's own cleanup reports it removed the entry.
+        assert!(hub.leave_room("ABC", "0000001", conn_id).await);
         assert!(hub.room_members("ABC").await.is_empty());
         let delivered = hub
             .send_to("ABC", "0000001", ServerMsg::Kicked { reason: "test" })
@@ -559,8 +563,10 @@ mod tests {
         let (old_conn, _rx_old) = hub.join_room("ABC", "0000001").await;
         let (_new_conn, mut rx_new) = hub.join_room("ABC", "0000001").await;
 
-        // A1's late cleanup with the old conn_id.
-        hub.leave_room("ABC", "0000001", old_conn).await;
+        // A1's late cleanup with the old conn_id: a no-op, and it reports so —
+        // liveness-gated cleanup (e.g. releasing a pause hold) must not act on
+        // a stale socket's behalf.
+        assert!(!hub.leave_room("ABC", "0000001", old_conn).await);
 
         // A2 must still be registered.
         assert_eq!(hub.room_members("ABC").await, vec!["0000001".to_string()]);

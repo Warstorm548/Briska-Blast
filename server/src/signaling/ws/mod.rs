@@ -301,13 +301,18 @@ async fn handle_socket(mut socket: WebSocket, code: String, state: AppState) {
 
     // Phase 4: Cleanup. leave_room is scoped to our conn_id so a newer
     // socket that re-bound this player_id (duplicate identify) isn't
-    // evicted by our late cleanup.
-    state.signal_hub.leave_room(&code, &player_id, conn_id).await;
+    // evicted by our late cleanup; `was_live` is false for exactly that
+    // stale-socket case.
+    let was_live = state.signal_hub.leave_room(&code, &player_id, conn_id).await;
 
     // A paused-for rejoiner that died again must not hold the match frozen
-    // for the valve's full window — release its hold now. No-op for anyone
-    // without a pause hold (i.e. almost every disconnect).
-    session_ops::resume_if_cleared(&state, &code, &player_id).await;
+    // for the valve's full window — release its hold now. Gated on this being
+    // the player's LIVE socket: a stale socket's late cleanup must not clear
+    // the hold of a rejoiner that already rebound and is still re-meshing.
+    // No-op for anyone without a pause hold (i.e. almost every disconnect).
+    if was_live {
+        session_ops::resume_if_cleared(&state, &code, &player_id).await;
+    }
 
     if is_host {
         // The host always announces departure (peers update their roster /
