@@ -8,6 +8,112 @@ use deadpool_redis::redis::AsyncCommands;
 
 use crate::{signaling::protocol::ServerMsg, state::AppState};
 
+/// How long the ready barrier waits for every seated player's `ClientReady`
+/// before starting the match anyway. Sits under the clients' own 30s Preparing
+/// deadline so a slow-but-alive lobby always resolves server-side first.
+pub(crate) const READY_GRACE_SECS: u64 = 20;
+
+/// Resolve the ready barrier: tell the room the match is on and flip the
+/// session `starting → active`. Called by exactly one winner of the
+/// `match_started` latch — either the last `ClientReady` (`AllReady`) or the
+/// grace valve (`force_match_start`) — so it runs once per match.
+///
+/// Ordering: broadcast first, then the Redis flip. The broadcast is what
+/// unblocks clients; the status flip only affects later observers (GET
+/// /session polls, rejoin classification), so its latency shouldn't sit in
+/// front of the start signal.
+pub(crate) async fn start_match(state: &AppState, code: &str) {
+    state
+        .signal_hub
+        .broadcast(code, ServerMsg::MatchStarted {}, None)
+        .await;
+    activate_session(state, code).await;
+}
+
+/// Arm the barrier's grace valve at `/start`: after [`READY_GRACE_SECS`],
+/// start the match for whoever is ready. The `match_started` latch (not this
+/// timer) is the single-winner mechanism — if every player readied up first,
+/// `force_match_start` reports the barrier already resolved and the valve
+/// exits without acting. Deliberately NOT the `arm_grace` map: that refuses to
+/// arm while the keyed player has a live socket, which everyone here does.
+pub(crate) fn spawn_ready_barrier(state: AppState, code: String) {
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(READY_GRACE_SECS)).await;
+        if state.signal_hub.force_match_start(&code).await {
+            tracing::info!(
+                "ws: session {} ready barrier timed out after {}s — starting anyway",
+                code, READY_GRACE_SECS
+            );
+            start_match(&state, &code).await;
+        }
+    });
+}
+
+/// Atomic `starting → active` status flip, the Redis half of the barrier
+/// resolving. A Lua CAS modeled on `/start`'s `START_SCRIPT`: the read,
+/// status check, and write happen as one Redis operation, so a concurrent
+/// teardown (session deleted) or a duplicate activation can't interleave —
+/// the loser just logs at debug. Losing is expected in benign races; the
+/// in-memory `match_started` latch already made the start itself single-shot.
+async fn activate_session(state: &AppState, code: &str) {
+    // lua-cjson re-encode caveat: an empty `session.joiners` would come back as
+    // `{}` (see remove_joiner_on_leave). It can't actually be empty here — a
+    // Starting session froze ≥2 seats and a fully-emptied roster deletes the
+    // session — but the gsub guard keeps this script safe if that ever shifts.
+    const ACTIVATE_SCRIPT: &str = r#"
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+  return cjson.encode({result = 'gone'})
+end
+local session = cjson.decode(raw)
+if session.status ~= 'starting' then
+  return cjson.encode({result = 'not_starting'})
+end
+session.status = 'active'
+local encoded = cjson.encode(session)
+if #session.joiners == 0 then
+  encoded = string.gsub(encoded, '"joiners":{}', '"joiners":[]')
+end
+redis.call('SET', KEYS[1], encoded, 'EX', tonumber(ARGV[1]))
+return cjson.encode({result = 'activated'})
+"#;
+
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "result", rename_all = "snake_case")]
+    enum ActivateOutcome {
+        Activated,
+        Gone,
+        NotStarting,
+    }
+
+    let mut conn = match state.redis.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("ws: activate_session could not reach Redis for {}: {}", code, e);
+            return;
+        }
+    };
+    let script = deadpool_redis::redis::Script::new(ACTIVATE_SCRIPT);
+    let raw: Result<String, _> = script
+        .key(format!("session:{}", code))
+        .arg(state.config.session_ttl_secs)
+        .invoke_async(&mut *conn)
+        .await;
+    let outcome = raw
+        .map_err(|e| e.to_string())
+        .and_then(|r| serde_json::from_str::<ActivateOutcome>(&r).map_err(|e| e.to_string()));
+
+    match outcome {
+        Ok(ActivateOutcome::Activated) => {
+            tracing::info!("ws: session {} is now active (ready barrier resolved)", code);
+        }
+        Ok(ActivateOutcome::Gone) | Ok(ActivateOutcome::NotStarting) => {
+            tracing::debug!("ws: activate_session for {} was a no-op", code);
+        }
+        Err(e) => tracing::warn!("ws: activate_session failed for {}: {}", code, e),
+    }
+}
+
 /// The single, shared "this session is over" teardown: delete the session from
 /// Redis (idempotent) and broadcast `SessionEnded { reason }` to the room. The
 /// win path calls this with `reason = "game_over"` right after its `GameOver` UI

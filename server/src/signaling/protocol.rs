@@ -69,6 +69,15 @@ pub enum ClientMsg {
     /// and resolve their display name, then broadcast `ChatMessage` to the whole
     /// room. The server trims the text, bounds its length, and drops empties.
     SendChat { text: String },
+    /// Sent once this client's WebRTC mesh is fully up after `StartSignaling`
+    /// (every expected peer's data channel open) — the client's half of the
+    /// ready barrier. When every seated player has reported ready (or the
+    /// server's grace valve fires first), the server flips the session
+    /// `starting → active` and broadcasts `MatchStarted`. A late ready after
+    /// the match already started gets a direct `MatchStarted` reply, so
+    /// stragglers and rejoiners converge on the same "send ready, wait for
+    /// match_started" contract.
+    ClientReady,
 }
 
 /// Server → client signaling frames. JSON-tagged on `type`. Cloneable
@@ -208,6 +217,14 @@ pub enum ServerMsg {
         username: String,
         text: String,
     },
+    /// The ready barrier resolved: every seated player reported `ClientReady`
+    /// (or the server's grace valve fired) and the session is now `Active`.
+    /// Clients hold on the connecting screen until this arrives, so nobody can
+    /// serve into a mesh a slower peer hasn't finished opening. Broadcast to
+    /// the room at barrier resolution and additionally sent directly to any
+    /// straggler whose `ClientReady` arrives after the fact. An empty struct
+    /// (not a unit) so fields can be added compatibly later.
+    MatchStarted {},
 }
 
 #[cfg(test)]
@@ -244,6 +261,21 @@ mod tests {
             r#""ice_servers":[{"urls":["stun:stun.cloudflare.com:3478"]},"#
         ));
         assert!(json.contains(r#""username":"user","credential":"pass""#));
+    }
+
+    /// The client's ready frame is bodyless — just the tag.
+    #[test]
+    fn client_ready_deserializes_from_bare_tag() {
+        let msg: ClientMsg = serde_json::from_str(r#"{"type":"client_ready"}"#).unwrap();
+        assert!(matches!(msg, ClientMsg::ClientReady));
+    }
+
+    /// MatchStarted is an empty struct variant so later fields stay additive;
+    /// on the wire today it's just the tag.
+    #[test]
+    fn match_started_serializes_to_bare_tag() {
+        let json = serde_json::to_string(&ServerMsg::MatchStarted {}).unwrap();
+        assert_eq!(json, r#"{"type":"match_started"}"#);
     }
 
     /// A Waiting-phase Identified (no mint) still carries the field as an

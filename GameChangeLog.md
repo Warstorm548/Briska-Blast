@@ -9,6 +9,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.24.0] — 2026-07-07
+
+Adopts the server's **ready barrier** and adds a **lobby safety-net poll** —
+Stage B of the three-stage handoff rework
+(`docs/architecture/match-lifecycle.md`). Requires server **0.23.0**
+(`min_game_version` is bumped alongside; the protocol gained
+`client_ready`/`match_started`).
+
+### Added
+
+- **Ready-barrier hold in `Preparing`**: mesh completion no longer enters the
+  match directly — the client sends `client_ready` and shows "Waiting for other
+  players…" until the server's `match_started` (broadcast when everyone is
+  ready, or its 20s valve fires — always under the 30s Preparing deadline).
+  `match_started` is now the **only door into `InMatch`**, making the serve
+  gate server-authoritative: nobody serves until every player's mesh is up. A
+  WS blip during the wait re-sends the ready on reconnect (the server answers
+  a duplicate directly).
+- **Lobby safety-net poll**: `start_signaling` is a best-effort broadcast — a
+  client whose WS is mid-reconnect at Start used to be stranded in the lobby
+  forever. While `InLobby`, `MatchFlow` now polls `GET /session/:code` every
+  7s (a full 4-player lobby behind one NAT stays under the server's 60/min
+  per-IP limiter); if the session left `waiting` with no `start_signaling`
+  received, it recovers through the rejoin sequence — fresh identify (frozen
+  `seat_order` + the match's cached TURN credentials), mesh behind the
+  connecting screen — with rejoin (no-serve) semantics only when the match is
+  already `active`.
+
+### Changed
+
+- `MatchFlow`'s first-identify mesh bring-up now keys on "entered `Preparing`
+  without a transport" rather than the rejoin flag, so the poll recovery and
+  the process-death rejoin share the same convergence path; the signaling-
+  socket close is extracted into one `CloseSignaling` shared by the teardown
+  and the recovery.
+
 ## [0.23.0] — 2026-07-07
 
 Reworks the **lobby → game handoff** around a single lifecycle orchestrator —
