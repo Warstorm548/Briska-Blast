@@ -4,15 +4,15 @@ use serde::{Deserialize, Serialize};
 /// client's input cap (hand-mirrored in C#) and the server's authoritative `/host`
 /// validation, so the UX limit and the trust-boundary check can never drift apart
 /// (same rationale as `MAX_USERNAME_LEN`).
-pub const SET_SCORE_MIN: u8 = 10;
-pub const SET_SCORE_MAX: u8 = 50;
+pub const SET_SCORE_MIN: u8 = 50;
+pub const SET_SCORE_MAX: u8 = 200;
 /// Default target applied when a host never touches the advanced setting.
-pub const DEFAULT_TARGET: u8 = 11;
+pub const DEFAULT_TARGET: u8 = 100;
 
 /// How a match decides a winner. The first (and currently only) variant is
 /// `SetScore`: first player to reach `target` points ends the game. Internally
 /// tagged on `kind` so the wire shape is a flat object — `{"kind":"set_score",
-/// "target":11}` — which the hand-mirrored C# record round-trips both ways.
+/// "target":100}` — which the hand-mirrored C# record round-trips both ways.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WinCondition {
@@ -61,15 +61,15 @@ mod tests {
 
     #[test]
     fn serializes_set_score_to_tagged_object() {
-        let json = serde_json::to_string(&WinCondition::SetScore { target: 11 }).unwrap();
-        assert_eq!(json, r#"{"kind":"set_score","target":11}"#);
+        let json = serde_json::to_string(&WinCondition::SetScore { target: 100 }).unwrap();
+        assert_eq!(json, r#"{"kind":"set_score","target":100}"#);
     }
 
     #[test]
     fn deserializes_from_tagged_object() {
         let wc: WinCondition =
-            serde_json::from_str(r#"{"kind":"set_score","target":25}"#).unwrap();
-        assert_eq!(wc, WinCondition::SetScore { target: 25 });
+            serde_json::from_str(r#"{"kind":"set_score","target":75}"#).unwrap();
+        assert_eq!(wc, WinCondition::SetScore { target: 75 });
     }
 
     #[test]
@@ -80,19 +80,19 @@ mod tests {
     }
 
     #[test]
-    fn default_is_set_score_eleven() {
+    fn default_is_set_score_hundred() {
         assert_eq!(
             WinCondition::default_condition(),
             WinCondition::SetScore { target: DEFAULT_TARGET }
         );
-        assert_eq!(WinCondition::default_condition().target(), 11);
+        assert_eq!(WinCondition::default_condition().target(), 100);
     }
 
     #[test]
     fn validate_accepts_in_range_including_bounds() {
         assert!(WinCondition::SetScore { target: SET_SCORE_MIN }.validate().is_ok());
         assert!(WinCondition::SetScore { target: SET_SCORE_MAX }.validate().is_ok());
-        assert!(WinCondition::SetScore { target: 11 }.validate().is_ok());
+        assert!(WinCondition::SetScore { target: 100 }.validate().is_ok());
     }
 
     #[test]

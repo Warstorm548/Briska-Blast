@@ -232,19 +232,19 @@ mod tests {
     #[test]
     fn win_condition_present_round_trips() {
         let json = r#"{"code":"ABC123","host_player_id":"1","gamemode":"extended",
-            "win_condition":{"kind":"set_score","target":25},"player_count":4,
+            "win_condition":{"kind":"set_score","target":75},"player_count":4,
             "joiners":[],"status":"waiting","seat_order":[]}"#;
         let session: Session = serde_json::from_str(json).unwrap();
-        assert_eq!(session.win_condition.target(), 25);
+        assert_eq!(session.win_condition.target(), 75);
     }
 
     #[test]
-    fn win_condition_missing_defaults_to_set_score_11() {
+    fn win_condition_missing_defaults_to_set_score_100() {
         // A session written before the field existed (mid-deploy) must still read.
         let no_field = r#"{"code":"ABC123","host_player_id":"1","gamemode":"extended",
             "player_count":4,"joiners":[],"status":"waiting","seat_order":[]}"#;
         let session: Session = serde_json::from_str(no_field).unwrap();
-        assert_eq!(session.win_condition.target(), 11);
+        assert_eq!(session.win_condition.target(), 100);
     }
 
     // Regression for the class of bug that 500'd joins twice: reproduce the EXACT
@@ -255,12 +255,12 @@ mod tests {
     #[test]
     fn join_script_output_shape_with_win_condition_deserializes() {
         let join_output = r#"{"code":"ABC123","host_player_id":"1","gamemode":"extended",
-            "win_condition":{"kind":"set_score","target":11},"player_count":4,
+            "win_condition":{"kind":"set_score","target":100},"player_count":4,
             "joiners":[{"player_id":"2","joined_at_ms":1700000000000}],
             "status":"waiting","seat_order":{}}"#;
         let session: Session = serde_json::from_str(join_output).unwrap();
         assert_eq!(session.joiners.len(), 1);
         assert!(session.seat_order.is_empty());
-        assert_eq!(session.win_condition.target(), 11);
+        assert_eq!(session.win_condition.target(), 100);
     }
 }

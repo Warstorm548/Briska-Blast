@@ -115,12 +115,12 @@ mod tests {
     #[tokio::test]
     async fn invalid_win_condition_returns_400_with_bounds() {
         let (status, body) =
-            body_json(AppError::InvalidWinCondition { min: 10, max: 50, requested: 9 }).await;
+            body_json(AppError::InvalidWinCondition { min: 50, max: 200, requested: 49 }).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"], "invalid_win_condition");
-        assert_eq!(body["min"], 10);
-        assert_eq!(body["max"], 50);
-        assert_eq!(body["requested"], 9);
+        assert_eq!(body["min"], 50);
+        assert_eq!(body["max"], 200);
+        assert_eq!(body["requested"], 49);
     }
 
     #[tokio::test]

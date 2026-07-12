@@ -9,6 +9,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.26.0] — 2026-07-12
+
+Adds a **Credits** screen and re-tunes the **Set Score** win condition to
+default **100**, range **50–200**.
+
+### Added
+
+- **Credits page** (`src/ui/menus/CreditsMenu.tscn` + `.cs`): the previously
+  disabled main-menu **Credits** button is now enabled and opens a credits
+  screen on the default background — a two-column **Name / Username** table
+  grouped by role (Lead Developer; Lead Architecture Adviser and Pre-Alpha
+  Tester; Pre-Alpha Testers) plus a **Fun Phrases** section — with a Return to
+  Main Menu button. Mirrors the `SettingsMenu` sub-page pattern.
+
+### Changed
+
+- **Set Score range** (`Dto.cs` mirror of `shared` 0.6.0): the host's Advanced
+  Settings → Match Rules score now defaults to **100** and is clamped
+  **50–200** (was 11 / 10–50). Requires server **0.25.0**.
+
+---
+
 ## [0.25.0] — 2026-07-07
 
 Adopts the server's **pause-on-rejoin** — Stage C, the final stage of the

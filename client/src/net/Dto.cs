@@ -44,9 +44,9 @@ public sealed record RegisterResponse(
 public sealed record WinConditionDto(string Kind, int Target)
 {
     public const string SetScoreKind = "set_score";
-    public const int ScoreMin = 10;
-    public const int ScoreMax = 50;
-    public const int ScoreDefault = 11;
+    public const int ScoreMin = 50;
+    public const int ScoreMax = 200;
+    public const int ScoreDefault = 100;
 
     public static WinConditionDto SetScore(int target) => new(SetScoreKind, target);
     public static WinConditionDto Default => SetScore(ScoreDefault);

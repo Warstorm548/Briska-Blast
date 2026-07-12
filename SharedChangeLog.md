@@ -13,6 +13,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.0] — 2026-07-12
+
+Re-tunes the **Set Score** win condition bounds: default **100**, range
+**50–200** (was default 11, range 10–50).
+
+### Changed
+
+- **`WinCondition` Set-Score constants** (`types/win_condition.rs`):
+  `SET_SCORE_MIN 10 → 50`, `SET_SCORE_MAX 50 → 200`, `DEFAULT_TARGET 11 → 100`.
+  Still a `u8` (200 ≤ 255) and the same wire shape
+  `{"kind":"set_score","target":N}` — only the validated range and default move,
+  so the client mirror (`Dto.cs`) and the server's `/host` `validate()` both
+  follow from this single source. Unit tests updated to the new bounds/default.
+
+---
+
 ## [0.5.0] — 2026-06-29
 
 Adds **`SpawnSettings`** — the host-configured random-spawn rules (BallSpliter

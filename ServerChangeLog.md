@@ -5,6 +5,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.25.0] — 2026-07-12
+
+Accepts the re-tuned **Set Score** range — default **100**, range **50–200**
+(was default 11, range 10–50). `/host` already delegates its trust-boundary
+check to `shared`'s `WinCondition::validate()`, so the new bounds are enforced
+authoritatively with no handler change: a tampered client requesting a target
+below 50 or above 200 is refused with `400 invalid_win_condition`.
+
+### Changed
+
+- Adopts `shared` **0.6.0** — `SET_SCORE_MIN 50` / `SET_SCORE_MAX 200` /
+  `DEFAULT_TARGET 100`. Session-deserialization and error-rendering test
+  fixtures updated to the new bounds.
+
+**Deploy:** bump `min_game_version` to **0.26.0** (Redis, via the admin panel) —
+an out-of-date client defaults to target 11, which the new range now rejects;
+forcing the update surfaces an update prompt instead of an
+`invalid_win_condition` error at host time.
+
+---
+
 ## [0.24.0] — 2026-07-07
 
 Adds **pause-on-rejoin** — Stage C, the final stage of the lobby → game

@@ -18,6 +18,7 @@ public partial class MainMenu : Control
         GetNode<Button>("%HostGame").Pressed += () => GoTo("res://src/ui/menus/HostSetupMenu.tscn");
         GetNode<Button>("%JoinGame").Pressed += () => GoTo("res://src/ui/menus/JoinMenu.tscn");
         GetNode<Button>("%Settings").Pressed += () => GoTo("res://src/ui/menus/SettingsMenu.tscn");
+        GetNode<Button>("%Credits").Pressed += () => GoTo("res://src/ui/menus/CreditsMenu.tscn");
         GetNode<Button>("%ExitGame").Pressed += () => GetTree().Quit();
 
         // If a session just ended abnormally (connect timeout, kick, session
