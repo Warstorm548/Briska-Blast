@@ -159,7 +159,7 @@ scoring in the goal corners and stops fast balls from cutting the corners.
 
 - The host picks a **win condition** during setup (Advanced → Match Rules),
   mirroring `gamemode`: currently **"Set Score"** — first player to a target score
-  (range 10–50, **default 11**) wins. It is required, range-validated server-side
+  (range 50–200, **default 100**) wins. It is required, range-validated server-side
   (`invalid_win_condition`), broadcast to joiners (join/poll responses +
   `start_signaling`), and seeded into the room's in-memory tally at `/start`.
 - When an accepted `ReportScore` first makes a player's tally reach the target, the
