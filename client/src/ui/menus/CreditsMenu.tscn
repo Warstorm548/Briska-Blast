@@ -29,6 +29,7 @@ offset_top = 60.0
 offset_bottom = 180.0
 text = "Credits"
 horizontal_alignment = 1
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
 theme_override_font_sizes/font_size = 84
 
 [node name="CenterContainer" type="CenterContainer" parent="."]
@@ -40,7 +41,7 @@ offset_top = 120.0
 
 [node name="Content" type="VBoxContainer" parent="CenterContainer"]
 layout_mode = 2
-theme_override_constants/separation = 10
+theme_override_constants/separation = 44
 
 [node name="HeaderRow" type="HBoxContainer" parent="CenterContainer/Content"]
 layout_mode = 2
@@ -50,102 +51,124 @@ theme_override_constants/separation = 24
 custom_minimum_size = Vector2(420, 0)
 layout_mode = 2
 text = "Name"
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
 theme_override_font_sizes/font_size = 30
 
 [node name="UsernameHeader" type="Label" parent="CenterContainer/Content/HeaderRow"]
 custom_minimum_size = Vector2(300, 0)
 layout_mode = 2
 text = "Username"
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
 theme_override_font_sizes/font_size = 30
 
 [node name="HeaderSep" type="HSeparator" parent="CenterContainer/Content"]
 layout_mode = 2
 
-[node name="LeadDevTitle" type="Label" parent="CenterContainer/Content"]
+[node name="LeadDevSection" type="VBoxContainer" parent="CenterContainer/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="LeadDevTitle" type="Label" parent="CenterContainer/Content/LeadDevSection"]
 layout_mode = 2
 text = "Lead Developer"
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
 theme_override_font_sizes/font_size = 36
 
-[node name="LeadDevRow" type="HBoxContainer" parent="CenterContainer/Content"]
+[node name="LeadDevRow" type="HBoxContainer" parent="CenterContainer/Content/LeadDevSection"]
 layout_mode = 2
 theme_override_constants/separation = 24
 
-[node name="Name" type="Label" parent="CenterContainer/Content/LeadDevRow"]
+[node name="Name" type="Label" parent="CenterContainer/Content/LeadDevSection/LeadDevRow"]
 custom_minimum_size = Vector2(420, 0)
 layout_mode = 2
 text = "Jean-Luc Watt"
 theme_override_font_sizes/font_size = 28
 
-[node name="Username" type="Label" parent="CenterContainer/Content/LeadDevRow"]
+[node name="Username" type="Label" parent="CenterContainer/Content/LeadDevSection/LeadDevRow"]
 custom_minimum_size = Vector2(300, 0)
 layout_mode = 2
 text = "Warstorm"
 theme_override_font_sizes/font_size = 28
 
-[node name="AdviserTitle" type="Label" parent="CenterContainer/Content"]
+[node name="AdviserSection" type="VBoxContainer" parent="CenterContainer/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="AdviserTitle" type="Label" parent="CenterContainer/Content/AdviserSection"]
 layout_mode = 2
 text = "Lead Architecture Adviser and Pre-Alpha Tester"
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
 theme_override_font_sizes/font_size = 36
 
-[node name="AdviserRow" type="HBoxContainer" parent="CenterContainer/Content"]
+[node name="AdviserRow" type="HBoxContainer" parent="CenterContainer/Content/AdviserSection"]
 layout_mode = 2
 theme_override_constants/separation = 24
 
-[node name="Name" type="Label" parent="CenterContainer/Content/AdviserRow"]
+[node name="Name" type="Label" parent="CenterContainer/Content/AdviserSection/AdviserRow"]
 custom_minimum_size = Vector2(420, 0)
 layout_mode = 2
 text = "NidPlays"
 theme_override_font_sizes/font_size = 28
 
-[node name="Username" type="Label" parent="CenterContainer/Content/AdviserRow"]
+[node name="Username" type="Label" parent="CenterContainer/Content/AdviserSection/AdviserRow"]
 custom_minimum_size = Vector2(300, 0)
 layout_mode = 2
 text = "NidGaming"
 theme_override_font_sizes/font_size = 28
 
-[node name="TestersTitle" type="Label" parent="CenterContainer/Content"]
+[node name="TestersSection" type="VBoxContainer" parent="CenterContainer/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="TestersTitle" type="Label" parent="CenterContainer/Content/TestersSection"]
 layout_mode = 2
 text = "Pre-Alpha Testers"
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
 theme_override_font_sizes/font_size = 36
 
-[node name="Tester1Row" type="HBoxContainer" parent="CenterContainer/Content"]
+[node name="Tester1Row" type="HBoxContainer" parent="CenterContainer/Content/TestersSection"]
 layout_mode = 2
 theme_override_constants/separation = 24
 
-[node name="Name" type="Label" parent="CenterContainer/Content/Tester1Row"]
+[node name="Name" type="Label" parent="CenterContainer/Content/TestersSection/Tester1Row"]
 custom_minimum_size = Vector2(420, 0)
 layout_mode = 2
 text = "Correy Russel"
 theme_override_font_sizes/font_size = 28
 
-[node name="Username" type="Label" parent="CenterContainer/Content/Tester1Row"]
+[node name="Username" type="Label" parent="CenterContainer/Content/TestersSection/Tester1Row"]
 custom_minimum_size = Vector2(300, 0)
 layout_mode = 2
 text = "Eldridge"
 theme_override_font_sizes/font_size = 28
 
-[node name="Tester2Row" type="HBoxContainer" parent="CenterContainer/Content"]
+[node name="Tester2Row" type="HBoxContainer" parent="CenterContainer/Content/TestersSection"]
 layout_mode = 2
 theme_override_constants/separation = 24
 
-[node name="Name" type="Label" parent="CenterContainer/Content/Tester2Row"]
+[node name="Name" type="Label" parent="CenterContainer/Content/TestersSection/Tester2Row"]
 custom_minimum_size = Vector2(420, 0)
 layout_mode = 2
 text = "Jeff FA FA"
 theme_override_font_sizes/font_size = 28
 
-[node name="Username" type="Label" parent="CenterContainer/Content/Tester2Row"]
+[node name="Username" type="Label" parent="CenterContainer/Content/TestersSection/Tester2Row"]
 custom_minimum_size = Vector2(300, 0)
 layout_mode = 2
 text = "Neo"
 theme_override_font_sizes/font_size = 28
 
-[node name="PhrasesTitle" type="Label" parent="CenterContainer/Content"]
+[node name="PhrasesSection" type="VBoxContainer" parent="CenterContainer/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="PhrasesTitle" type="Label" parent="CenterContainer/Content/PhrasesSection"]
 layout_mode = 2
 text = "Fun Phrases"
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
 theme_override_font_sizes/font_size = 36
 
-[node name="Phrase1" type="Label" parent="CenterContainer/Content"]
+[node name="Phrase1" type="Label" parent="CenterContainer/Content/PhrasesSection"]
 layout_mode = 2
 text = "\"All hail the Jeff only one!!\"   —   Jeff FA FA"
 theme_override_font_sizes/font_size = 28
