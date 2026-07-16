@@ -9,6 +9,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.26.2] — 2026-07-15
+
+Follow-up tweak to the **Credits** screen spacing.
+
+### Changed
+
+- **Credits header underline spacing** (`src/ui/menus/CreditsMenu.tscn`): the
+  underline (`HSeparator`) beneath the **Name / Username** column headers is
+  pulled back up tight to the header text (its original 10px gap) by grouping
+  the header row + underline into their own `HeaderSection` `VBoxContainer`;
+  the wider gap now falls *below* the underline, before the first section. All
+  other spacing is unchanged. Layout-only.
+
+---
+
 ## [0.26.1] — 2026-07-15
 
 Visual polish for the **Credits** screen — a clearer typographic hierarchy.

@@ -43,25 +43,29 @@ offset_top = 120.0
 layout_mode = 2
 theme_override_constants/separation = 44
 
-[node name="HeaderRow" type="HBoxContainer" parent="CenterContainer/Content"]
+[node name="HeaderSection" type="VBoxContainer" parent="CenterContainer/Content"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="HeaderRow" type="HBoxContainer" parent="CenterContainer/Content/HeaderSection"]
 layout_mode = 2
 theme_override_constants/separation = 24
 
-[node name="NameHeader" type="Label" parent="CenterContainer/Content/HeaderRow"]
+[node name="NameHeader" type="Label" parent="CenterContainer/Content/HeaderSection/HeaderRow"]
 custom_minimum_size = Vector2(420, 0)
 layout_mode = 2
 text = "Name"
 theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
 theme_override_font_sizes/font_size = 30
 
-[node name="UsernameHeader" type="Label" parent="CenterContainer/Content/HeaderRow"]
+[node name="UsernameHeader" type="Label" parent="CenterContainer/Content/HeaderSection/HeaderRow"]
 custom_minimum_size = Vector2(300, 0)
 layout_mode = 2
 text = "Username"
 theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
 theme_override_font_sizes/font_size = 30
 
-[node name="HeaderSep" type="HSeparator" parent="CenterContainer/Content"]
+[node name="HeaderSep" type="HSeparator" parent="CenterContainer/Content/HeaderSection"]
 layout_mode = 2
 
 [node name="LeadDevSection" type="VBoxContainer" parent="CenterContainer/Content"]
