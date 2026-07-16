@@ -9,6 +9,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.26.1] — 2026-07-15
+
+Visual polish for the **Credits** screen — a clearer typographic hierarchy.
+
+### Changed
+
+- **Credits page styling** (`src/ui/menus/CreditsMenu.tscn`): the page title,
+  the **Name / Username** column headers, and every role/section heading now
+  render in the game's **gold** (`Color(1, 0.85, 0.4, 1)` — the same gold as the
+  end-game leaderboard title); entry text (names, usernames, fun phrase) stays
+  white. Row spacing is **doubled** (10 → 20) and each section (heading + its
+  rows) is grouped into its own `VBoxContainer` so sections are separated by a
+  larger gap (44), reading as coherent blocks instead of an evenly-spaced list.
+  Layout-only — no code or protocol changes.
+
+---
+
 ## [0.26.0] — 2026-07-12
 
 Adds a **Credits** screen and re-tunes the **Set Score** win condition to
