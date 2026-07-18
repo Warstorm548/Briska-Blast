@@ -9,6 +9,79 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.27.0] — 2026-07-18
+
+A **hotbar / action bar** below the play field — the container for player-actionable
+items. No items exist yet; this ships the bar, the slot model, the keybinds, and the
+screen space they live in, so item content can drop straight in later.
+
+> **Deploy:** bump `min_game_version` to **0.27.0** before rolling out. The play
+> field is now shorter than the viewport, and handoff speed / entry position cross
+> the wire normalized by arena height (`NetGameController`), so a 0.26.x client and
+> a 0.27.0 client in the same match would disagree by the height of the bar.
+
+### Added
+
+- **Hotbar** (`src/ui/HotbarView.cs`, new): a full-width light-gray strip pinned to
+  the bottom of the screen holding **5 flush item slots** centered as a block — no
+  gap between adjacent slots, with the backing visible to the left and right of the
+  row. Sits on its own `CanvasLayer` (50), below the reconnect overlay (100) and the
+  pause / end-game menus (200), so both still cover it.
+- **Slot sizing is viewport-relative**: a slot is `105/1440` of viewport **height** —
+  the sprite's native 105×105 at the 2560×1440 design size — so the bar occupies the
+  same share of the screen on any display or aspect ratio, matching the `HFrac`
+  convention already used for the paddle, ball and corner barriers. The strip is
+  exactly one slot tall (7.29% of screen height; the row spans 20.5% of the width).
+- **Item icons** render in the slot sprite's inner square: 93×93 inset 6px inside the
+  105×105 frame, held as ratios (`6/105`, `93/105`) so both survive rescaling and the
+  placeholder art being redrawn. Slots show only the frame and, when filled, the
+  icon — no slot numbers.
+- **Slot art** (`src/assets/sprites/ActionBarArea/ItemSlotV2.png`): the placeholder
+  frame regenerated at 2.5× the original 42×42 (→ 105×105) with the black border
+  **capped at 6px** instead of scaled, so the usable icon area grew **2.58×** (36 → 93)
+  — more than the slot itself. Colours are reproduced exactly from the original: its
+  gradient depends only on Chebyshev distance from the centre (square rings, not a
+  radial circle — the inner corner and edge midpoint carry the same colour, and each
+  ring varied by at most 1/255), so the 18-entry ring palette was resampled to the new
+  size rather than redrawn. Centre `(89,131,146)` and inner edge `(28,29,30)` are
+  byte-identical to it. The superseded `ItemSlotV1.png` was removed; it remains in
+  history if ever needed.
+
+  Resizing again is three constants — `HotbarView.SlotSizeHFrac` plus the
+  `IconInsetFrac` / `IconSizeFrac` pair — and a matching sprite; nothing else in the
+  bar or the play field carries a slot dimension.
+- **Keys 1–5** (`hotbar_slot_1`…`hotbar_slot_5`, physical keycodes 49–53) each fire
+  their own slot. Bound as named input actions rather than hardcoded keycodes so they
+  can be rebound later. Polled in `GameScene._PhysicsProcess` below the `_gameOver`
+  and flow-pause returns, so keys are dead behind the end screen and during a rejoin
+  freeze, and suppressed with the pause menu open like the paddle and serve. Live
+  during the pre-serve wait.
+- **Press feedback**: a fired slot flashes white and fades over 120ms — temporary, so
+  the keybinds are observable before items exist, and the natural home for
+  "item used" feedback once they do.
+- **`ItemSlot` / `Hotbar` model** (`src/game/GameState.cs`): a fixed row of 5 slots
+  on `GameState` alongside `Paddle`, each holding an optional icon and a count. Local
+  only, never networked. Per-item **maximum stack sizes** will live on a future item
+  lookup table, not on the slot — a slot shouldn't decide its own cap.
+- **`AssetCategory.Ui`** (`src/core/SpriteRegistry.cs`): a fourth category for screen
+  furniture. The existing three all answer "who moves this thing in the arena", which
+  no UI sprite has an answer to. `SystemSpawns()` is unaffected. New
+  `AssetId.ItemSlot = 7` → `src/assets/sprites/ActionBarArea/ItemSlotV2.png`.
+
+### Changed
+
+- **The play field no longer fills the viewport** (`src/game/GameScene.cs`): `_Ready`
+  now derives the arena as the viewport minus the bar's height, so the field sits
+  entirely **above** the hotbar and the ball is still seen crossing the bottom goal
+  line to score. Resolving it as one local means the paddle line, the corner-barrier
+  colliders, the ball radius and `ArenaWidth`/`ArenaHeight` all follow automatically —
+  in particular the colliders and their sprites keep being built from the same
+  numbers, preserving `CornerBarrier`'s collider-can't-drift-from-art invariant.
+  Absolute paddle speed, ball radius and paddle size shrink ~2.9% with the shorter
+  field; they stay proportional to it, and every client shrinks identically.
+
+---
+
 ## [0.26.2] — 2026-07-15
 
 Follow-up tweak to the **Credits** screen spacing.
