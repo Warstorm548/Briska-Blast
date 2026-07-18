@@ -27,15 +27,24 @@ screen space they live in, so item content can drop straight in later.
   gap between adjacent slots, with the backing visible to the left and right of the
   row. Sits on its own `CanvasLayer` (50), below the reconnect overlay (100) and the
   pause / end-game menus (200), so both still cover it.
-- **Slot sizing is viewport-relative**: a slot is `42/1440` of viewport **height** —
-  the sprite's native 42×42 at the 2560×1440 design size — so the bar occupies the
+- **Slot sizing is viewport-relative**: a slot is `105/1440` of viewport **height** —
+  the sprite's native 105×105 at the 2560×1440 design size — so the bar occupies the
   same share of the screen on any display or aspect ratio, matching the `HFrac`
   convention already used for the paddle, ball and corner barriers. The strip is
-  exactly one slot tall.
-- **Item icons** render in the slot sprite's inner square: 36×36 inset 3px inside the
-  42×42 frame, held as ratios (`3/42`, `36/42`) so both survive rescaling and the
+  exactly one slot tall (7.29% of screen height; the row spans 20.5% of the width).
+- **Item icons** render in the slot sprite's inner square: 93×93 inset 6px inside the
+  105×105 frame, held as ratios (`6/105`, `93/105`) so both survive rescaling and the
   placeholder art being redrawn. Slots show only the frame and, when filled, the
   icon — no slot numbers.
+- **Slot art** (`src/assets/sprites/ActionBarArea/ItemSlotV2.png`): the placeholder
+  frame regenerated at 2.5× the original (42 → 105) with the black border **capped at
+  6px** instead of scaled, so the usable icon area grew **2.58×** (36 → 93) — more than
+  the slot itself. Colours are reproduced exactly from `ItemSlotV1.png`: that art's
+  gradient depends only on Chebyshev distance from the centre (square rings, not a
+  radial circle — its inner corner and edge midpoint carry the same colour), so the
+  ring palette was resampled to the new size rather than redrawn. Centre
+  `(89,131,146)` and inner edge `(28,29,30)` are byte-identical to V1, which is kept
+  alongside it.
 - **Keys 1–5** (`hotbar_slot_1`…`hotbar_slot_5`, physical keycodes 49–53) each fire
   their own slot. Bound as named input actions rather than hardcoded keycodes so they
   can be rebound later. Polled in `GameScene._PhysicsProcess` below the `_gameOver`

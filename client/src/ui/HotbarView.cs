@@ -18,21 +18,23 @@ namespace BriskaBlast.UI;
 /// </summary>
 public partial class HotbarView : CanvasLayer
 {
-    /// <summary>One slot's edge length as a fraction of viewport height — 42px at the
+    /// <summary>One slot's edge length as a fraction of viewport height — 105px at the
     /// 2560×1440 design size, matching the slot sprite's native resolution.</summary>
-    public const float SlotSizeHFrac = 42f / 1440f;
+    public const float SlotSizeHFrac = 105f / 1440f;
 
     /// <summary>Height of the whole strip. The bar is exactly one slot tall: the slots
     /// sit flush against its top and bottom, so the light-gray backing shows only to the
     /// left and right of the row.</summary>
     public const float HeightHFrac = SlotSizeHFrac;
 
-    // The slot sprite is a 42×42 frame: 3px of solid black on all four sides around a
-    // 36×36 inner square that fades to a teal center. An item icon fills that inner
+    // The slot sprite is a 105×105 frame: 6px of solid black on all four sides around a
+    // 93×93 inner square that fades to a teal center. An item icon fills that inner
     // square exactly. Kept as ratios of the sprite so both survive the bar being scaled
     // to a viewport and the placeholder art being redrawn at a different resolution.
-    private const float IconInsetFrac = 3f / 42f;
-    private const float IconSizeFrac = 36f / 42f;
+    // Note the frame is capped at 6px rather than scaled with the slot, so the icon area
+    // grew 2.58× when the slot grew 2.5× — the ratios below are not simply the old ones.
+    private const float IconInsetFrac = 6f / 105f;
+    private const float IconSizeFrac = 93f / 105f;
 
     /// <summary>Placeholder backing colour. Deliberately plain — the slot art is a
     /// first pass and this bar is expected to be restyled with it.</summary>
