@@ -3,6 +3,7 @@ using Godot;
 using BriskaBlast.Core;
 using BriskaBlast.Game.View;
 using BriskaBlast.Net;
+using BriskaBlast.UI;
 using BriskaBlast.UI.Menus;
 
 namespace BriskaBlast.Game;
@@ -113,10 +114,33 @@ public partial class GameScene : Node2D
     // dropped and needs to re-enter it to rejoin the match.
     private Label _codeLabel = null!;
 
+    // The action bar below the play field. Its CanvasLayer sits under the reconnect
+    // overlay (100) and the pause / end-game menus (200) so both still cover it.
+    private const int HotbarLayer = 50;
+    private HotbarView _hotbar = null!;
+
+    /// <summary>Input action per hotbar slot, indexed by slot. Held as a table because
+    /// _PhysicsProcess polls all of them every frame and building the names inline would
+    /// allocate a string per slot per frame. This is also the authority on which slots
+    /// are reachable: growing <see cref="Hotbar.SlotCount"/> without adding matching
+    /// actions here (and in project.godot) just leaves the extra slots keyless.</summary>
+    private static readonly string[] HotbarActions =
+    {
+        "hotbar_slot_1", "hotbar_slot_2", "hotbar_slot_3", "hotbar_slot_4", "hotbar_slot_5",
+    };
+
     public override void _Ready()
     {
         var ctx = SessionContext.Instance;
-        var arena = GetViewportRect().Size;
+
+        // The action bar owns a strip along the bottom of the screen and the play field
+        // is everything above it, so "arena" here is deliberately SMALLER than the
+        // viewport. Resolving it once means every size below — the paddle line, the
+        // corner-barrier colliders, the ball radius, ArenaWidth/Height — follows the
+        // shrink for free, and the colliders keep being built from the same numbers the
+        // view draws their sprites from (see CornerBarrier's single-source-of-truth note).
+        var viewport = GetViewportRect().Size;
+        var arena = new Vector2(viewport.X, viewport.Y - HotbarView.HeightHFrac * viewport.Y);
 
         // Resolve the relative tuning to this arena's pixels (height-relative,
         // except the paddle width which is width-relative).
@@ -158,6 +182,13 @@ public partial class GameScene : Node2D
         // without a resolver falls back to the raw id.
         _view.NameResolver = ctx != null ? ctx.DisplayNameFor : null;
         AddChild(_view);
+
+        // The action bar fills the strip the arena just gave up. Its own CanvasLayer
+        // sits below the reconnect overlay (100) and the pause / end-game menus (200),
+        // so those still cover it.
+        _hotbar = new HotbarView { Layer = HotbarLayer };
+        AddChild(_hotbar);
+        _hotbar.SyncFrom(_state.Hotbar);
 
         BuildOverlay();
 
@@ -538,6 +569,19 @@ public partial class GameScene : Node2D
         if (Input.IsActionJustPressed("ui_cancel"))
             TogglePauseMenu();
 
+        // Hotbar: number keys 1-5 fire their own slot. Suspended while the pause menu
+        // is open, like the paddle and the serve; the _gameOver / flow-pause returns
+        // above already cover the end screen and a rejoin freeze. Deliberately live
+        // during the pre-serve wait — using an item before serving is harmless.
+        if (!_paused)
+        {
+            // Bounded by the action table, not the slot count: a slot with no key bound
+            // is simply unreachable rather than an index past the end of the table.
+            for (int i = 0; i < HotbarActions.Length && i < Hotbar.SlotCount; i++)
+                if (Input.IsActionJustPressed(HotbarActions[i]))
+                    OnHotbarSlotActivated(i);
+        }
+
         // System spawns (BallSpliter) appear on their own cadence, independent of
         // the serve / paddle — the sim resolves any ball that touches one.
         TickSplitters(delta);
@@ -588,6 +632,26 @@ public partial class GameScene : Node2D
         }
 
         _view.Render(_state);
+    }
+
+    /// <summary>A hotbar slot's key was pressed. Acknowledges the press on screen, then
+    /// activates whatever the slot holds — which is nothing today, since no item system
+    /// exists yet to fill one. The empty-slot return below is where item activation
+    /// hangs when it arrives.</summary>
+    private void OnHotbarSlotActivated(int index)
+    {
+        // Flash regardless of contents: the player pressed a key and deserves to see
+        // that it registered, whether or not the slot had anything in it.
+        _hotbar.Flash(index);
+
+        var slot = _state.Hotbar.Slots[index];
+        if (slot.IsEmpty)
+        {
+            Log.Debug("game.hotbar", $"slot {index + 1} pressed (empty)");
+            return;
+        }
+
+        Log.Debug("game.hotbar", $"slot {index + 1} activated (icon={slot.Icon}, count={slot.Count})");
     }
 
     private void OnScore(ScoreEvent e)

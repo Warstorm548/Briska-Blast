@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using BriskaBlast.Core;
 using Godot;
 
 namespace BriskaBlast.Game;
@@ -102,6 +103,49 @@ public sealed class Paddle
     public float Y;
 }
 
+/// <summary>One hotbar slot: an actionable item the player holds, or nothing.
+/// Empty is the normal state today — no items exist yet, so every slot starts and
+/// stays empty until an item system fills one.</summary>
+public sealed class ItemSlot
+{
+    /// <summary>Sprite drawn in the slot's inner square, or null when the slot is
+    /// empty. Reuses <see cref="AssetId"/> rather than inventing an item enum: when
+    /// real items arrive this becomes an item id whose lookup row carries the icon.</summary>
+    public AssetId? Icon;
+
+    /// <summary>How many of the item are held. Maximum stack size will differ per item
+    /// and belongs on the future item lookup table (the <see cref="SpriteRegistry"/>
+    /// pattern), not here — a slot should not decide its own cap.</summary>
+    public int Count;
+
+    /// <summary>Nothing to draw and nothing to activate.</summary>
+    public bool IsEmpty => Icon == null;
+}
+
+/// <summary>
+/// The local player's action bar: a fixed row of slots below the play field, each
+/// fired by its own number key. Fixed-length and allocated once — slots are emptied
+/// and refilled in place, never added or removed, so the view can bind one UI node
+/// per slot at build time and never rebuild the row.
+/// </summary>
+public sealed class Hotbar
+{
+    /// <summary>Slots in the bar, left to right. Bound to keys 1..<see cref="SlotCount"/>.
+    /// Raising this grows the row and the model together; the view sizes itself from it
+    /// too, so the only other thing a bigger bar needs is more input actions.</summary>
+    public const int SlotCount = 5;
+
+    public readonly ItemSlot[] Slots = CreateSlots();
+
+    private static ItemSlot[] CreateSlots()
+    {
+        var slots = new ItemSlot[SlotCount];
+        for (int i = 0; i < slots.Length; i++)
+            slots[i] = new ItemSlot();
+        return slots;
+    }
+}
+
 /// <summary>
 /// All authoritative state for THIS player's screen. There is no shared arena:
 /// each client owns and renders only its own <see cref="GameState"/>. The
@@ -114,6 +158,11 @@ public sealed class GameState
     public float ArenaHeight;
 
     public readonly Paddle Paddle = new();
+
+    /// <summary>The local action bar. Local-only and never networked — what a player
+    /// holds is their own business until an item actually does something.</summary>
+    public readonly Hotbar Hotbar = new();
+
     public readonly List<Ball> Balls = new();
 
     /// <summary>System-spawned ball splitters currently on this screen (local-only;

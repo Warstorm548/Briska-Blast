@@ -17,6 +17,14 @@ a ball lives on **exactly one screen at a time** — the screen it is currently 
 simulates it authoritatively. The ball travels between players by crossing an
 edge that is shared with another player (a "portal").
 
+> **The arena is not the viewport.** Since game 0.27.0 the hotbar owns a strip along
+> the bottom of the window, and the play field is everything above it — `GameScene._Ready`
+> derives the arena as the viewport minus that strip, and everything downstream (paddle
+> line, corner-barrier colliders, ball radius, `ArenaWidth`/`ArenaHeight`) follows from
+> that one local. Because handoffs normalize speed and entry position by **arena height**,
+> all clients in a match must agree on the strip's size — which is what gating
+> `min_game_version` at 0.27.0 enforces.
+
 ```text
         a player's own screen (always drawn upright)
 

@@ -5,8 +5,9 @@ namespace BriskaBlast.Core;
 
 /// <summary>
 /// Who drives an asset: a player (paddles, the served ball), the game itself as a
-/// static fixture (corner barriers), or the game itself as a random spawn (the ball
-/// splitter). Lets systems treat these groups uniformly — e.g. the host spawn-frequency
+/// static fixture (corner barriers), the game itself as a random spawn (the ball
+/// splitter), or nobody at all because it is screen furniture (the hotbar slot frame).
+/// Lets systems treat these groups uniformly — e.g. the host spawn-frequency
 /// settings enumerate only <see cref="SystemHandled"/>.
 /// </summary>
 public enum AssetCategory
@@ -21,6 +22,11 @@ public enum AssetCategory
     /// <summary>Spawned by the game on a host-tunable cadence — the ball splitter and
     /// future random-spawn elements. Enumerated by <see cref="SpriteRegistry.SystemSpawns"/>.</summary>
     SystemHandled,
+    /// <summary>Screen furniture, not a world object — the hotbar slot frame and future
+    /// HUD chrome. Never spawned, never simulated, never collided with; it exists only to
+    /// be drawn on a <see cref="Godot.CanvasLayer"/>. The other three values all answer
+    /// "who moves this thing in the arena", which no UI sprite has an answer to.</summary>
+    Ui,
 }
 
 /// <summary>
@@ -37,6 +43,10 @@ public enum AssetId
     Paddle = 4,
     Background = 5,
     CornerBarrier = 6,
+    /// <summary>The hotbar slot frame. Named for the concept, not the art revision —
+    /// the current sprite is a placeholder (<c>ItemSlotV1.png</c>) and swapping it later
+    /// is a path change on the <see cref="SpriteRegistry"/> row, not a new id.</summary>
+    ItemSlot = 7,
 }
 
 /// <summary>One row of the asset lookup table: a stable id, a human label, the
@@ -78,6 +88,7 @@ public partial class SpriteRegistry : Node
         new(AssetId.Paddle, "Paddle", "res://src/assets/Paddles/BallStricker.png", AssetCategory.PlayerControlled),
         new(AssetId.Background, "Background", "res://src/assets/sprites/backgrounds/BackgroundDefault.png", AssetCategory.PlayerControlled),
         new(AssetId.CornerBarrier, "CornerBarrier", "res://src/assets/sprites/Platforms/Cornerbarrier.png", AssetCategory.SystemControlled),
+        new(AssetId.ItemSlot, "ItemSlot", "res://src/assets/sprites/ActionBarArea/ItemSlotV1.png", AssetCategory.Ui),
     };
 
     private readonly Dictionary<AssetId, AssetEntry> _byId = new();
