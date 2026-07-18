@@ -37,14 +37,19 @@ screen space they live in, so item content can drop straight in later.
   placeholder art being redrawn. Slots show only the frame and, when filled, the
   icon — no slot numbers.
 - **Slot art** (`src/assets/sprites/ActionBarArea/ItemSlotV2.png`): the placeholder
-  frame regenerated at 2.5× the original (42 → 105) with the black border **capped at
-  6px** instead of scaled, so the usable icon area grew **2.58×** (36 → 93) — more than
-  the slot itself. Colours are reproduced exactly from `ItemSlotV1.png`: that art's
+  frame regenerated at 2.5× the original 42×42 (→ 105×105) with the black border
+  **capped at 6px** instead of scaled, so the usable icon area grew **2.58×** (36 → 93)
+  — more than the slot itself. Colours are reproduced exactly from the original: its
   gradient depends only on Chebyshev distance from the centre (square rings, not a
-  radial circle — its inner corner and edge midpoint carry the same colour), so the
-  ring palette was resampled to the new size rather than redrawn. Centre
-  `(89,131,146)` and inner edge `(28,29,30)` are byte-identical to V1, which is kept
-  alongside it.
+  radial circle — the inner corner and edge midpoint carry the same colour, and each
+  ring varied by at most 1/255), so the 18-entry ring palette was resampled to the new
+  size rather than redrawn. Centre `(89,131,146)` and inner edge `(28,29,30)` are
+  byte-identical to it. The superseded `ItemSlotV1.png` was removed; it remains in
+  history if ever needed.
+
+  Resizing again is three constants — `HotbarView.SlotSizeHFrac` plus the
+  `IconInsetFrac` / `IconSizeFrac` pair — and a matching sprite; nothing else in the
+  bar or the play field carries a slot dimension.
 - **Keys 1–5** (`hotbar_slot_1`…`hotbar_slot_5`, physical keycodes 49–53) each fire
   their own slot. Bound as named input actions rather than hardcoded keycodes so they
   can be rebound later. Polled in `GameScene._PhysicsProcess` below the `_gameOver`
@@ -61,7 +66,7 @@ screen space they live in, so item content can drop straight in later.
 - **`AssetCategory.Ui`** (`src/core/SpriteRegistry.cs`): a fourth category for screen
   furniture. The existing three all answer "who moves this thing in the arena", which
   no UI sprite has an answer to. `SystemSpawns()` is unaffected. New
-  `AssetId.ItemSlot = 7` → `src/assets/sprites/ActionBarArea/ItemSlotV1.png`.
+  `AssetId.ItemSlot = 7` → `src/assets/sprites/ActionBarArea/ItemSlotV2.png`.
 
 ### Changed
 
