@@ -18,27 +18,26 @@ namespace BriskaBlast.UI;
 /// </summary>
 public partial class HotbarView : CanvasLayer
 {
-    /// <summary>One slot's edge length as a fraction of viewport height — 105px at the
+    /// <summary>One slot's edge length as a fraction of viewport height — 96px at the
     /// 2560×1440 design size, matching the slot sprite's native resolution.</summary>
-    public const float SlotSizeHFrac = 105f / 1440f;
+    public const float SlotSizeHFrac = 96f / 1440f;
 
     /// <summary>Height of the whole strip. The bar is exactly one slot tall: the slots
-    /// sit flush against its top and bottom, so the light-gray backing shows only to the
+    /// sit flush against its top and bottom, so the metallic backing shows only to the
     /// left and right of the row.</summary>
     public const float HeightHFrac = SlotSizeHFrac;
 
-    // The slot sprite is a 105×105 frame: 6px of solid black on all four sides around a
-    // 93×93 inner square that fades to a teal center. An item icon fills that inner
-    // square exactly. Kept as ratios of the sprite so both survive the bar being scaled
-    // to a viewport and the placeholder art being redrawn at a different resolution.
-    // Note the frame is capped at 6px rather than scaled with the slot, so the icon area
-    // grew 2.58× when the slot grew 2.5× — the ratios below are not simply the old ones.
-    private const float IconInsetFrac = 6f / 105f;
-    private const float IconSizeFrac = 93f / 105f;
+    // The slot sprite is a 96×96 frame: 6px of near-black (#191919) on all four sides
+    // around an 84×84 inner square that fades to a teal center. An item icon fills that
+    // inner square exactly. Kept as a ratio of the sprite so it survives the bar being
+    // scaled to a viewport and the art being redrawn at a different resolution. The
+    // border is subtracted from BOTH sides, so the interior is 96 − 2×6, not 96 − 6.
+    private const float IconInsetFrac = 6f / 96f;
 
-    /// <summary>Placeholder backing colour. Deliberately plain — the slot art is a
-    /// first pass and this bar is expected to be restyled with it.</summary>
-    private static readonly Color StripColor = new(0.78f, 0.78f, 0.78f);
+    /// <summary>Backing colour behind the slots: a flat, slightly blue-tinted mid-dark
+    /// gray. The cool tint is what reads as brushed metal rather than flat gray, and it
+    /// picks up the teal in the slot art.</summary>
+    private static readonly Color StripColor = new(0.42f, 0.44f, 0.47f);
 
     // A fired slot flashes white and fades out. Short enough to read as a keypress
     // acknowledgement rather than an animation.

@@ -44,8 +44,8 @@ public enum AssetId
     Background = 5,
     CornerBarrier = 6,
     /// <summary>The hotbar slot frame. Named for the concept, not the art revision —
-    /// the current sprite is a placeholder (<c>ItemSlotV2.png</c>) and swapping it later
-    /// is a path change on the <see cref="SpriteRegistry"/> row, not a new id.</summary>
+    /// the current sprite is <c>ItemSlotV3.png</c> and swapping it again is a path
+    /// change on the <see cref="SpriteRegistry"/> row, not a new id.</summary>
     ItemSlot = 7,
 }
 
@@ -88,7 +88,7 @@ public partial class SpriteRegistry : Node
         new(AssetId.Paddle, "Paddle", "res://src/assets/Paddles/BallStricker.png", AssetCategory.PlayerControlled),
         new(AssetId.Background, "Background", "res://src/assets/sprites/backgrounds/BackgroundDefault.png", AssetCategory.PlayerControlled),
         new(AssetId.CornerBarrier, "CornerBarrier", "res://src/assets/sprites/Platforms/Cornerbarrier.png", AssetCategory.SystemControlled),
-        new(AssetId.ItemSlot, "ItemSlot", "res://src/assets/sprites/ActionBarArea/ItemSlotV2.png", AssetCategory.Ui),
+        new(AssetId.ItemSlot, "ItemSlot", "res://src/assets/sprites/ActionBarArea/ItemSlotV3.png", AssetCategory.Ui),
     };
 
     private readonly Dictionary<AssetId, AssetEntry> _byId = new();

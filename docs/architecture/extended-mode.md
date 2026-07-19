@@ -23,7 +23,8 @@ edge that is shared with another player (a "portal").
 > line, corner-barrier colliders, ball radius, `ArenaWidth`/`ArenaHeight`) follows from
 > that one local. Because handoffs normalize speed and entry position by **arena height**,
 > all clients in a match must agree on the strip's size — which is what gating
-> `min_game_version` at 0.27.0 enforces.
+> `min_game_version` enforces. The gate moves every time the strip is resized: it went
+> to 0.28.0 when slots shrank 105px → 96px.
 
 ```text
         a player's own screen (always drawn upright)
