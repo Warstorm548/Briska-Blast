@@ -9,6 +9,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.28.0] — 2026-07-18
+
+A styling pass on the hotbar shipped in 0.27.0: new slot art, slots rendered at the
+new sprite's native size, and a metallic backing in place of the placeholder gray.
+No behaviour change — the bar still holds 5 keybound slots and no items exist yet.
+
+> **Deploy:** bump `min_game_version` to **0.28.0** before rolling out. Slots shrink
+> 105px → 96px, which changes the height of the bar and therefore of the play field.
+> Handoff speed and entry position cross the wire normalized by arena height
+> (`NetGameController`), so a 0.27.x client and a 0.28.0 client in the same match
+> would disagree by the 9px difference.
+
+### Changed
+
+- **Slot art** (`src/assets/sprites/ActionBarArea/ItemSlotV3.png`, replaces
+  `ItemSlotV2.png`): a **96×96** frame — 6px of near-black `#191919` on all four sides
+  around an **84×84** interior that fades to a teal centre. The border is a touch
+  softer than V2's pure `#000000`. Note the interior is `96 − 2×6`, not `96 − 6`: the
+  frame is subtracted from **both** sides, so a 6px border on a 96px sprite can only
+  leave 84px of icon space. A 90×90 interior would need either a 3px border or a
+  102×102 sprite.
+- **Slots render at native size** (`HotbarView.SlotSizeHFrac`): `105/1440` → `96/1440`
+  of viewport height, keeping the convention that on-screen size matches the sprite's
+  native resolution at the 2560×1440 design size, so the art never resamples. The
+  strip is one slot tall as before — 7.29% → **6.67%** of screen height — and the
+  5-slot row spans 18.75% of the width (was 20.5%).
+- **The play field grew by the 9px the bar gave up** (`src/game/GameScene.cs`,
+  unchanged): the arena is still derived as viewport minus bar height, so the shorter
+  bar widens the field for free. Absolute paddle speed, ball radius and paddle size
+  rise ~0.7% with the taller field; they stay proportional to it, and every client
+  changes identically.
+- **Action-bar backing** (`HotbarView.StripColor`): the placeholder light gray
+  `#C7C7C7` → a flat **`#6B7078`**, a slightly blue-tinted mid-dark gray. The cool
+  tint is what reads as brushed metal rather than flat gray, and it picks up the teal
+  in the slot art. Flat fill for now; a gradient would sell the metal harder if this
+  is revisited.
+- **`IconSizeFrac` removed** (`src/ui/HotbarView.cs`): it was never read. The layout
+  insets the icon via anchor offsets from `IconInsetFrac` alone, and for a square
+  sprite the size is implied (`1 − 2 × inset`). Correcting 0.27.0's note below:
+  resizing the bar is **two** constants — `SlotSizeHFrac` and `IconInsetFrac` — plus
+  a matching sprite.
+
+---
+
 ## [0.27.0] — 2026-07-18
 
 A **hotbar / action bar** below the play field — the container for player-actionable
