@@ -493,12 +493,20 @@ public partial class SignalingClient : Node
                     MatchResumed?.Invoke(IntProp(root, "countdown_secs"));
                     break;
                 case "time_sync":
+                {
                     // T4 = now; fold this round-trip into the server-clock offset.
-                    _clock.AddSample(
-                        LongProp(root, "client_send_ms"),
-                        LongProp(root, "server_ms"),
-                        (long)Time.GetTicksMsec());
+                    long t1 = LongProp(root, "client_send_ms");
+                    long t4 = (long)Time.GetTicksMsec();
+                    _clock.AddSample(t1, LongProp(root, "server_ms"), t4);
+                    // TEMP diagnostic (fix/ball-handoff-entry-position): the entry
+                    // fast-forward trusts this offset, so a biased one flings
+                    // incoming balls inward. A high RTT (asymmetric path) and/or a
+                    // large/jumpy offset on the Mac/TURN client is the smoking gun.
+                    // Remove once confirmed.
+                    Log.Info("net.clock",
+                        $"time_sync rtt={t4 - t1}ms offset={_clock.OffsetMs}ms synced={_clock.Synced}");
                     break;
+                }
                 case "offer":
                     OfferReceived?.Invoke(Str(root, "from"), Str(root, "sdp"));
                     break;

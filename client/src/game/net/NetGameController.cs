@@ -114,10 +114,26 @@ public sealed class NetGameController : IDisposable
         // clocks, which used to drift apart and fling the ball partway down the
         // screen. Until our clock has a sample, skip the correction and enter
         // cleanly at the edge; the clamp is a safety net against a bad sample.
+        long rawTransitMs = _signaling.ServerNowMs() - pkt.SentTimestampMs;
         float transit = _signaling.ClockSynced
-            ? Mathf.Clamp((_signaling.ServerNowMs() - pkt.SentTimestampMs) / 1000f, 0f, 0.5f)
+            ? Mathf.Clamp(rawTransitMs / 1000f, 0f, 0.5f)
             : 0f;
         pos += vel * transit;
+
+        // TEMP diagnostic (fix/ball-handoff-entry-position): the entry inset is
+        // vel*transit, and transit is entirely THIS client's server-clock offset
+        // estimate. Over a relayed/biased path the raw value balloons toward the
+        // 500ms clamp and shoves the ball deep inside; a healthy direct peer sits
+        // at tens of ms. Log raw vs used transit and the inward push as a fraction
+        // of arena height so a Mac/TURN capture can be compared against a WebRTC
+        // peer. Info (not Debug) so it surfaces on every channel. Remove once
+        // confirmed.
+        float pushFrac = _state.ArenaHeight > 0f
+            ? (vel.Length() * transit) / _state.ArenaHeight
+            : 0f;
+        Log.Info("game.handoff",
+            $"IN transit ball={pkt.BallId} peer={peerId} synced={_signaling.ClockSynced} " +
+            $"raw={rawTransitMs}ms used={transit * 1000f:0}ms push={pushFrac:P0}ofArenaH");
 
         // Defence: drop a ball we already have (a packet replay, or a ball that
         // crossed back). Ball ids are globally unique (seat-namespaced), so this

@@ -80,4 +80,8 @@ public sealed class ServerClock
     /// is just the raw local reading (offset 0) — callers should gate on
     /// <see cref="Synced"/> rather than trust it cross-machine.</summary>
     public long NowMs(long localTicks) => localTicks + _offsetMs;
+
+    /// <summary>Diagnostic read of the current offset estimate (server − local, ms).
+    /// Exposed so callers can log clock health; not part of normal operation.</summary>
+    public long OffsetMs => _offsetMs;
 }
