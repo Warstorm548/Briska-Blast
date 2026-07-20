@@ -497,14 +497,23 @@ public partial class SignalingClient : Node
                     // T4 = now; fold this round-trip into the server-clock offset.
                     long t1 = LongProp(root, "client_send_ms");
                     long t4 = (long)Time.GetTicksMsec();
-                    _clock.AddSample(t1, LongProp(root, "server_ms"), t4);
+                    long serverMs = LongProp(root, "server_ms");
                     // TEMP diagnostic (fix/ball-handoff-entry-position): the entry
                     // fast-forward trusts this offset, so a biased one flings
-                    // incoming balls inward. A high RTT (asymmetric path) and/or a
-                    // large/jumpy offset on the Mac/TURN client is the smoking gun.
-                    // Remove once confirmed.
+                    // incoming balls inward. Log the RTT (a long/asymmetric path —
+                    // e.g. a distant player to a US/EU server — biases the SNTP
+                    // offset), THIS probe's raw sample, and how far it pulls from
+                    // the running estimate: a distant client's samples jump around
+                    // (big devFromEst), a close one's are tight. devFromEst is only
+                    // meaningful once synced. Remove once confirmed.
+                    long sampleOffset = serverMs - (t1 + (t4 - t1) / 2);
+                    long prevEst = _clock.OffsetMs;
+                    bool wasSynced = _clock.Synced;
+                    _clock.AddSample(t1, serverMs, t4);
                     Log.Info("net.clock",
-                        $"time_sync rtt={t4 - t1}ms offset={_clock.OffsetMs}ms synced={_clock.Synced}");
+                        $"time_sync rtt={t4 - t1}ms sample={sampleOffset}ms " +
+                        $"devFromEst={(wasSynced ? sampleOffset - prevEst : 0)}ms " +
+                        $"smoothed={_clock.OffsetMs}ms synced={_clock.Synced}");
                     break;
                 }
                 case "offer":

@@ -27,9 +27,13 @@ macOS or the TURN transport itself.
 
 - **Handoff transit logging** (`src/game/net/NetGameController.cs`): each incoming
   ball logs the raw (pre-clamp) vs used fast-forward transit and the resulting inward
-  push as a fraction of arena height (`Log.Info`, category `game.handoff`).
+  push as a fraction of arena height (`Log.Info`, category `game.handoff`). Handoff
+  IN/OUT lines resolve the peer's display name (via `SessionContext.DisplayNameFor`)
+  so a capture reads `peer=<name>` rather than an opaque player_id.
 - **Clock-sync logging** (`src/net/SignalingClient.cs`): each `time_sync` reply logs
-  the round-trip and the current server-clock offset (`Log.Info`, category `net.clock`).
+  the round-trip, this probe's raw sample, its deviation from the running estimate,
+  and the smoothed server-clock offset (`Log.Info`, category `net.clock`) — a distant
+  client's samples jump around, exposing a biased offset.
 - **`ServerClock.OffsetMs`** (`src/net/ServerClock.cs`): read-only accessor exposing
   the offset estimate for the above.
 

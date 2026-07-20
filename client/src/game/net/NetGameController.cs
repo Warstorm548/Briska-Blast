@@ -68,11 +68,11 @@ public sealed class NetGameController : IDisposable
             _signaling.ServerNowMs(), ev.Kind);
         bool sent = _transport.Send(ev.PeerId, GamePacket.WriteBallHandoff(pkt));
         if (sent)
-            Log.Debug("game.handoff", $"OUT ball={ev.BallId} kind={ev.Kind} peer={ev.PeerId} edge={ev.ExitEdge}");
+            Log.Debug("game.handoff", $"OUT ball={ev.BallId} kind={ev.Kind} peer={PeerName(ev.PeerId)} edge={ev.ExitEdge}");
         else
             // The ball just left our screen but the peer channel isn't open, so it
             // vanished into nothing — the classic "no balls crossing" symptom.
-            Log.Warn("game.handoff", $"DROPPED ball={ev.BallId} peer={ev.PeerId} — channel not open (ball lost)");
+            Log.Warn("game.handoff", $"DROPPED ball={ev.BallId} peer={PeerName(ev.PeerId)} — channel not open (ball lost)");
     }
 
     /// <summary>Report a credited score to the server (server-relayed channel).
@@ -84,6 +84,13 @@ public sealed class NetGameController : IDisposable
         if (!string.IsNullOrEmpty(ev.ScoringPlayerId))
             _signaling.SendReportScore(ev.ScoringPlayerId, ev.Points);
     }
+
+    // TEMP diagnostic (fix/ball-handoff-entry-position): resolve a peer's display
+    // name for logs so a capture reads "peer=<the distant/India friend>" instead of
+    // an opaque player_id — makes the biased-clock side obvious when comparing two
+    // machines' logs. Falls back to the id if the roster isn't available.
+    private static string PeerName(string peerId) =>
+        SessionContext.Instance?.DisplayNameFor(peerId) ?? peerId;
 
     private void OnPeerData(string peerId, byte[] data)
     {
@@ -132,7 +139,7 @@ public sealed class NetGameController : IDisposable
             ? (vel.Length() * transit) / _state.ArenaHeight
             : 0f;
         Log.Info("game.handoff",
-            $"IN transit ball={pkt.BallId} peer={peerId} synced={_signaling.ClockSynced} " +
+            $"IN transit ball={pkt.BallId} peer={PeerName(peerId)} synced={_signaling.ClockSynced} " +
             $"raw={rawTransitMs}ms used={transit * 1000f:0}ms push={pushFrac:P0}ofArenaH");
 
         // Defence: drop a ball we already have (a packet replay, or a ball that
@@ -151,7 +158,7 @@ public sealed class NetGameController : IDisposable
             LastHitterId = pkt.LastHitterId,
             Kind = pkt.Kind,
         });
-        Log.Debug("game.handoff", $"IN  ball={pkt.BallId} kind={pkt.Kind} peer={peerId} edge={entryEdge}");
+        Log.Debug("game.handoff", $"IN  ball={pkt.BallId} kind={pkt.Kind} peer={PeerName(peerId)} edge={entryEdge}");
     }
 
     private void OnPeerLost(string peerId)
@@ -160,7 +167,7 @@ public sealed class NetGameController : IDisposable
         // heading at them bounces instead of vanishing into a dead channel.
         if (_peerToEdge.TryGetValue(peerId, out var edge))
         {
-            Log.Info("session", $"peer={peerId} lost — edge {edge} → wall");
+            Log.Info("session", $"peer={PeerName(peerId)} lost — edge {edge} → wall");
             _state.Edges[edge] = EdgeTarget.Wall;
             _peerToEdge.Remove(peerId);
         }
@@ -181,7 +188,7 @@ public sealed class NetGameController : IDisposable
         if (_peerToEdge.ContainsKey(peerId))
             return; // link never lost — nothing to heal
 
-        Log.Info("session", $"peer={peerId} rejoined — restoring edge {edge} → portal, re-meshing");
+        Log.Info("session", $"peer={PeerName(peerId)} rejoined — restoring edge {edge} → portal, re-meshing");
         _state.Edges[edge] = EdgeTarget.Portal(peerId);
         _peerToEdge[peerId] = edge;
         _transport.ResyncPeer(peerId);
