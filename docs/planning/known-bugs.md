@@ -11,6 +11,49 @@ resurfaces unintentionally later.
 
 ---
 
+## Ball enters displaced on a TURN-relayed / distant peer's screen
+
+- **Status:** open — **under active investigation**; code-level diagnosis strong,
+  **awaiting field logs to confirm** before the fix. A **diagnostic-only** build
+  (game **0.28.1-dev.1**, branch `fix/ball-handoff-entry-position`) is shipped to
+  the dev channel to capture the numbers. Full write-up + fix plan:
+  [`ball-handoff-entry-turn-bug.md`](ball-handoff-entry-turn-bug.md).
+- **Affects:** any match with a peer on a **long, asymmetric path to the server**
+  (reported: a player in **India** vs. others in the USA) — in practice the same
+  peer that needs the **TURN relay** (game v0.21.0+/server v0.22.0+). Direct
+  WebRTC peers on short paths are unaffected.
+- **Symptom (as reported):** on the affected player's screen the ball enters
+  **late and already deep inside the field** instead of cleanly at the top edge.
+  **One-directional** — balls the affected player *sends* arrive normally on a
+  WebRTC peer; only balls entering *their* screen are displaced.
+- **Cause (suspected):** the receiver fast-forwards each incoming ball by its
+  transit time — `pos += vel * transit`, `transit = ourServerNowMs −
+  pkt.SentTimestampMs` clamped 0–500 ms (`NetGameController.OnPeerData`), both
+  stamped in the `ServerClock` server-synced frame. The SNTP offset estimate
+  (`offset = serverMs − (t1+t4)/2`, `ServerClock.AddSample`) **assumes a symmetric
+  path**; a long/asymmetric link (distant player → server) **biases it**, so the
+  receiver **over-fast-forwards** incoming balls (deep entry) while the balls it
+  sends are **under-fast-forwarded** by the accurate peer (clamped to the edge =
+  looks normal) — which is exactly the one-directional symptom. Aggravated by:
+  first sample seeds the offset 100 % during busy mesh setup, `MaxRttMs=1000` is
+  generous, no lowest-RTT selection, and the fast-forward clamps *time* not
+  *distance*. **Not** macOS and **not** the TURN transport itself — TURN merely
+  *reveals* it (that peer couldn't connect at all before TURN existed).
+- **Fix direction (planned, not yet built):** (1) **spatial cap** on the
+  fast-forward so the ball can never enter more than ~10–15 % of arena height
+  inward regardless of `transit` (robust against both a biased offset *and* a
+  genuinely huge real transit); (2) **clock-sync hardening** — burst probes at
+  start, seed from the **lowest-RTT** sample, require convergence before
+  `Synced`, re-tune `MaxRttMs`. See the write-up for the RTT trade-off. This is
+  the **3rd in a lineage**: it's the residual of the clock-drift fix below that
+  the server-clock *offset estimate* itself doesn't cover.
+- **Related (resolved ancestors):** "Ball appears partway down the screen on
+  non-16:9 displays" (✅ v0.7.1) and "…after several minutes (clock drift)"
+  (✅ v0.10.0, which introduced `ServerClock`) — both below.
+- **Workaround:** none yet; direct-WebRTC (short-path) players are unaffected.
+
+---
+
 ## Update could be redirected to a different install directory
 
 - **Status:** ✅ resolved 2026-07-01 (launcher v0.17.2). The install/update prompt
