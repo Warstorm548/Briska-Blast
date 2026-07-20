@@ -9,6 +9,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.28.1] — 2026-07-19
+
+Diagnostic instrumentation for a TURN-relay-only ball-handoff bug: on the relayed
+side the ball enters a player's screen displaced **inward from the top edge**
+(delayed, and further into the field than it should be), while direct-WebRTC peers
+are unaffected and the return direction (relayed → WebRTC) is normal. No gameplay
+change — a temporary logging build to confirm the cause from field logs before the
+fix. The one-directional symptom points at a **biased receiver server-clock offset**
+amplified by the handoff transit fast-forward (`pos += vel * transit`), not at
+macOS or the TURN transport itself.
+
+> **Deploy:** no `min_game_version` change — arena geometry is unchanged from 0.28.0,
+> so 0.28.0 and 0.28.1 clients interoperate.
+
+### Added
+
+- **Handoff transit logging** (`src/game/net/NetGameController.cs`): each incoming
+  ball logs the raw (pre-clamp) vs used fast-forward transit and the resulting inward
+  push as a fraction of arena height (`Log.Info`, category `game.handoff`). Handoff
+  IN/OUT lines resolve the peer's display name (via `SessionContext.DisplayNameFor`)
+  so a capture reads `peer=<name>` rather than an opaque player_id.
+- **Clock-sync logging** (`src/net/SignalingClient.cs`): each `time_sync` reply logs
+  the round-trip, this probe's raw sample, its deviation from the running estimate,
+  and the smoothed server-clock offset (`Log.Info`, category `net.clock`) — a distant
+  client's samples jump around, exposing a biased offset.
+- **`ServerClock.OffsetMs`** (`src/net/ServerClock.cs`): read-only accessor exposing
+  the offset estimate for the above.
+
+All logging is `Info`-level so it surfaces on every channel, and tagged
+`TEMP diagnostic` for removal once the cause is confirmed.
+
 ## [0.28.0] — 2026-07-18
 
 A styling pass on the hotbar shipped in 0.27.0: new slot art, slots rendered at the
