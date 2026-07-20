@@ -34,7 +34,7 @@ Two independent `TcpListener` instances run inside the same process and share `A
 - `state.rs` — shared `AppState` holding Redis pool, rate limiters, `update_tx` channel sender, `update_apply_lock` (single-flight mutex serialising every code path that triggers Watchtower), and `signal_hub` (per-process WebSocket signaling registry); shared across both listeners
 - `gamemode.rs` — server-authoritative `bounds_for(GameMode) -> (u8, u8)` and `validate_player_count` helper. Exhaustive `match` with no wildcard, so adding a future `GameMode` variant in `shared/` without a bounds row here is a compile error
 - `api/` — HTTP route handlers (game listener only)
-  - `register.rs` — `POST /register` — player identity issuance
+  - `register.rs` — `POST /register` — player identity issuance; reuses prior creds when valid, else allocates the lowest freed id from `player:freelist` (`ZPOPMIN`) or increments `player:counter`
   - `host.rs` — `POST /host` — session creation; validates `gamemode` (typed) and `player_count` against the gamemode's bounds before allocating a session code
   - `join.rs` — `POST /join` — atomic Redis-Lua append into the joiners list; rejects full sessions with `SessionFull`, host with `cannot_join_own_session`, duplicate joiner with `already_joined`
   - `session.rs` — `GET /session/{code}` and `DELETE /session/{code}`
@@ -49,6 +49,7 @@ Two independent `TcpListener` instances run inside the same process and share `A
 - `admin/` — password-protected web admin panel (admin listener only)
   - `auth.rs` — login, logout, bcrypt session handling
   - `dashboard.rs` — dashboard display, config update handlers, and all update system handlers (check, apply, schedule, cancel, settings, rollback)
+  - `users.rs` — Users tab: list/search players, `POST /admin/users/dev-flag` (grant/revoke dev access), and `POST /admin/users/delete` (wipe a player and return its id number to `player:freelist` for reuse)
   - `templates.rs` — HTML page functions (no template engine dependency)
 - `update/` — server self-update system
   - `github.rs` — GitHub Releases API version check; uses `semver` to compare against `env!("CARGO_PKG_VERSION")`; supports ETag conditional requests (`update:github_etag` in Redis) and optional `GITHUB_TOKEN` Bearer auth
@@ -66,7 +67,7 @@ Rust library crate shared between `server/` and `launcher/`. No OS-specific buil
 The Godot client uses equivalent C# types defined in `client/src/`.
 - `src/protocol/messages.rs` — request/response types for all server REST endpoints (`HostRequest`, `JoinRequest`, `JoinResponse`, `SessionPollResponse`, `CloseSessionRequest`, `StartSessionRequest`, plus the minimal `JoinedPeer` peer-descriptor)
 - `src/types/gamemode.rs` — `GameMode` enum, the authoritative list of valid gamemode strings on the wire. Serde rejects unknown variants at deserialize time
-- `src/types/player.rs` — `PlayerId` type with sequential formatting
+- `src/types/player.rs` — `PlayerId` type; zero-pads a counter value to a 9-digit-minimum canonical form (`from_counter`). Numbers can be recycled (see `register.rs` reuse pool), so an id is unique-at-a-time, not permanently bound to one person
 - `src/types/session.rs` — `SessionStatus` enum (`Waiting`, `Starting`, `Active`, `Ended`)
 - `src/utils/` — pure utility functions
 
@@ -75,7 +76,11 @@ Rust + Iced standalone binary that runs before the game. See [`devtools.md`](../
 
 **Built:**
 - `src/main.rs` — entry point; inits tracing, cleans up stale self-update artifacts, then boots the Iced application
-- `src/app.rs` — Iced state machine: `AppState` view-model and the `Message` enum; boot registers across channels and queries the latest release per channel
+- `src/app/` — Iced state machine, split by feature concern:
+  - `mod.rs` — the `update()` dispatcher, shared helpers (per-channel register / latest-release fan-out, `launch_game`, update-banner recompute), and the `boot`/`view`/`theme`/`title` hooks; boot registers across channels and queries the latest release per channel
+  - `message.rs` — the `Message` enum (closed set of UI intents), `CenterView` (center-pane route), `SettingsTab`
+  - `state.rs` — `AppState` view-model and its `Default`
+  - `handlers/` — one module per feature domain, each holding that domain's `update` arms: `nav`, `launcher_update`, `identity`, `install`, `play`, `maintenance`, `firewall`
 - `src/channel.rs` — `Channel` enum (Stable / EA / Dev) and the per-channel server hostname mapping
 - `src/identity.rs` — per-user identity file (username + per-channel creds: `player_id`, `secret_token`, install location, installed version), stored under the OS data dir (outside the binary location for UAC/elevation safety)
 - `src/server_api.rs` — thin HTTP wrapper over `/register` and `/me/username` (pooled `reqwest`)

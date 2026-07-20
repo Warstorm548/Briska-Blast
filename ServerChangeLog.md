@@ -5,6 +5,618 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.25.0] — 2026-07-12
+
+Accepts the re-tuned **Set Score** range — default **100**, range **50–200**
+(was default 11, range 10–50). `/host` already delegates its trust-boundary
+check to `shared`'s `WinCondition::validate()`, so the new bounds are enforced
+authoritatively with no handler change: a tampered client requesting a target
+below 50 or above 200 is refused with `400 invalid_win_condition`.
+
+### Changed
+
+- Adopts `shared` **0.6.0** — `SET_SCORE_MIN 50` / `SET_SCORE_MAX 200` /
+  `DEFAULT_TARGET 100`. Session-deserialization and error-rendering test
+  fixtures updated to the new bounds.
+
+**Deploy:** bump `min_game_version` to **0.26.0** (Redis, via the admin panel) —
+an out-of-date client defaults to target 11, which the new range now rejects;
+forcing the update surfaces an update prompt instead of an
+`invalid_win_condition` error at host time.
+
+---
+
+## [0.24.0] — 2026-07-07
+
+Adds **pause-on-rejoin** — Stage C, the final stage of the lobby → game
+handoff rework (`docs/architecture/match-lifecycle.md`). A process-death
+rejoiner re-entering a live match now freezes everyone while it re-meshes,
+instead of balls bouncing off its temporarily-walled edge.
+
+### Added
+
+- **`rejoin` flag on `Identify`** (`#[serde(default)]`, so older clients read
+  as non-rejoin): the client's own declaration that this is a process-death
+  rejoin. A transient WS auto-reconnect (same process, mesh intact) and the
+  initial mid-game drop never set it — only a true rejoin can pause.
+- **`match_paused` / `match_resumed` signaling frames**: on a rejoin identify
+  into a started match (`match_started` latch set), the server places a pause
+  hold, broadcasts `match_paused { player_id, username, resume_timeout_secs }`,
+  and arms a **25s valve** (`PAUSE_VALVE_SECS`, under the rejoiner's own 30s
+  Preparing deadline). The hold is released — and `match_resumed
+  { countdown_secs: 3 }` broadcast — by whichever comes first: the rejoiner's
+  `client_ready` (released just before its direct `match_started` reply, so
+  the countdown is already running when it lands), the rejoiner disconnecting
+  again, or the valve. `clear_pause`'s remove-wins semantics make the resume
+  single-shot across those three racers.
+- **Multi-rejoiner safe**: pause holds are a set (`Room.paused_for`) — with
+  overlapping rejoiners the match resumes only when the **last** hold clears.
+
+### Rollout
+
+- **Bump `min_game_version` to `0.25.0`** when deploying: an older client
+  ignores `match_paused` and keeps playing while everyone else freezes. Pause
+  state is in-memory like the ready barrier — a server restart mid-pause
+  drops it, and no pause can outlive its 25s valve anyway.
+
+## [0.23.0] — 2026-07-07
+
+Adds the **ready barrier** — Stage B of the three-stage lobby → game handoff
+rework (`docs/architecture/match-lifecycle.md`). The session status
+`starting → active` transition finally becomes real: the match starts when
+every player's WebRTC mesh is actually up, not when the host's `/start`
+returns, closing the server-side half of the serve gate.
+
+### Added
+
+- **`client_ready` / `match_started` signaling frames**: each client reports
+  `client_ready` once its mesh is fully up (every expected data channel open);
+  when all seated players are ready the server broadcasts `match_started` and
+  flips the session `starting → active` (a Lua CAS modeled on `/start`'s
+  script). Clients hold on the connecting screen until `match_started`, so
+  nobody can serve into a mesh a slower peer hasn't finished opening.
+- **Ready-barrier state on the signaling room** (in-memory, like scores): the
+  frozen start roster is seeded at `/start` beside the win target;
+  `record_ready` classifies each ready (`Pending` / `AllReady` /
+  `AlreadyStarted` / `NotSeated`) and a `match_started` latch makes barrier
+  resolution single-winner. A ready arriving **after** resolution (a barrier
+  timeout straggler, a poll-fallback recovery, or a future Stage C rejoiner)
+  gets a **direct `match_started` reply**, so every client converges on the
+  same "send ready, wait for match_started" contract.
+- **20s grace valve** (`READY_GRACE_SECS`): a plain spawned timer armed at
+  `/start` starts the match anyway if someone never readies up — sized under
+  the clients' own 30s Preparing deadline so a slow-but-alive lobby always
+  resolves server-side first. Deliberately not the `arm_grace` map (that
+  refuses to arm while the player has a live socket, which everyone here does);
+  the latch is the single-winner mechanism.
+
+### Rollout
+
+- **Bump `min_game_version` to `0.24.0`** when deploying: an older client never
+  sends `client_ready`, so a mixed lobby would only start via the 20s valve —
+  with the old client already playing alone while the rest wait. A server
+  restart mid-barrier loses the in-memory ready state (like scores); the
+  clients' Preparing deadline then fails them back to the menu cleanly.
+
+## [0.22.0] — 2026-07-04
+
+Adds **TURN relay support via Cloudflare's managed TURN service**, fixing the
+confirmed field failure where peers behind symmetric/endpoint-dependent NATs
+(the Win↔Mac pair) exchange candidates but ICE never connects — STUN-only
+hole punching cannot traverse those NATs, so the mesh needs relay candidates.
+
+### Added
+
+- **`turn` module** (`src/turn.rs`): mints short-lived STUN+TURN credentials
+  (4 h TTL) from Cloudflare's `generate-ice-servers` API. The API token never
+  leaves the server; clients only ever see the minted per-match credentials.
+  Fail-open: unconfigured TURN or a failed mint returns an empty list with a
+  warn, and clients keep their built-in STUN-only fallback.
+- **`ice_servers` on two signaling frames**: `StartSignaling` carries the
+  match's credential set (one mint shared by the whole match, cached in-memory
+  on the signaling room), and `Identified` carries that same cached set **only**
+  on a mid-game identify (`seat_order` non-empty — a process-death rejoiner or
+  a transient WS reconnect), so repeated identifies never re-hit Cloudflare; a
+  cache miss after a mid-match server restart re-mints once and re-caches.
+  Lobby identifies skip the mint. Nothing is stored in the Redis `Session`
+  (deliberately avoids the lua-cjson empty-array re-encode pitfall).
+- **`TURN_KEY_ID` / `TURN_API_TOKEN` env config** (`.env` /
+  `docker-compose.yml`, optional): both unset disables minting with a one-time
+  boot warn — the game still works on friendly NATs, so absence must not
+  fail closed (contrast `WATCHTOWER_TOKEN`).
+
+## [0.21.0] — 2026-07-03
+
+Adds **observability** to the signaling server: per-session log correlation, a
+signaling-relay trace, structured peer-failure logging, and a JSON log-format
+switch — the server-side half of tracing why WebRTC peers fail to connect.
+
+### Added
+
+- **Per-connection tracing span** on the signaling WebSocket handler carrying
+  `session` and `player`, so every line emitted while a socket is live — including
+  the relay in `frame.rs` — is attributable to one session and player.
+- **Signaling-relay trace** (`debug`): offer/answer/ICE relays are logged, ICE with
+  its **candidate type** (host/srflx/relay), making NAT-traversal progress visible
+  server-side (belt-and-suspenders with the client's own WebRTC log).
+- **`LOG_FORMAT` env** (`pretty` default, `json`): `json` emits machine-parseable
+  lines for log shippers / the future admin Logs tab. Read via `Config`.
+
+### Changed
+
+- `PeerConnectionFailed` now logs at **WARN** with structured fields (`peer`,
+  `reason`) instead of an INFO format string — a peer pair that can't connect is a
+  real connectivity problem worth surfacing.
+
+## [0.20.1] — 2026-07-01
+
+Internal refactor only — no behavior change, no new features.
+
+### Changed
+
+- Split the 735-line `admin/templates.rs` into a `templates/` module mirroring the
+  admin handler layout: `common` (the shared `escape()` / `CSS` sheet / `nav_html()`),
+  and one page renderer each in `login`, `stats`, `users`, and `dashboard`. `mod.rs`
+  re-exports the page functions, so `templates::{...}` paths and every handler caller
+  are unchanged.
+
+## [0.20.0] — 2026-06-29
+
+Plumbs the host's **random-spawn settings** through the session and adds a
+**`points`** field to score reports so a double-value BallBT split ball counts for 2.
+
+### Added
+
+- **`spawn_settings` on a session.** `HostRequest` now carries `SpawnSettings`
+  (shared crate; BallSpliter cadence + chain-split), validated server-side
+  (`invalid_spawn_settings`, 400) and echoed to joiners in `JoinResponse` /
+  `SessionPollResponse` / the `StartSignaling` broadcast. The `Session` stores it
+  (`#[serde(default)]`), exactly like `win_condition`.
+- **`points` on `ReportScore`.** The score frame gained an optional `points` field
+  (`#[serde(default)]` → 1). `record_score` credits the reported points, **clamped to
+  `[1, 2]`** so a forged report can't mint an arbitrary tally (with a win condition a
+  forged report can end a match — clamp is defense-in-depth pending the trajectory-
+  validation hook). Older clients that omit `points` still credit 1.
+
+---
+
+## [0.19.0] — 2026-06-22
+
+Adds the game's first **win condition** — "Set Score": first player to a
+host-chosen target (10–50, default 11) wins — enforced server-side, plus a new
+`GameOver` signaling frame that ends the match.
+
+### Added
+
+- **`win_condition` on a session.** `HostRequest` now requires a `WinCondition`
+  (shared crate, wire shape `{"kind":"set_score","target":N}`), set after host
+  setup like `gamemode` and echoed to joiners in `JoinResponse` /
+  `SessionPollResponse` / the `StartSignaling` broadcast. The `Session` carries it
+  (`#[serde(default)]` keeps pre-existing sessions readable across the deploy).
+- **`GameOver` server frame** — `{ winner_player_id, scores }`. Broadcast the
+  instant the authoritative tally first reaches the target. It is a pure UI signal
+  (clients freeze the sim and show the end-game leaderboard); the server hands the
+  actual session teardown to the existing `SessionEnded` path right after, via a
+  new shared `end_session(code, reason)` helper (DEL + `SessionEnded`), so there's
+  one cleanup mechanism rather than a parallel one. Win detection latches, so a
+  late/duplicate score report can't fire a second `GameOver`.
+
+### Changed
+
+- **`POST /host` validates the win condition (defense in depth).** Out-of-range
+  targets are refused with `400 invalid_win_condition` (`{min,max,requested}`),
+  mirroring `invalid_player_count`; a missing field is the usual deserialize `422`
+  naming it. The client UI caps the same range — this guards a tampered client.
+- `SignalHub` rooms now hold the win target (seeded at `/start`) and `record_score`
+  returns the winner alongside the tally.
+
+---
+
+## [0.18.1] — 2026-06-22
+
+Fixes a **critical regression from 0.17.0**: joining a freshly created session
+returned `500 internal server error`, so no one could join a game.
+
+### Fixed
+
+- **Joining a Waiting session no longer 500s.** The `seat_order` roster added in
+  0.17.0 is empty for the entire Waiting phase, and Redis's lua-cjson re-encodes
+  an empty Lua table as the JSON object `{}` (not `[]`) whenever the join script
+  round-trips the session. The Rust `Session` then failed to deserialize `{}`
+  into `seat_order: Vec<String>`, surfacing as an internal error on `/join`.
+  `Session::seat_order` now deserializes tolerantly — an array reads normally, and
+  the cjson empty-object (or null) reads as an empty roster — so every path that
+  reads a session is immune and a session already stored with `"seat_order":{}`
+  self-heals. (The same lua-cjson pitfall is handled for `joiners` with a
+  per-script `string.gsub`; this newer field was missed, which is what broke
+  joins. The Rust-side guard covers all read paths at once instead.) Adds
+  regression tests for the `{}`, `[]`, populated, and missing cases.
+
+---
+
+## [0.18.0] — 2026-06-20
+
+Tightens the username cap from 32 to **20 characters**, sources it from a single
+shared constant so the launcher and server can never disagree, and makes
+`/me/username` tell a rejected client what to revert to.
+
+### Changed
+
+- **Username cap is now 20 chars, from `shared`.** `register` and
+  `me::update_username` drop their duplicated local `const MAX_USERNAME_LEN = 32`
+  in favour of `shared::protocol::messages::MAX_USERNAME_LEN` (= 20), so the
+  server's trust-boundary check and the launcher's input cap share one value.
+  Enforced on write only — existing stored names longer than 20 are left
+  untouched until their next change. Length is counted in Unicode scalar values.
+- **`/me/username` returns a body and reverts tampered clients.** The handler now
+  authenticates **before** the length check, then on an empty/over-length name
+  returns `422 Unprocessable Entity` carrying `UpdateUsernameResponse { username }`
+  — the caller's **unchanged stored** name (Redis is left untouched) — so the
+  launcher can snap back to the last stable value. A valid change returns
+  `200 OK` with the new name. (Previously `204 No Content` on success and a
+  bodyless `400` on reject.) The launcher hard-caps input client-side, so reaching
+  the reject path means a modified/raw client.
+
+---
+
+## [0.17.0] — 2026-06-20
+
+Adds a frozen seating roster to the session so the game client can lay out
+Extended-mode portals by **join order** (who entered the lobby first), and so a
+process-death rejoiner reproduces the identical layout.
+
+### Added
+- **`seat_order` — a frozen seating roster on the session.** When the host calls
+  `/start`, the `START_SCRIPT` Lua snapshots `[host, ...joiners]` in join order
+  into `session.seat_order` (alongside the Waiting → Starting transition) and
+  never mutates it again. A later host promotion reorders the live
+  `host_player_id`/`joiners` but leaves this snapshot intact, so every client —
+  including a rejoiner whose live session state post-dates a promotion — derives
+  the same Extended-mode portal layout. `Session` gains a `#[serde(default)]`
+  `seat_order: Vec<String>` field (older in-flight sessions decode as empty).
+- **`Identified` frame carries `seat_order`.** `peer_roster` now returns a
+  `RosterSnapshot { peers, seat_order }`: `peers` is unchanged (self-excluded,
+  for meshing), while `seat_order` is the frozen, **self-inclusive** roster. The
+  `/start` broadcast already sends the same list as `StartSignaling.peers`, so a
+  fresh start and a rejoin both receive an identical, authoritative seating
+  order. Empty while a session is still Waiting. Backward-compatible: clients
+  that ignore the field are unaffected.
+
+### Added
+- **Update-check auth-state logging.** `update::github::check_for_update` now
+  emits one `info` line per check stating whether it ran **authenticated
+  (5000/hr limit)** or **anonymous (60/hr limit)**, depending on whether
+  `GITHUB_TOKEN` was present in the environment. Lets ops confirm the higher
+  GitHub rate limit is in effect with `docker compose logs server | grep "github check"`
+  instead of inspecting outbound traffic. No behaviour change — the request is
+  built exactly as before; only an observability line was added.
+
+---
+
+## [0.16.0] — 2026-06-16
+
+### Added
+- **Lobby chat relay.** New signaling frames `SendChat { text }` (client→server)
+  and `ChatMessage { from, username, text }` (server→client). When a player sends
+  a chat message, the server trims it, drops empties, bounds the length (500
+  chars, truncated on a char boundary), resolves the sender's display name from
+  Redis via the existing `fetch_usernames` helper, and **broadcasts to every
+  member including the sender** — so all clients render an identical,
+  server-ordered transcript (same rationale as `ScoreUpdate`). `from` is
+  server-attested from the authenticated WS connection — clients cannot forge it.
+  Relayed through signaling rather than the WebRTC mesh because the lobby has no
+  mesh yet. Additive to the WS protocol; pairs with game **v0.14.0**.
+
+---
+
+## [0.15.0] — 2026-06-13
+
+### Added
+- **Usernames in the signaling roster frames.** The `Identified` frame now
+  carries a `usernames` map (player_id → display name) for the ids it
+  references — self, host, and peers — and `PeerJoined` carries the joining
+  player's `username`. Names are resolved from Redis (`player:<id>:username`) in
+  a single `MGET` via a new `fetch_usernames` helper (`api/mod.rs`). Ids with no
+  stored username are omitted from the map, and a Redis error degrades to an
+  empty map, so a missing display name never fails a signaling connection — the
+  client falls back to `Player <id>`. This lets the game client label the lobby
+  roster and in-game scoreboard by username while keeping `player_id` an
+  internal-only identifier. Additive to the WS protocol; pairs with game
+  **v0.12.0**.
+
+---
+
+## [0.14.1] — 2026-06-09
+
+**Refactor: split `signaling/ws.rs` into a `ws/` module tree.** `ws.rs` had grown
+to ~905 lines, bundling the connection lifecycle, identify/auth, inbound frame
+routing, disconnect-grace orchestration, and the atomic Redis Lua mutations in
+one file. Split it into a `ws/` module tree so each file holds one concern:
+
+```
+ws/mod.rs          ws_handler + handle_socket lifecycle, close-code consts, close_with
+ws/identify.rs     Phase-1 token auth + peer-roster snapshot
+ws/frame.rs        Phase-3 inbound client-frame routing
+ws/disconnect.rs   promotion/reconnect grace windows + slot-hold timers
+ws/session_ops.rs  atomic end / promote-demote / remove Lua scripts
+```
+
+Every function body moved **verbatim** — cross-module calls go through `use`
+imports so each relocated body is byte-for-byte identical to the original. No
+behavior or logic change; the public `crate::signaling::ws::ws_handler` surface
+is preserved, so `main.rs`'s route wiring is untouched.
+
+Verified: `cargo build` + `cargo clippy` clean (only the pre-existing `is_full` /
+`Kicked` dead-code warnings), `cargo test` (51/51) pass, and a logic-token
+invariant check confirms only import statements differ between the old single
+file and the new module tree.
+
+Patch bump `0.14.0` → `0.14.1` as a marker for the refactor.
+
+---
+
+## [0.14.0] — 2026-06-06
+
+**Admin panel idle session timeout.** The admin session now auto-expires after a
+short period of inactivity instead of living for 24 hours. The server-side Redis
+TTL is the security boundary; the panel shows a friendly warning modal as the UX
+layer. Inactivity is any browser/device with no clicks, taps, key presses, or
+scrolling — each of those slides the window forward.
+
+### Added
+
+- **`POST /admin/keepalive`** (`admin/auth.rs`, wired in `main.rs`) — session-guarded
+  activity heartbeat the panel JS calls (throttled) on user activity. Returns `204`
+  when the session is alive, `401` when it has expired so the client redirects to login.
+- **Idle-timeout warning modal + timer** (`admin/templates.rs` `nav_html`) — rendered on
+  every authenticated page (not the login screen). At **5:00** idle a warning modal
+  ("Still there? You'll be signed out in 30 seconds…") with a **Keep me logged in**
+  button appears with a live countdown; at **5:30** the client POSTs `/admin/logout`
+  and redirects to login. The modal reuses the existing delete-confirm modal styling
+  and uses `role="alertdialog"` + focus management. Activity (click/tap/key/scroll)
+  resets the timer and dismisses the modal.
+- **Idle policy constants** (`admin/mod.rs`) — `ADMIN_IDLE_WARN_SECS` (300),
+  `ADMIN_IDLE_LOGOUT_SECS` (330), `ADMIN_SESSION_TTL_SECS` (420). The warn/logout
+  values are injected into the panel JS so the client countdown can't drift from the
+  server TTL.
+
+### Changed
+
+- **`require_session`** (`admin/mod.rs`) now validates with `EXPIRE` instead of `EXISTS`,
+  so every authenticated request both checks the session and slides its idle TTL forward
+  in one round-trip.
+- **Admin session TTL** (`admin/auth.rs` login) reduced from a fixed **24 hours** to the
+  **420s idle backstop**. A live browser is logged out at exactly 5:30 (client-driven);
+  the 420s Redis TTL is the hard ceiling for a tab where JS isn't running (crashed/slept),
+  sized as logout + keepalive throttle + margin so a last-second "Keep me logged in" is
+  never wrongly rejected.
+
+---
+
+## [0.13.0] — 2026-06-06
+
+**Responsive admin panel** + a new **Stats tab**. The admin site now uses the full
+width of a desktop screen instead of a narrow centre column, collapses its top tabs
+into a hamburger-drawer below 768px (phones *and* narrow desktop windows), and gains a
+dedicated Stats page for server statistics. No data model or endpoint behaviour changes
+— this is presentation plus one new read-only page.
+
+### Added
+
+- **`GET /admin/stats`** (`admin/stats.rs`, registered in `admin/mod.rs` + wired in
+  `main.rs`) — session-guarded statistics page. Reuses the dashboard's counters
+  (`player:counter` + `KEYS session:*`) to show live Active Sessions / Total Players,
+  plus greyed "coming soon" placeholder cards (Uptime, Peak Players, Sessions Today,
+  Avg Latency) scaffolded for future metrics. New `templates::stats_page`.
+- **Stats** entry added to the admin navigation (`admin/templates.rs` `nav_html`),
+  alongside Dashboard and Users.
+
+### Changed
+
+- **Responsive admin layout** (`admin/templates.rs` `CSS`) — `.page` widened from a
+  fixed 560px column to `min(92vw, 1280px)` so the card fills the rectangle on desktop
+  (top/bottom padding preserved). A `@media (max-width: 768px)` block hides the inline
+  top tabs and shows a ☰ hamburger that opens a left slide-out drawer holding the same
+  links + Logout. The drawer is toggled by an accessible `<button>`
+  (`aria-controls`/`aria-expanded`) with a small inline script (Escape closes it);
+  links are real `<a>` navigations. `nav_html` builds the link list once and reuses it
+  in both the top bar and the drawer so they can't drift.
+
+---
+
+## [0.12.0] — 2026-06-05
+
+Admin **user deletion** with **id-number reuse**. Operators can remove a stale
+player from the admin Users tab; the freed id number returns to a pool and is
+reissued — lowest-first, with a fresh secret — to the next new registration,
+while the counter stays monotonic so issued-id totals still climb. Pairs with
+launcher **v0.12.0** (401 self-heal for a deleted-but-active identity).
+
+### Added
+
+- **`POST /admin/users/delete`** (`admin/users.rs`, wired in `main.rs`) — wipes a
+  player's `token_hash` / `username` / `dev_flag` keys and `ZADD`s the freed id
+  number into the new `player:freelist` sorted set. Session-guarded and
+  existence-checked like the dev-flag handler; the recycle step is best-effort so
+  a pool hiccup never fails the delete. The Users-tab UI gates it behind a
+  click-blocking confirm modal (`admin/templates.rs`) with Cancel/Delete.
+- **Id reuse pool** (`api/register.rs`, `api/mod.rs`) — `/register` now allocates a
+  fresh number via `allocate_player_number`: `ZPOPMIN player:freelist` (lowest
+  freed id) when the pool is non-empty, else `INCR player:counter`. `player:counter`
+  is never decremented. Key names centralised as `FREELIST_KEY` / `PLAYER_COUNTER_KEY`.
+
+---
+
+## [0.11.0] — 2026-06-02
+
+A **time-sync probe** so clients can pin their clocks to the server. The session
+WebSocket (already open for scoring) gains a stateless request/reply pair; the
+server answers with its wall-clock time. Clients use this to stamp ball handoffs
+in a shared time frame, fixing the drift where, after a while, one player saw the
+ball enter partway down the screen (two unsynchronized PC clocks). Pairs with
+game **v0.10.0+**. See [`docs/architecture/extended-mode.md`](docs/architecture/extended-mode.md).
+
+### Added
+
+- **`ClientMsg::TimeSync { client_send_ms }` / `ServerMsg::TimeSync { client_send_ms, server_ms }`**
+  (`signaling/protocol.rs`) — a clock-sync probe. The server echoes the client's
+  own send time and adds `Utc::now().timestamp_millis()`, staying stateless; the
+  client derives `offset = server_ms − (send + recv)/2`. Handled in
+  `signaling/ws.rs` via the existing per-connection `signal_hub.send_to`. Trusted
+  and unauthenticated beyond session membership, like the other relays — the hook
+  for later server-side trajectory validation now has a shared time base.
+
+---
+
+## [0.10.0] — 2026-05-30
+
+Stage 5 (server side): a **uniform reconnect window** so any player who drops
+mid-game — including a process death — can rejoin the live match by re-entering
+the code, plus **demote-don't-remove** host promotion. Pairs with game **v0.8.0+**.
+See [`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+
+### Added
+
+- **`ServerMsg::PeerReconnecting { player_id, grace_secs }`** — broadcast when a
+  **non-host** player's WS drops mid-game so peers show a "reconnecting…" overlay
+  (the host's equivalent is `HostReconnecting`). Resolved by `PeerJoined` (they
+  rejoined — the mesh re-meshes) or `PeerLeft { reason: "reconnect_timeout" }`.
+- **Two grace kinds** (`signaling/mod.rs`): the grace registry is now keyed
+  `(code, player_id, GraceKind)` with `Promotion` (host-only, 30s) and
+  `Reconnect` (everyone, the slot-hold). `arm_host_grace`/`take_host_grace` are
+  generalised to `arm_grace`/`take_grace(kind)`; the two kinds are independent so
+  a dropped host can have both pending. Single-winner semantics unchanged.
+- **`RECONNECT_GRACE` (120s) slot-hold** for ANY dropped mid-game player: the
+  slot is held so they can rejoin by re-entering the code, then freed permanently
+  (`PeerLeft { reconnect_timeout }`, reusing `remove_joiner_on_leave`). Measured
+  from the drop, uniform for host and joiner.
+
+### Changed
+
+- **Host promotion demotes instead of removing** (`promote_demote_or_end_active`):
+  on a transient host drop, when the 30s promotion timer fires the ex-host is
+  **appended to `joiners`** (back of join order) rather than dropped — so they
+  keep the remainder of their reconnect window and rejoin as a **non-host**. A
+  deliberate host `Leave` still drops them (`keep_ex_host = false`). This
+  supersedes the old "ex-host can never return" behavior.
+- **Mid-game transient joiner drop** now arms the reconnect slot-hold + shows the
+  overlay instead of keeping the slot until session TTL; the immediate `PeerLeft`
+  is deferred to the slot-hold timeout (or superseded by `PeerJoined` on rejoin).
+- **Re-Identify** cancels the reconnecting player's slot-hold (`take_grace`,
+  host or joiner); a host returning *before* promotion also cancels the promotion
+  timer and broadcasts `HostReconnected`.
+
+### Notes
+
+- `PROMOTION_GRACE` (30s, renamed from `HOST_GRACE`) and `RECONNECT_GRACE` (120s)
+  are constants; runtime config is a later refinement.
+- A <2-connected host loss still **ends** the session (a lone survivor can't play
+  out the window).
+
+## [0.9.0] — 2026-05-29
+
+Stage 4 of the multiplayer client (server side): **server-authoritative host
+promotion with a reconnect grace window**, plus the deferred mid-game joiner
+roster cleanup. See
+[`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+
+### Added
+
+- **`ServerMsg::HostReconnecting { player_id, grace_secs }` / `HostReconnected
+  { player_id }`** signaling frames. When a host's WebSocket drops mid-game
+  (past Waiting), the server broadcasts `HostReconnecting` and arms a 30s grace
+  window instead of leaving the session with a dead host; if the host
+  re-Identifies in time, `HostReconnected` clears it.
+- **`SignalHub` host-grace registry** — a cancellable per-`(code, host)` handle
+  (tokio `oneshot`). `arm_host_grace` / `take_host_grace` form a single-winner
+  handoff between the reconnect path and the grace timer, so promotion can never
+  double-fire against a reconnect. Three unit tests pin it.
+- **`promote_or_end_active`** — on grace expiry (or an explicit mid-game host
+  `Leave`, which promotes immediately), an atomic Lua script promotes the
+  **oldest still-connected joiner** in chronological join order and broadcasts
+  `HostChanged`, or ends the session (`SessionEnded { host_disconnect }`) if
+  fewer than two connected players remain. Guarded on the departing player still
+  being the host so a double disconnect can't promote twice.
+
+### Changed
+
+- **Host WS disconnect** (`signaling/ws.rs`) now branches on session state:
+  Waiting still ends the lobby immediately; past Waiting it promotes / arms grace.
+- **Joiner mid-game roster cleanup** (the previously deferred "Joiner WS
+  disconnect during Starting/Active" item): an **explicit** joiner `Leave` past
+  Waiting now frees the slot (`remove_joiner_on_leave`, generalised from
+  `remove_joiner_if_waiting`) and ends the session if it leaves the host alone.
+  A **transient** drop still keeps the slot for reconnect.
+
+### Notes
+
+- The 30s window is a const (`HOST_GRACE`); promoting it to runtime config is a
+  later refinement. Becomes user-visible with game client **v0.7.0+** (WS
+  reconnect + grace UI). No new dependencies.
+
+---
+
+## [0.8.0] — 2026-05-27
+
+Server-relayed score channel — the server piece of Stage 3 gameplay.
+See [`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+
+### Added
+
+- **`ClientMsg::ReportScore { scoring_player_id }` and `ServerMsg::ScoreUpdate
+  { scores }`** on the existing session WebSocket. The client whose goal a
+  ball enters reports the scorer to the server; the server holds the
+  authoritative per-session tally and broadcasts it to every member
+  (including the reporter — server is the source of truth, not the
+  reporter's local guess). Rides the already-authenticated signaling
+  socket, so no new endpoint and no new auth path.
+- **`SignalHub::record_score`** — credits a point on the per-`Room` score
+  map and returns the updated tally to broadcast. In-memory, room lifetime
+  (same stance as the existing `senders` map); Redis-backed scores remain
+  a later refinement when validation lands. Three unit tests pin the
+  contract (increment, accumulate, unknown-room → `None`).
+
+### Notes
+
+- The server currently **trusts** any session member's report and takes the
+  scorer at face value. Server-side trajectory validation ("only the
+  goal-owner may report a scorer who actually last hit the ball") is the
+  documented later hook this channel exists to enable.
+
+---
+
+## [0.7.0] — 2026-05-26
+
+Server companions for Stage 1 of the multiplayer client — see
+[`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+All three are small, focused additions that make a real lobby work.
+
+### Added
+
+- **Manual host transfer — `POST /session/:code/host`.** Lets the current
+  host voluntarily hand the host role to a listed joiner, backing the
+  lobby's "Promote" button. The read-validate-swap-write runs as a single
+  Lua script (same atomicity as `/join` and `/start`): the demoted host
+  re-enters `joiners` with a fresh timestamp (back of the join order), the
+  new host moves out of `joiners`, and a `HostChanged` signaling frame is
+  broadcast. Restricted to Waiting. Adds `TransferHostRequest` to `shared/`
+  and `ServerMsg::HostChanged`. Route is version-gated, next to `/start`.
+- **`host_player_id` in the `Identified` frame.** A joiner previously had
+  no way to learn who the host is; the WS `Identified` reply now includes
+  it so every client can render the host marker and anchor `HostChanged`.
+
+### Changed
+
+- **Free a joiner's slot on explicit leave (Waiting).** A joiner who sends
+  a `Leave` frame while the session is Waiting is now removed from the
+  Redis roster via an atomic `remove_joiner_if_waiting` script. Without
+  this the slot stayed occupied until TTL, miscounting capacity and
+  permanently blocking `/start` (its "all peers ready" check could never
+  pass). A transient socket drop still keeps the slot for reconnect — only
+  a deliberate leave frees it. `PeerLeft` now carries `reason` `"leave"`
+  vs `"disconnect"`. (Guards the lua-cjson empty-table-as-`{}` pitfall so
+  removing the last joiner still serializes `"joiners":[]`.)
+
 ## [0.6.0] — 2026-05-23
 
 First cut of the per-user **dev_flag** pipeline that gates the launcher's

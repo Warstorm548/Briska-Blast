@@ -2,6 +2,7 @@ using Godot;
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace BriskaBlast.Core;
 
@@ -9,7 +10,24 @@ public static class LaunchArgs
 {
     private const string HandoffFlag = "--launcher-handoff";
 
-    public sealed record Handoff(string? Username);
+    /// <summary>
+    /// One-shot identity + version handoff written by the launcher (see
+    /// <c>launcher/src/game_launch/mod.rs</c>). The snake_case wire keys are
+    /// mapped explicitly so this stays decoupled from the net layer's JSON
+    /// options. <see cref="PlayerId"/>/<see cref="SecretToken"/> authenticate
+    /// the client to the server; <see cref="LauncherVersion"/> feeds the
+    /// version gate; <see cref="Channel"/> lets the client assert it wasn't
+    /// handed cross-channel credentials; <see cref="DataDir"/> is the launcher's
+    /// per-user data dir, so the game writes its single-instance file
+    /// (<c>game_instance.json</c>) into the directory the launcher probes.
+    /// </summary>
+    public sealed record Handoff(
+        string? Username,
+        [property: JsonPropertyName("player_id")] string? PlayerId,
+        [property: JsonPropertyName("secret_token")] string? SecretToken,
+        [property: JsonPropertyName("launcher_version")] string? LauncherVersion,
+        string? Channel,
+        [property: JsonPropertyName("data_dir")] string? DataDir);
 
     private static Handoff? _cached;
     private static bool _loaded;
@@ -40,7 +58,7 @@ public static class LaunchArgs
                 json,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
-            consumed = parsed ?? new Handoff(null);
+            consumed = parsed ?? new Handoff(null, null, null, null, null, null);
         }
         catch (Exception e)
         {

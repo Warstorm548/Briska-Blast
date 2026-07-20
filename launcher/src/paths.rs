@@ -33,6 +33,58 @@ pub fn install_dir() -> io::Result<PathBuf> {
     Ok(parent.to_path_buf())
 }
 
+/// True if `a` and `b` are the same directory or one is nested inside the
+/// other (either direction). Pure component-wise prefix comparison on paths
+/// that are expected to already be canonical — `Path::starts_with` matches
+/// whole path components, so `/a/BriskaBlast` and `/a/BriskaBlastGames` are
+/// correctly treated as disjoint. Split out from [`install_location_collides`]
+/// so the overlap logic is unit-testable without touching the filesystem.
+fn paths_overlap(a: &Path, b: &Path) -> bool {
+    a.starts_with(b) || b.starts_with(a)
+}
+
+/// Refuse a game install location that collides with the launcher's OWN
+/// install directory. The game lands at `<install_root>/<channel_dir>/`;
+/// returns `true` when that resolved dir IS the launcher dir, is nested
+/// inside it, or contains it. Any of those puts the game files inside (or on
+/// top of) the launcher app, which breaks game launch and the Windows
+/// firewall-rule prompt — and the install pipeline's pre-extract wipe could
+/// even delete the launcher in the "launcher inside game dir" case.
+///
+/// Comparing the resolved install dir (not the raw `install_root`) is
+/// deliberate: a legitimate sibling — launcher at `…/BriskaBlast`, root
+/// `…/Program Files`, game at `…/Program Files/<channel>` — does NOT overlap
+/// and is correctly allowed.
+///
+/// Fails OPEN (`false`) if either path can't be resolved or canonicalized.
+/// This is a footgun guard, not a security boundary, so an un-resolvable path
+/// must not block every install; the case is logged. The folder picker always
+/// hands back an existing directory, so the live path canonicalizes fine.
+pub fn install_location_collides(install_root: &Path, channel_dir: &str) -> bool {
+    let launcher = match install_dir().and_then(|d| d.canonicalize()) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "could not resolve launcher dir — skipping install-location collision check"
+            );
+            return false;
+        }
+    };
+    let root = match install_root.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                path = %install_root.display(),
+                "could not canonicalize chosen install root — skipping collision check"
+            );
+            return false;
+        }
+    };
+    paths_overlap(&root.join(channel_dir), &launcher)
+}
+
 /// Per-user data root, created on first call.
 ///
 /// Empty `organization` keeps the Windows path at `%APPDATA%\BriskaBlast\data`
@@ -50,6 +102,13 @@ pub fn identity_path() -> io::Result<PathBuf> {
     Ok(data_dir()?.join("identity.json"))
 }
 
+/// `<data_dir>/ratelimits.json` — the GitHub rate-limit back-off state
+/// (last-seen reset + remaining, derived block window). Sits next to
+/// `identity.json` under the per-user data root. See `ratelimit.rs`.
+pub fn ratelimit_path() -> io::Result<PathBuf> {
+    Ok(data_dir()?.join("ratelimits.json"))
+}
+
 /// `<data_dir>/saves/<channel>/`. Created on first call. Reserved for the
 /// existing `Settings → Game Channel Management → Game Save` button row once
 /// it gets a real implementation; exposing the path here is in scope so
@@ -59,6 +118,83 @@ pub fn saves_dir(channel: Channel) -> io::Result<PathBuf> {
     let dir = data_dir()?.join("saves").join(channel.dir_name());
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
+}
+
+/// `<data_dir>/log<channel>` — the game's per-run log folder for `channel`
+/// (`logdev`/`logea`/`logstable`). Created on first call. The game writes here
+/// (`client/src/core/Paths.cs::LogDir`), and the Settings → Logs button opens it.
+/// The plain `<data_dir>/logs` name is reserved for the launcher's own future logs.
+pub fn logs_dir(channel: Channel) -> io::Result<PathBuf> {
+    let dir = data_dir()?.join(format!("log{}", channel.dir_name()));
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// Resolve the game's .NET runtime-extraction cache directory for `channel` on
+/// **Windows**: `%LOCALAPPDATA%\data_<cache_basename>_windows_x86_64`. This is
+/// the folder Godot extracts the self-contained .NET runtime into on first
+/// launch (confirmed on-device). Returns `None` on other platforms — the Reset
+/// Runtime Cache button is Windows-only this ship, since Linux/macOS keep the
+/// runtime in the install dir where Verify/Repair already cover it.
+pub fn runtime_cache_dir(channel: Channel) -> Option<PathBuf> {
+    // Computed on every platform so `cache_basename` stays a live reference,
+    // but only meaningful (and returned) on Windows.
+    let folder = format!("data_{}_windows_x86_64", channel.cache_basename());
+    #[cfg(target_os = "windows")]
+    {
+        let local = directories::BaseDirs::new()?.data_local_dir().to_path_buf();
+        Some(local.join(folder))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = folder;
+        None
+    }
+}
+
+/// Delete `channel`'s runtime cache so the game re-extracts a clean copy on the
+/// next launch (the Reset Runtime Cache action). No-op success on platforms /
+/// configs with no such cache. **Never touches antivirus.** Validates the
+/// resolved path before the recursive delete — it must sit under
+/// `%LOCALAPPDATA%` AND its final component must start with `data_BriskaBlast`
+/// — so a future bug or tampered resolution can't turn this into a delete of an
+/// unrelated directory (defence-in-depth, mirroring `uninstall_install`).
+pub async fn clear_runtime_cache(channel: Channel) -> Result<(), String> {
+    let Some(dir) = runtime_cache_dir(channel) else {
+        return Ok(()); // No runtime cache on this platform.
+    };
+    if !dir.exists() {
+        return Ok(()); // Already absent — next launch (re)creates it.
+    }
+    // Re-derive the local-data root and assert containment + name shape.
+    let local = directories::BaseDirs::new()
+        .map(|b| b.data_local_dir().to_path_buf())
+        .ok_or_else(|| "could not resolve the local data directory".to_string())?;
+    if !dir.starts_with(&local) {
+        return Err(format!(
+            "refusing to delete {} — not under the local data dir",
+            dir.display()
+        ));
+    }
+    // Require an EXACT match against this channel's expected folder name (not
+    // just a `data_BriskaBlast` prefix), so only the intended runtime cache can
+    // ever be removed.
+    let expected = format!("data_{}_windows_x86_64", channel.cache_basename());
+    let name_ok = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n == expected);
+    if !name_ok {
+        return Err(format!(
+            "refusing to delete {} — does not match expected {expected}",
+            dir.display()
+        ));
+    }
+    tokio::fs::remove_dir_all(&dir)
+        .await
+        .map_err(|e| format!("remove runtime cache {}: {e}", dir.display()))?;
+    tracing::info!(path = %dir.display(), "runtime cache cleared");
+    Ok(())
 }
 
 /// Resolve the `directories` project dirs. Returns an `io::Error` rather than
@@ -217,5 +353,46 @@ mod tests {
         let new = tmp.path().join("appdata/data");
         let migrated = migrate_data(&legacy, &new).unwrap();
         assert!(!migrated);
+    }
+
+    /// Identical paths overlap (game install dir == launcher dir).
+    #[test]
+    fn paths_overlap_equal() {
+        let p = Path::new("/opt/BriskaBlast");
+        assert!(paths_overlap(p, p));
+    }
+
+    /// Game install dir nested inside the launcher dir — the reported bug.
+    #[test]
+    fn paths_overlap_game_inside_launcher() {
+        let launcher = Path::new("/opt/BriskaBlast");
+        let game = Path::new("/opt/BriskaBlast/dev");
+        assert!(paths_overlap(game, launcher));
+    }
+
+    /// Launcher dir nested inside the game install dir — the pre-extract wipe
+    /// would delete the launcher, so this must also count as a collision.
+    #[test]
+    fn paths_overlap_launcher_inside_game() {
+        let game = Path::new("/games/briska/dev");
+        let launcher = Path::new("/games/briska/dev/launcher");
+        assert!(paths_overlap(game, launcher));
+    }
+
+    /// Disjoint trees are fine — a normal install next to the launcher.
+    #[test]
+    fn paths_overlap_disjoint() {
+        let launcher = Path::new("/opt/BriskaBlast");
+        let game = Path::new("/home/user/Games/dev");
+        assert!(!paths_overlap(game, launcher));
+    }
+
+    /// A shared name PREFIX that is not a shared path COMPONENT must not be
+    /// treated as overlap (`starts_with` is component-wise, not byte-wise).
+    #[test]
+    fn paths_overlap_shared_name_prefix_is_disjoint() {
+        let launcher = Path::new("/opt/BriskaBlast");
+        let game = Path::new("/opt/BriskaBlastGames/dev");
+        assert!(!paths_overlap(game, launcher));
     }
 }

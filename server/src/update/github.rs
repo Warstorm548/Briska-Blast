@@ -31,7 +31,8 @@ pub enum CheckOutcome {
 /// - Stores the response ETag back into Redis on a 200 response.
 /// - Treats `304 Not Modified` as "nothing changed; preserve cached state".
 /// - Sends `Authorization: Bearer <GITHUB_TOKEN>` if the env var is set,
-///   raising the anonymous-IP rate limit (60/hr) to the authenticated cap.
+///   raising the anonymous-IP rate limit (60/hr) to the authenticated cap,
+///   and logs (`info`) whether the check ran authenticated or anonymous.
 /// - Requests `per_page=100` and defensively sorts results by semver to
 ///   avoid relying on GitHub returning releases newest-first.
 pub async fn check_for_update(
@@ -54,10 +55,20 @@ pub async fn check_for_update(
     if let Some(ref etag) = cached_etag {
         request = request.header("If-None-Match", etag.as_str());
     }
-    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-        if !token.trim().is_empty() {
+    let authenticated = match std::env::var("GITHUB_TOKEN") {
+        Ok(token) if !token.trim().is_empty() => {
             request = request.header("Authorization", format!("Bearer {}", token.trim()));
+            true
         }
+        _ => false,
+    };
+    // Surface the auth state so ops can confirm the higher (5000/hr) rate limit
+    // is in effect without inspecting outbound traffic. Low volume — one line
+    // per scheduled poll or manual check. Grep: `github check`.
+    if authenticated {
+        tracing::info!("github check: authenticated (5000/hr limit)");
+    } else {
+        tracing::info!("github check: anonymous (60/hr limit)");
     }
 
     let response = request
@@ -126,12 +137,12 @@ pub async fn check_for_update(
         .collect();
     candidates.sort_by(|a, b| b.0.cmp(&a.0));
 
-    for (version, tag) in candidates {
+    // candidates is sorted descending, so the first is the maximum version; if
+    // it isn't newer than current, none are.
+    if let Some((version, tag)) = candidates.into_iter().next() {
         if version > current {
             return Ok(CheckOutcome::Update(tag));
         }
-        // First candidate is the maximum; if it's not newer, none will be.
-        break;
     }
 
     Ok(CheckOutcome::NoUpdate)

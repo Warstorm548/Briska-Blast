@@ -5,6 +5,455 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.20.1] — 2026-07-04
+
+Verification target for the 0.20.0 per-OS self-update work — **no functional changes**.
+A launcher installed from 0.20.0-dev.1 reports version `0.20.0`, and semver ranks a
+prerelease of the *same* version (`0.20.0-dev.2`) below it, so testing the new update
+paths needs a strictly newer version to update **to**. This release is that target:
+install 0.20.0-dev.1 fresh (dmg / AppImage / installer), then run the in-app update
+to land here.
+
+## [0.20.0] — 2026-07-04
+
+Makes launcher self-update work on **every supported OS**. Windows already worked and
+its logic is untouched; macOS and Linux were both broken — `self_update` was built
+without tar support, so it could not even extract their `.tar.gz` update assets, and on
+macOS the binary-in-bundle swap additionally destroyed the ad-hoc signature seal.
+
+### Fixed
+
+- **`self_update` can now extract tar.gz assets** (`archive-tar` +
+  `compression-flate2` features enabled). This alone repairs the Linux bare-binary
+  swap; the Windows zip path is unaffected.
+- **macOS: whole-bundle self-update** (`updater/macos_bundle.rs`). When running from
+  `BriskaBlast Launcher.app`, the update downloads the new release's ad-hoc-signed
+  `.app` tarball (new CI asset `briskablast-launcher-<ver>-macos-app.tar.gz`), verifies
+  the signature with `codesign` (re-signing ad-hoc locally if the seal didn't survive),
+  and atomically swaps the **entire bundle** — old bundle moved aside, new one renamed
+  into place, rollback on failure. Replacing the whole bundle keeps the ad-hoc seal
+  valid (a binary-only swap gets the app killed as "damaged" on Apple Silicon) and
+  updates `Info.plist`/icon too. Self-updated bundles carry no quarantine xattr, so
+  Gatekeeper's right-click-open dance only ever applies to the first `.dmg` install.
+  A bare (non-bundle) binary still uses the plain binary swap.
+- **Linux: AppImage self-update** (`updater/appimage.rs`). An AppImage runs from a
+  read-only squashfs mount, so the in-place swap can never work; the launcher now
+  downloads the release's `.AppImage` and atomically replaces the outer file at
+  `$APPIMAGE` instead (executable bit preserved). System-wide installs (the `.deb`,
+  root-owned `/usr/bin`) get a clear "download the new .deb" message up front instead
+  of a cryptic permission error.
+
+### Added
+
+- Startup cleanup now also mops up macOS bundle-swap leftovers
+  (`.<name>.app.old-*` / `.staging-*` sibling dirs) and stale AppImage staging files.
+- Release workflow publishes the signed-bundle tarball
+  `briskablast-launcher-<ver>-macos-app.tar.gz` (name deliberately omits the target
+  triple so the bare-binary fallback's triple matching can never pick it).
+
+## [0.19.0] — 2026-07-03
+
+Adds a **Logs button** so users can open the game's per-run log folder and send it
+to the developer in one click.
+
+### Added
+
+- **Logs button** in **Settings → Game Channel Management**, beside each channel's
+  **Game Save** button. Opens that channel's per-user log folder
+  (`<data_dir>/log<channel>` — `logdev` / `logea` / `logstable`), where the game
+  writes its per-run logs. Enabled only for installed channels. New
+  `paths::logs_dir(channel)` resolves/creates the folder; the plain `<data_dir>/logs`
+  name is reserved for the launcher's own future logs.
+
+## [0.18.0] — 2026-07-01
+
+Adds scrolling to menu pages that are taller than the visible pane, so their content
+is no longer clipped and unreachable.
+
+### Added
+
+- **Dynamic scrollbar on overflowing menu pages.** Any center/menu page whose content
+  exceeds the visible pane now shows a vertical scrollbar and can be scrolled with the
+  **mouse wheel** (while the pointer is over the pane) or by dragging the bar. The
+  scrollbar only appears when the content actually overflows — pages that fit are
+  unchanged. Headers and the Settings tab bar stay pinned while the body scrolls. The
+  primary beneficiary is **Settings → Game Channel Management** (per-channel lists +
+  firewall + the Windows-only runtime-cache section). Implemented as a single shared
+  `scroll_area` helper (`ui/center/mod.rs`) applied per view.
+
+## [0.17.2] — 2026-07-01
+
+A small fix to the install-location prompt so an update can't be redirected away from
+the existing install.
+
+### Fixed
+
+- The install prompt now **locks the install directory when the channel is already
+  installed**: the "Choose…" button is disabled on an update, and the path stays pinned
+  to the existing install location (already pre-seeded by the update flow). Previously
+  the button was always pressable, so a user could point an update at a different folder
+  and leave the old install behind / corrupt the update. The button re-enables for a
+  genuine first-time install, and again after a channel is uninstalled (both the stored
+  install location and version are cleared), so a fresh location can be chosen.
+
+## [0.17.1] — 2026-07-01
+
+Internal refactor plus a few minor review-driven hardening fixes on error/edge
+paths — no new features.
+
+### Changed
+
+- Split the 1073-line `updater/branches/installer.rs` into an `installer/` module,
+  one submodule per responsibility: `manifest` (the `installed.json` / `files.json`
+  types + readers), `download` (asset selection + the transactional download/extract/
+  manifest pipeline), `extract` (archive unpacking + executable resolution, internal),
+  `verify` (integrity check against `files.json`), and `uninstall` (teardown + saves
+  backup). `mod.rs` re-exports the public surface, so `installer::*` paths and every
+  caller are unchanged; the 8 install/verify tests moved beside the code they exercise.
+
+### Fixed
+
+- The staging tree is now cleaned up when the pre-swap "move old install aside"
+  rename fails, instead of being leaked (the live install was already safe).
+- Executable resolution requires a real *file* (`is_file`, not `exists`), so a
+  directory that happens to share the binary's name can't be mistaken for it —
+  matching the macOS bundle resolver.
+- The legacy (no-`files.json`) verify fallback rejects an unsafe `installed.json`
+  `executable` path (absolute / `..`) before the on-disk check, so it can't resolve
+  outside the install tree.
+
+## [0.17.0] — 2026-06-25
+
+Adds a **file-integrity / repair toolkit** to Settings → Game Channel Management,
+scoped to corrupted or partial installs. Pairs with **game v0.17.0**, which ships the
+`files.json` manifests this consumes and the per-channel runtime-cache names it targets.
+
+### Added
+
+- **Deep Verify File Integrity.** Reads the build-time `files.json` and checks every
+  shipped file is present and the right size (instant), then re-hashes each (sha256, on
+  a blocking thread so the multi-hundred-MB `.pck` doesn't stall the UI) — new
+  `✗ N file(s) missing` / `✗ N file(s) corrupted` results plus a "Verifying…"
+  indicator. Falls back to the old exe-exists check for installs packaged before
+  manifests existed. See `installer.rs::verify_install`.
+- **Repair.** Reinstalls the *installed* version (fetch-by-tag via
+  `release_for_version`) through the existing transactional download pipeline, then
+  auto re-verifies. A failed repair leaves the prior install untouched; saves are
+  unaffected.
+- **Reset Runtime Cache (Windows).** Deletes the game's .NET runtime extraction cache
+  (`%LOCALAPPDATA%\data_BriskaBlast…_windows_x86_64`) so the game rebuilds it on next
+  launch — for when the game won't start even though Verify passed. The resolved path
+  is validated (under `%LOCALAPPDATA%`, name starts `data_BriskaBlast`) before
+  `remove_dir_all`, and it **never touches antivirus**. Its own Settings section, with
+  guidance to add an AV exclusion yourself if the problem recurs.
+
+### Changed
+
+- The install pipeline's download/stream (mpsc ⇆ `Task::stream`) wiring is factored
+  into a shared `stream_install` helper used by both fresh install/update and Repair.
+
+## [0.16.0] — 2026-06-21
+
+Replaces the cross-restart running-game PID file with a **socket rendezvous** and
+adds **launcher single-instance**. Each holder binds an ephemeral `127.0.0.1:0`
+port (the OS guarantees it is free, so it can never collide with unrelated
+software), records the port in a discovery file, and proves its identity with a
+handshake banner — fixing the false "already running" a fixed port would hit.
+Pairs with **game v0.15.0**, whose new `SingleInstance` autoload owns the game's
+side of the same protocol.
+
+### Added
+
+- **Launcher single-instance.** A second launcher detects the first via the
+  rendezvous (bind `127.0.0.1:0` → atomic `create_new` claim of
+  `launcher_instance.json` → connect + banner check) and exits cleanly; one
+  window. Runs in `main()` before the stale-update-artifact cleanup so a
+  duplicate never disturbs the live instance. Fail-safe throughout: any
+  inconclusive error logs and lets the launcher run normally. See
+  `launcher/src/rendezvous.rs`.
+- **Game liveness probe** (`rendezvous::game_is_running`) — a no-bind, no-claim
+  read+connect of the game's `game_instance.json` banner. Drives cross-restart
+  recovery: a one-shot probe on boot plus the existing 2 s poll while a recovered
+  game is tracked. Correctly distinguishes a **crashed** game (connect refused →
+  not running) from a live one, which the old start-time heuristic only
+  approximated.
+- **`data_dir` handoff field** — the launcher tells the game which per-user
+  directory to write `game_instance.json` into (the same one the launcher
+  probes), avoiding any cross-language path drift.
+- **Clean-exit cleanup** — the launcher removes `launcher_instance.json` on a
+  clean exit, but only when it actually won the claim (a crash leaves it for the
+  next probe to self-correct).
+
+### Changed
+
+- Cross-restart game detection now uses the game's `game_instance.json` socket
+  (probe on boot, re-probe each poll tick) instead of a recorded PID. The
+  `game_running` UI gate and button behaviour (Play / Change Name / Uninstall)
+  are unchanged; the normal launch path still drives running→not-running via the
+  in-memory child handle + `GameExited`.
+
+### Removed
+
+- `running_game.rs` and the `running_game.json` PID memory file (PID + spawn
+  time + exe heuristic), superseded by the socket probe.
+- The `sysinfo` dependency, now unused.
+
+---
+
+## [0.15.0] — 2026-06-20
+
+Adds a 20-character username cap (hard-blocked in the UI, enforced server-side as
+the real trust boundary) and locks username changes while a game is running —
+including across a launcher restart, via a new running-game memory file.
+
+### Added
+
+- **20-char username cap, hard-blocked at the input.** Both username fields (the
+  welcome screen and Change Name) stop accepting input at 20 Unicode scalar
+  values (`nav::cap_username`), with a live `N/20` counter. The limit is the
+  shared `shared::protocol::messages::MAX_USERNAME_LEN`, so client and server
+  agree. The confirm handlers re-check the length as defence-in-depth for the
+  Enter-key path.
+- **Server-reject revert.** `/me/username` now returns the canonical username on
+  both accept (200) and reject (422); `server_api::update_username` surfaces this
+  as `UpdateUsernameOutcome::{Accepted, Rejected}`. On a reject — only reachable
+  from a tampered client, since the UI hard-caps — the launcher reverts its stored
+  username to the server's stable value and shows a notice in the username box.
+  This also closes a latent bug where a server-rejected name stayed persisted
+  locally and out of sync.
+- **Username changes are locked while a game is running.** The Change Name button
+  drops its action while `game_running` (the same disabled idiom as Play/Update),
+  with a "Locked while in game" hint; `nav::change_name_pressed` re-checks too.
+- **Running-game memory file (`running_game.json`) for restart recovery.** The
+  launcher records the spawned game's PID + spawn time + exe + channel next to
+  `identity.json` and `ratelimits.json`. If the launcher is closed and reopened
+  while a game is still open, boot recovers that state (`running_game::recover`)
+  and keeps every game-gated button locked — Play, Change Name, Uninstall,
+  Verify, … — until a slow poll subscription (`app::subscription`) sees the
+  process exit. PID reuse is defeated by also matching the process start time and
+  exe. Adds the `sysinfo` dependency. The file fails safe: a missing/corrupt/stale
+  file reads as "no game running".
+
+---
+
+## [0.14.2] — 2026-06-17
+
+Closes a footgun in the game install flow: the user could pick an install folder
+that sat **inside the launcher's own application directory**, nesting the game
+under the launcher. Such an install is broken — the game won't launch and never
+gets its Windows firewall rule prompt. The launcher now refuses these locations.
+
+### Fixed
+
+- **Reject install locations that collide with the launcher's own folder**
+  (`paths::install_location_collides`, wired into `app/handlers/install.rs`). The
+  resolved game install dir (`<chosen folder>/<channel>/`) is compared against the
+  launcher's install directory after canonicalizing both; if either is nested in
+  the other (or they're equal), the install is refused with a blocking message in
+  the install prompt rather than producing a game that can't launch or obtain its
+  firewall permission. Enforced at **both** the folder-picker step (immediate
+  feedback, Confirm stays disabled) and at confirm time (defence-in-depth, also
+  covering an update whose path comes from `identity.json`). Applies on all
+  platforms. Legitimate siblings (e.g. launcher `…/BriskaBlast`, game `…/dev`) are
+  unaffected — the check is component-wise, not a string prefix.
+
+---
+
+## [0.14.1] — 2026-06-16
+
+A small footprint reduction on update discovery. The first Part 4 lever from the
+rate-limit design doc; fetch-once and ETag remain deferred.
+
+### Changed
+
+- **Release discovery now requests `per_page=100`** (`updater/github_client.rs`),
+  GitHub's maximum, instead of the default 30. Each update check pulls the full
+  release list in **one** page rather than paginating, so at the current ~46
+  releases a check drops from **2 GitHub requests to 1** — roughly halving the
+  per-launch API footprint (a returning user's boot fan-out goes from ~6 to ~3).
+  The `Link: rel="next"` pagination loop is retained, so a repo that ever exceeds
+  100 releases still fetches correctly. No behavioural change to what's discovered.
+
+---
+
+## [0.14.0] — 2026-06-15
+
+Adds a **GitHub rate-limit back-off safety net**. The launcher discovers updates
+against GitHub Releases unauthenticated, so every user shares GitHub's 60-req/hr
+**per-IP** bucket. Previously the launcher never read the rate-limit signal and so
+kept knocking once throttled — exactly the "ignoring the back-off" pattern that can
+escalate a harmless hourly throttle into GitHub's secondary limits or an IP block.
+Now, once a rate-limit is observed, the launcher goes quiet until the window resets.
+This is back-off only; it does **not** reduce request volume (that footprint work —
+`per_page=100`, ETag, fetch-once — stays deferred, see
+`docs/planning/launcher-github-ratelimit-safety-net.md` Part 4).
+
+### Added
+
+- **`ratelimits.json`** in the per-user data dir, next to `identity.json`
+  (`ratelimit.rs`, `paths::ratelimit_path`). Stores GitHub's last-seen
+  `X-RateLimit-Reset` + `X-RateLimit-Remaining` and a derived resume instant, so the
+  gate is a trivial local file read — never itself a GitHub request.
+  - **Reset gate (Layer A):** on a confirmed `403`/`429` rate-limit, block all
+    GitHub-counting requests until `reset` + a 2-minute clock-skew pad.
+  - **Proactive stop (Layer B):** read `X-RateLimit-Remaining` off every response;
+    go quiet at `remaining ≤ 5` until the same `reset` + 2 min.
+  - **No-header fallback:** a confirmed rate-limit lacking a reset header → fixed
+    1-hour cooldown (near-dead path on public GitHub).
+  - **Fails OPEN:** a missing/corrupt `ratelimits.json` never bricks update checks.
+- **A clear, gated state surfaces on the manual checks.** The left-rail per-channel
+  *Updates* box reads *⏳ GitHub limit — retry at HH:MM*
+  (`ChannelUpdateStatus::RateLimited`), and the launcher self-update check reports
+  the same in Launcher Options. Both pre-check the gate synchronously, so a blocked
+  press spends no request and shows the resume time at once.
+
+### Changed
+
+- **Update discovery now owns its GitHub request** (`updater/github_client.rs`).
+  Both the launcher self-update check and the per-channel game `latest_release`
+  discovery moved off `self_update`'s `ReleaseList::fetch()` (which hides the HTTP
+  status + headers) onto a direct `reqwest` call that exposes the status and the two
+  rate-limit headers — the prerequisite for the safety net. The request footprint is
+  unchanged (still paginates 30/page following `Link: rel="next"`); `self_update`
+  still powers the launcher binary self-update swap and stale-artifact cleanup.
+- **The gate covers every counted GitHub request:** the launcher self-update check,
+  the per-channel game `latest_release` checks, and the binary-download asset
+  request (`updater/branches/installer.rs`). A user-initiated install that's
+  rate-limited fails fast with a clean "resumes at HH:MM" rather than starting and
+  dying mid-flight on a 403. Actions that hit our own server (register / reachability)
+  or stay local (uninstall / verify / saves / firewall) are untouched.
+  - **Correctness guardrail:** the cooldown arms only on a *confirmed* `403`/`429`
+    rate-limit (`X-RateLimit-Remaining: 0` or a `Retry-After`), **never** on a
+    generic network error/timeout — a Wi-Fi blip cannot cause a lockout.
+
+---
+
+## [0.13.1] — 2026-06-15
+
+Relocates the manual update check from Settings to the **left rail**, directly
+under the channel picker — a single button scoped to the focused channel,
+replacing the per-channel **Channel Updates** table in Settings (0.13.0). The
+check logic is unchanged; this is a UI move plus a clear-on-switch refinement.
+
+### Changed
+
+- **"Check for Updates" now lives under the channel selector** (`ui/left_rail.rs`).
+  One button checks only the channel currently selected in the dropdown, and the
+  verdict renders in a bordered box directly below it, labelled *Updates · <Channel>*:
+  *● Update available — vX.Y.Z*, *✓ You're up to date — vX.Y.Z*, *⚠ Check failed*,
+  or *Checking…* (the button itself also shows *Checking…* and is disabled) while
+  a fetch is in flight. The box reads the em-dash until the channel is checked.
+  - A found update still flips the bottom-bar Update button — it reads the same
+    `available_versions` cache the check refreshes — so clicking that button is
+    how the user proceeds with the update. No separate update path was added.
+  - The button stays disabled until the focused channel is installed and no
+    install / uninstall / running-game is in progress, matching the old row.
+- **The verdict box clears when the focused channel changes** (`app/handlers/nav.rs`).
+  Switching the dropdown drops completed verdicts so the box resets, but keeps
+  any in-flight `Checking` sentinel (so a running check isn't dropped, its button
+  stays deduped, and "Checking…" returns if the user switches back mid-flight).
+  `available_versions` is left intact, so the bottom-bar button keeps its
+  per-channel state.
+
+### Removed
+
+- The **Channel Updates** subsection in Settings → Game Channel Management and its
+  per-channel status cells (`ui/center/settings.rs`), superseded by the left-rail
+  button above. The launcher self-update check in Settings → Launcher Options is
+  unaffected.
+
+---
+
+## [0.13.0] — 2026-06-14
+
+Adds a **manual per-channel update check** so a release published while the
+launcher is open can be picked up without a restart (the GitHub `latest_release`
+fan-out otherwise only runs once at boot).
+
+### Added
+
+- **"Check for Updates" button per channel** under a new **Channel Updates**
+  subheading in Settings → Game Channel Management (`ui/center/settings.rs`,
+  `app/handlers/install.rs`, `app/state.rs`). Pressing it re-queries GitHub for
+  the channel's latest `game-v*` release and reports the verdict in an inline
+  status box: *Update available — vX.Y.Z*, *You are up to date — vX.Y.Z*,
+  *Checking…* while in flight, or *? Check failed* on a fetch error.
+  - The check writes only to the existing `available_versions` cache and reuses
+    `recompute_branch_updates_available`, so the bottom-left Update/Install
+    button keeps its exact state-machine — it flips to *Update to vX.Y.Z* for the
+    channel currently selected in the dropdown. Channels are checked one at a
+    time (no auto-switch, no batch update) as a deliberate fail-safe while
+    multi-channel update orchestration is still unbuilt.
+  - The Dev row is gated behind the server-assigned dev flag (`visible_channels`),
+    matching every other section; the handler keeps a defence-in-depth
+    `Dev && !dev_flag` guard.
+  - A successful install clears the channel's status box so it can't keep
+    claiming an update is available for a channel just updated.
+
+---
+
+## [0.12.1] — 2026-06-07
+
+Internal refactor only — **no behavior change**.
+
+### Changed
+
+- **`app.rs` split into an `app/` module tree** for maintainability (it had grown
+  to ~1487 lines). The single file is now `app/mod.rs` (the `update` dispatcher,
+  shared helpers, `boot`/`view`/`theme`/`title`), `app/message.rs` (`Message`,
+  `CenterView`, `SettingsTab`), `app/state.rs` (`AppState`), and per-feature
+  handlers under `app/handlers/` (`nav`, `launcher_update`, `identity`, `install`,
+  `play`, `maintenance`, `firewall`). Each `update` match arm moved verbatim into a
+  handler function; the public `crate::app::{…}` surface and runtime behavior are
+  unchanged (build, clippy on the Linux + `x86_64-pc-windows-gnu` targets, and the
+  test suite all pass).
+
+---
+
+## [0.12.0] — 2026-06-05
+
+Identity **self-heal** when a channel's server-side id is deleted. Pairs with
+server **v0.12.0**, which adds admin user-deletion + id reuse — a deleted player's
+stored creds stop validating, and the launcher now recovers cleanly instead of
+silently dropping the action.
+
+### Changed
+
+- **401 → re-register on username change** (`server_api.rs`, `app.rs`).
+  `update_username` now distinguishes HTTP `401` from other failures via a new
+  `ServerApiError { Unauthorized, Other }`. On `Unauthorized`, the
+  `UpdateUsernameDone` handler re-dispatches `/register` for that channel: the
+  server rejects the stale creds, issues a fresh id (recycled from the pool), and
+  the existing `RegisterDone(Ok)` path persists it and re-applies the username —
+  one round-trip fully heals the channel. (Boot-time re-register already covered
+  the next-launch case; this closes the live-session gap.)
+
+---
+
+## [0.11.0] — 2026-05-26
+
+Extends the game handoff so the launched client can authenticate to the
+server. Part of Stage 1 of multiplayer — see
+[`docs/planning/multiplayer-client-stages.md`](docs/planning/multiplayer-client-stages.md).
+
+### Changed
+
+- **Identity + version handoff.** The launcher→game handoff file grew from
+  `{username}` to `{username, player_id, secret_token, launcher_version,
+  channel}` (`game_launch/mod.rs`). The client needs the channel's
+  `player_id` + `secret_token` to authenticate every server call
+  (`/host`, `/join`, the WS `identify`), and `launcher_version` to satisfy
+  the version gate's `X-Launcher-Version` check — neither of which the game
+  can know on its own. Creds are pulled from the channel's `ChannelCreds`
+  at the single `launch_game` choke point in `app.rs`.
+
+### Security
+
+- The handoff file now carries the `secret_token`. On unix it is already
+  created `0o600`; the Windows plaintext-in-temp exposure is a known v1 gap
+  (uuid-named, short-lived). The WS-ticket auth roadmap item removes the
+  raw token from the wire entirely.
+
 ## [0.10.0] — 2026-05-25
 
 macOS (Apple Silicon) support for the launcher itself — Stage A of the macOS

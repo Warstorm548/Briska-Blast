@@ -34,7 +34,14 @@ pub fn view<'a>(
     container(
         column![
             header,
-            content(state, channel, install_dir, installed_version, keep_saves, error)
+            super::scroll_area(content(
+                state,
+                channel,
+                install_dir,
+                installed_version,
+                keep_saves,
+                error
+            ))
         ]
         .spacing(ZONE_GAP * 4)
         .align_x(Alignment::Center),

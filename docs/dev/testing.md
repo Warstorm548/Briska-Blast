@@ -226,6 +226,39 @@ Visit `http://localhost:25920/admin` in a browser.
 | Change password (passwords don't match) | Red error banner: "New passwords do not match" |
 | Successful password change → logout → login with new password | Access granted |
 
+**Users tab — delete & ID reuse:**
+
+| Action | Expected result |
+|---|---|
+| Open the Users tab | Table lists players with ID, Username, Dev, and a 🗑 Delete button per row |
+| Click 🗑 on a row | A centered confirm popup appears; the page behind it dims and background clicks are blocked |
+| Click **Cancel** (or press Esc) | Popup closes, **nothing is deleted** |
+| Click **Delete** | Row disappears; green banner "Deleted &lt;id&gt;"; the id number is returned to `player:freelist` |
+
+End-to-end reuse check (curl + redis-cli):
+
+```bash
+# 1. Register two players → ids allocated lowest-first
+curl -s -X POST http://localhost:25919/register | jq   # → "player_id": "000000001"
+curl -s -X POST http://localhost:25919/register | jq   # → "player_id": "000000002"
+
+# 2. Delete player 1 in the admin Users tab (🗑 → Delete), then:
+redis-cli ZRANGE player:freelist 0 -1 WITHSCORES        # → "1"  "1"   (number is pooled)
+redis-cli EXISTS player:000000001:token_hash            # → 0     (keys wiped)
+
+# 3. Register a new player → reuses the lowest freed number with a NEW secret
+curl -s -X POST http://localhost:25919/register | jq    # → "player_id": "000000001"
+redis-cli ZCARD player:freelist                         # → 0     (pool drained)
+redis-cli GET player:counter                            # → "2"   (counter unchanged — never decremented)
+
+# 4. Next registration climbs the counter again (pool empty)
+curl -s -X POST http://localhost:25919/register | jq    # → "player_id": "000000003"
+```
+
+401 self-heal: register via the launcher, delete that id in the admin panel, then change the
+username in the launcher. The `/me/username` call returns `401`; the launcher re-registers the
+channel (new id from the pool) and the rename succeeds on the fresh identity.
+
 **Server Updates section:**
 
 | Action | Expected result |
@@ -263,11 +296,15 @@ curl -s -X POST http://localhost:25919/host \
 ```bash
 redis-cli
 
-# Check player counter
+# Check player counter (monotonic high-water mark — never decremented)
 GET player:counter
 
+# Inspect the id reuse pool (freed numbers, lowest reissued first)
+ZRANGE player:freelist 0 -1 WITHSCORES
+ZCARD player:freelist
+
 # Check a player's token hash
-GET player:0000001:token_hash
+GET player:000000001:token_hash
 
 # Check a session
 GET session:K9M2XP

@@ -5,6 +5,7 @@ use crate::app::{AppState, Message};
 use crate::ui::theme::{self, ZONE_GAP};
 use iced::widget::{button, column, container, row, text, text_input, Space};
 use iced::{Alignment, Element, Length};
+use shared::protocol::messages::MAX_USERNAME_LEN;
 
 pub fn view<'a>(state: &'a AppState, draft: &'a str) -> Element<'a, Message> {
     let trimmed_non_empty = !draft.trim().is_empty();
@@ -25,6 +26,9 @@ pub fn view<'a>(state: &'a AppState, draft: &'a str) -> Element<'a, Message> {
             .on_input(Message::UsernameDraftChanged)
             .padding(8)
             .width(Length::Fixed(260.0)),
+        // Live counter — the input is hard-capped at MAX_USERNAME_LEN, so this
+        // shows the limit being reached rather than an error state.
+        text(format!("{}/{}", draft.chars().count(), MAX_USERNAME_LEN)).size(12),
         confirm,
     ]
     .spacing(ZONE_GAP * 2)
@@ -36,7 +40,7 @@ pub fn view<'a>(state: &'a AppState, draft: &'a str) -> Element<'a, Message> {
     ];
 
     container(
-        column![header, form]
+        column![header, super::scroll_area(form)]
             .spacing(ZONE_GAP * 4)
             .align_x(Alignment::Center),
     )

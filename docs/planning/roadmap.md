@@ -9,6 +9,20 @@ For *how* an item should be built, follow the link to its spec doc.
 
 Work intentionally deferred until after the initial production deployment of the server (v0.4.1).
 
+### Bulk user deletion in the admin Users tab
+
+- **What**: Multi-select / "delete all matching" on the Users tab, on top of the per-row delete shipped in server v0.12.0. Would batch the same `delete_user` work (wipe keys + `ZADD player:freelist`) across many ids in one confirm.
+- **Why deferred**: Single-operator, small player set today — per-row delete is enough to prune stale accounts. Bulk delete needs a selection UI, a wider blast-radius confirm, and care around partial failures, for a workflow that isn't pressing yet.
+- **Trigger to start**: Player count grows enough that pruning one row at a time is tedious, OR a spam/abuse cleanup needs to remove many ids at once.
+- **Related**: the per-row handler (`server/src/admin/users.rs::delete_user`) and reuse pool (`player:freelist`) are already the seam — bulk is a loop over the existing primitive.
+
+### Admin Logs tab (container output on the dedi)
+
+- **What**: A `Logs` tab in the admin panel that reads container stdout/stderr straight from the host's Docker daemon and renders it in the browser, with a source selector (`server` / `redis` / `watchtower`), a line-count selector, client-side level + search filters, manual + auto-refresh, and a **Download .log** button for sending output to the developer. Reads via the already-present `bollard 0.17.1` (its `logs()` returns demuxed `StdOut`/`StdErr` frames) over the `/var/run/docker.sock` already mounted for the update flow — **no new dependencies or privileges**. Containers discovered by `com.docker.compose.service` label, scoped to this deployment's `com.docker.compose.project` so side-by-side channels never cross-read. Gated to `RELEASE_CHANNEL=dev` (nav link in `templates::nav_html` + routes in `main.rs`); the handler module stays channel-agnostic so opening it to ea/stable later is a one-line change. Slots into the same tab pattern Stats established (`server/src/admin/` module + route + `templates::*_page`), reusing `require_session` for auth.
+- **Why deferred**: Design is settled but the user wants more time to think through scope before building — in particular whether to also do the durable side (a Redis audit-event stream that survives container recreation on update), live streaming follow (bollard `follow:true` via SSE/WS) vs the static tail-on-load MVP, and whether it should ultimately be all-channels rather than dev-only. Raw container logs reset whenever Watchtower recreates the container on update, so the "what's happening now" view (container logs) and the "what happened over time" view (audit stream) are genuinely two features; better to decide that boundary deliberately than ship half of it.
+- **Trigger to start**: The user is ready to commit to the scope (MVP container-logs tab vs. also building the audit stream), OR a live debugging need on the dedi makes browser-readable logs pressing.
+- **Related**: leverages the existing bollard usage in `server/src/update/docker.rs`; auth via `server/src/admin/mod.rs::require_session`; the durable-audit option overlaps with the **Score / replay / audit persistence** entry's keyspace conventions.
+
 ### Pocket ID admin SSO
 
 - **What**: Replace the bcrypt password login at `/admin/login` with Pocket ID OIDC (passkey-based SSO).
@@ -93,12 +107,30 @@ Work intentionally deferred until after the initial production deployment of the
 
 - Launcher Scans for existing games installs bottom check + option on first boot of launcher when no game file path directory found
 
-### Per-file hash manifest + deep Verify File Integrity
+### Game must always be launched by the launcher (reject standalone, bounce to launcher)
 
-- **What**: Extend `<install>/installed.json` to record a `files: { "<relpath>": "sha256:<hex>" }` map written at install time. Stage 7's `Verify File Integrity` button currently just re-reads the manifest and checks the executable exists; with per-file hashes the same button could re-hash the on-disk tree and report which files are missing or corrupted. Would also enable "Re-download corrupted files only" rather than a full reinstall.
-- **Why deferred**: The Stage 7 cheap check (exe + manifest exists) catches the realistic breakage modes today — user deletes the exe by hand, install dir gets moved. Per-file hashing is a meaningfully bigger change: extends the installer's write path, the manifest schema, the verify task (sync hashing of potentially-GB of game files needs spawn_blocking + chunked I/O), and the UI to surface per-file failures. Wait until disk-corruption / partial-extraction reports actually appear in user feedback.
-- **Trigger to start**: First real user report of a partially-extracted install OR the move to A/B install slots (foundation §7), where per-slot hashes would also serve the rollback decision.
-- **Related**: `launcher/src/updater/branches/installer.rs::VerifyOutcome` — current minimal variants (`Ok`, `ManifestMissing`, `ManifestUnreadable`, `ExecutableMissing`) would gain `FilesMissing { paths }` / `FilesChanged { paths }` variants.
+- **What**: A release-build game opened **standalone** (double-clicked directly, with no launcher handoff) should **refuse to run the game** and instead **open the launcher**, then quit. Each game channel is fundamentally dependent on the launcher — it supplies the identity (`player_id` + `secret_token`), the version handoff for the server's gate, the channel assertion, and now the `data_dir` for the single-instance file — and online play is impossible standalone anyway. So the game must always be launched *by* the launcher. On detecting a missing handoff (and **only** in a non-editor release build), the game would locate + spawn the installed launcher (or, if it can't be found, surface a clear "please launch from the BriskaBlast launcher" message) and exit before the main scene runs. This builds directly on the launcher→game handoff dependency established by the socket-rendezvous work (launcher v0.16.0 / game v0.15.0).
+- **Why deferred / care needed**: The current build deliberately keeps two standalone paths that **must be preserved**: the DEBUG/editor self-register in `SessionContext.SelfRegisterAsync` (so two editor instances can host/join without the launcher) and the standalone data-dir fallback in `SingleInstance.FallbackDataDir`. The refuse-and-bounce behavior must therefore be **release-only AND gated on `!OS.HasFeature("editor")`**, or it would break the dev workflow. It also needs a reliable way for the game to *find* the launcher executable (the reverse of the handoff — e.g. a known install path, an OS registry/desktop entry, or a path the launcher records), plus a decision on the fallback UX when the launcher can't be located (clear message vs. silent quit). It's a UX/lifecycle change layered on the handoff dependency, not part of the single-instance mechanism itself, so it was kept out of that branch.
+- **Trigger to start**: Hardening before a public/**stable** release where users may double-click the game exe directly, OR reports of players launching the game outside the launcher and hitting auth/version failures.
+- **Related**: handoff producer/consumer in `launcher/src/game_launch/mod.rs` (`Handoff`) ↔ `client/src/core/LaunchArgs.cs` (`Handoff`, `FromLauncher`); editor self-register in `client/src/core/SessionContext.cs` (`SelfRegisterAsync`, DEBUG-only) and standalone fallback in `client/src/core/SingleInstance.cs` (`FallbackDataDir`) — both must stay for editor dev; channel is compile-time baked (`client/src/core/BuildConfig.cs`).
+
+### Per-file hash manifest + deep Verify File Integrity — ✅ SHIPPED (game + launcher 0.17.0)
+
+Shipped via a build-time `files.json` manifest (size + sha256 per file) and a two-pass deep Verify (presence+size, then sha256 on `spawn_blocking`), plus a **Repair** button (full reinstall of the installed version) and a Windows **Reset Runtime Cache** button. `VerifyOutcome` gained `FilesMissing` / `FilesCorrupted`. See [`docs/architecture/runtime-cache-and-integrity.md`](../architecture/runtime-cache-and-integrity.md) and the 0.17.0 changelogs.
+
+- **Still deferred — "Re-download corrupted files only"**: Repair currently does a *full* reinstall, not surgical per-file re-download. GitHub Releases serves whole archive assets, so per-file fetch would need each file as its own asset (rate-limit cost) or range requests into the archive (impossible for `.tar.gz`). Wait for A/B install slots or real demand.
+
+### Reset Runtime Cache on Linux / macOS
+
+- **What**: Extend the Windows-only Reset Runtime Cache button to Linux/macOS once the on-disk runtime-cache location is confirmed there. On Windows the `.NET` runtime extracts to `%LOCALAPPDATA%\data_<name>_windows_x86_64`; on Linux/macOS it most likely lives inside the install dir / `.app` (where Verify/Repair already cover it), in which case Reset stays correctly N/A.
+- **Why deferred**: No Linux/macOS tester to confirm the location — the launcher must not guess a path and risk deleting the wrong dir. `paths::runtime_cache_dir` returns `None` off Windows and the button isn't rendered there.
+- **Trigger to start**: A tester runs `find ~ -type d -name 'data_BriskaBlast*'` on an installed+launched build; wire the confirmed path + `<platform>` suffix into `runtime_cache_dir`, or confirm N/A is final.
+
+### One-time cleanup of the legacy un-suffixed runtime cache
+
+- **What**: Auto-remove the orphaned `data_BriskaBlast_windows_x86_64` left on machines upgrading from a pre-0.17.0 **dev/ea** build (the old shared cache name).
+- **Why deferred**: `data_BriskaBlast` is also **stable's** live cache name, so a blind delete during a dev/ea reset would nuke stable's cache. Must be gated on "no stable install on record" (stable recreates it on next launch if needed). Harmless ~80 MB orphan today; manual deletion for now.
+- **Trigger to start**: Enough upgraded users accumulate orphans to matter, or a stable channel ships (raising the collision stakes).
 
 ### Settings "Add Firewall Rule" button (second entry point)
 
@@ -119,7 +151,7 @@ Work intentionally deferred until after the initial production deployment of the
 - **What**: Make the "Skip & Play" dismissal of the first-Play firewall prompt persistent per-channel, so a user who declined once isn't re-prompted on the next launcher launch while the rule is still missing.
 - **Why deferred**: The shipped behavior uses an in-memory `firewall_prompt_dismissed` set that resets on restart — re-prompting next launch is defensible (the rule genuinely is still absent), and persisting it means an identity.json schema add. Polish, not correctness.
 - **Trigger to start**: User annoyance reports about being re-prompted, OR the identity schema is being revised for another reason.
-- **Related**: `launcher/src/app.rs` (`AppState::firewall_prompt_dismissed`), `launcher/src/identity.rs` (where a persisted per-channel flag would live).
+- **Related**: `launcher/src/app/state.rs` (`AppState::firewall_prompt_dismissed`), `launcher/src/identity.rs` (where a persisted per-channel flag would live).
 
 ### Saves-dir intact verify mode
 
@@ -127,3 +159,34 @@ Work intentionally deferred until after the initial production deployment of the
 - **Why deferred**: Stage 7 takes the simpler exe-only path because the saves layout itself is still in flux — saves currently live colocated under the install dir for Stage 1 testing convenience, but the roadmap also tracks moving them to a platform-standard data dir for stable. Verifying the colocated layout would be wasted work if the dir moves.
 - **Trigger to start**: Saves layout stabilises (after the platform-standard data dir migration) OR the keep-saves-on-uninstall flow accumulates real users whose backups end up orphaned.
 - **Related**: `Saves dir relocation` (above) — both items land together once saves move out of the install dir.
+
+### Consistent save-failure handling in the username-rename flow
+
+- **What**: Make `confirm_username_change` (the launcher rename handler) mirror the safer ordering already used by `confirm_welcome_username` (first-register): clone the identity → set the new username → `identity::save` → return/log on save error → and only on a successful save commit `state.identity`, close the menu, and fan out `update_username` to the channel servers. Today the rename handler mutates in-memory state and notifies the servers even when the local save fails, so on-disk, in-memory, and server username can briefly diverge.
+- **Why deferred**: Pre-existing latent inconsistency, not a live bug — a failed save during rename leaves only the *username* stale; `player_id`/`secret_token` stay intact and the server-canonical username reconciliation on the next `/register` heals the drift. The stricter clone-then-commit ordering is load-bearing only for first-register (reaching `/register` without an on-disk record would orphan the server identity), which is why the two handlers legitimately differ. Folding the change into the `app.rs` → `app/` refactor (PR #61) would have broken that PR's no-behavior-change contract, so it was split out here. Flagged by review on PR #61.
+- **Trigger to start**: The identity-file schema or registration flow is reworked (raising the stakes of a half-saved rename), OR a user reports real username drift after a save failure.
+- **Related**: `launcher/src/app/handlers/identity.rs` — `confirm_username_change` (handler to change) vs. `confirm_welcome_username` (the pattern to copy).
+
+### Richer error typing for WS signaling reads (deferred from PR #62)
+
+Two findings from the review of the `signaling/ws.rs` → `ws/` module split (PR #62). Both target code that was moved **verbatim** in that refactor, so neither is a regression introduced there — they are pre-existing, intentional simplifications. They were deliberately left out of PR #62 to preserve its no-behavior-change contract (the logic-token invariant check + changelog claim), and are recorded here to revisit together when a WS error-handling/observability pass is warranted.
+
+- **`session_status_is_active` → `Result<bool, _>`** (`server/src/signaling/ws/disconnect.rs`). Today the fn returns `bool` and collapses Redis pool/GET/JSON-decode failures to `false` ("not active") — documented in its doc comment as fail-as-inactive. Proposal: return `Result<bool, _>`, propagate errors from `state.redis.get()`, `conn.get(...)`, and `serde_json::from_str::<Session>(&raw)` instead of mapping them to `false`, and have the sole caller (the joiner-drop branch in `ws/mod.rs::handle_socket`) treat `Err(_)` as a *transient* failure — i.e. still arm the reconnect grace / hold the slot rather than routing the joiner through the "announce leave" branch. Preserve the active check against `SessionStatus::Starting`/`Active`. *Impact is narrow:* a Redis blip exactly at a mid-game joiner's socket drop today routes them through "announce leave, keep slot" instead of "hold slot + reconnecting overlay" — both keep the slot, so the only divergence is the overlay/announcement, and only during a (rare) transient Redis fault.
+- **`peer_roster` → descriptive error enum** (`server/src/signaling/ws/identify.rs`). Today returns `Result<Vec<String>, ()>`, collapsing pool errors, GET failures, missing key, and JSON-decode errors into `Err(())`. Proposal: a `PeerRosterError { RedisPool, RedisGet, NotFound, JsonDecode }` enum mapping each failure point (`state.redis.get()`, `conn.get(format!("session:{}", code))`, `raw.ok_or(...)`, `serde_json::from_str`) to its own variant, and update `handle_socket` to translate a genuine `NotFound` → `CLOSE_NOT_FOUND` vs. a backend fault → `CLOSE_INTERNAL`. Today every error collapses to `CLOSE_NOT_FOUND "session_gone"` — the caller comment already notes it's a "vanishingly rare race".
+
+- **Why deferred**: Both are pre-existing, deliberate simplifications, not live bugs, and each is a client-visible behavior change (joiner-drop routing; WS close-code surface) that PR #62 explicitly excluded as a verbatim refactor.
+- **Trigger to start**: A WS reconnect-hardening / error-observability pass, OR user reports of mid-game players announced gone that correlate with Redis hiccups, OR clients receiving `session_gone` (4404) when the real cause was a transient backend fault.
+- **Related**: `server/src/signaling/ws/disconnect.rs::session_status_is_active`, `server/src/signaling/ws/identify.rs::peer_roster`, and their shared caller `server/src/signaling/ws/mod.rs::handle_socket`.
+
+### Server-side validation of score reports (anti-forgery for match-end)
+
+- **What**: Verify that a `ReportScore` reflects a legitimate goal before crediting it — server-side trajectory/state validation, or server-attested scoring — so a connected member can't forge score events to pad the tally or **trigger match-end** prematurely. Today `frame.rs::handle_client_frame` (the `ReportScore` arm) trusts any session member's report at face value; `SignalHub::record_score` only guards that the credited id is a *current room member*, not that the goal actually happened.
+- **Why deferred**: The "trust any member's score report" model is **pre-existing and documented** — the `// Trusted for now` comment in `frame.rs`, the `ReportScore` doc in `signaling/protocol.rs`, and the Scoring section of `extended-mode.md` all already name trajectory validation as the later hook. The win-condition work (PR #78) did **not** introduce the forge-ability; it only **raised the impact** (a forged report can now end the match, not just inflate the scoreboard). A naive `reporter == scorer` guard does **not** fit this mode — by design the *scored-on* player reports a *different* player as the scorer — so there is no minimal authz patch; the real fix is the substantial trajectory-validation feature.
+- **Source**: Flagged by **CodeRabbit** review on PR #78 (Set Score win condition).
+- **Trigger to start**: An anti-cheat / trajectory-validation pass, OR reports of matches ending prematurely that correlate with a misbehaving / modified client.
+- **Related**: `server/src/signaling/ws/frame.rs` (`ReportScore` arm), `server/src/signaling/mod.rs::record_score`, `server/src/signaling/protocol.rs` (`ReportScore` doc); overlaps with the **Score / replay / audit persistence** entry (an audit trail would feed validation).
+
+### Game reserve fuction
+
+Ball-loss watchdog — if the single ball died with the crashed process, the rejoined match has no ball until a watchdog re-serves it. Designed in the plan: ball holder broadcasts a BallAlive heartbeat; lowest-id connected player serves after a gap. Fast-follow.
+Grace windows remain consts (runtime config later).

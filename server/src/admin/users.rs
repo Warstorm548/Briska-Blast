@@ -10,6 +10,7 @@ use super::{
     require_session,
     templates::{self, UserRow},
 };
+use crate::api::FREELIST_KEY;
 use crate::state::AppState;
 
 /// GET /admin/users — list all known player_ids with their username and
@@ -156,4 +157,72 @@ pub async fn save_dev_flags(
     }
 
     Redirect::to("/admin/users?ok=Saved").into_response()
+}
+
+/// POST /admin/users/delete — permanently remove one player: wipe its token,
+/// username, and dev-flag, then return the id **number** to the reuse pool
+/// (`player:freelist`) so a future registration can reissue it lowest-first.
+/// Irreversible; the Users-tab UI gates this behind a confirm modal.
+pub async fn delete_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    if require_session(&headers, &state.redis).await.is_none() {
+        return Redirect::to("/admin").into_response();
+    }
+
+    let id = form.get("id").map(|s| s.trim().to_string()).unwrap_or_default();
+    if id.is_empty() {
+        return Redirect::to("/admin/users?err=Missing+id").into_response();
+    }
+
+    let mut conn = match state.redis.get().await {
+        Ok(c) => c,
+        Err(_) => return Redirect::to("/admin/users?err=Redis+error").into_response(),
+    };
+
+    // Re-check existence against the canonical "this id exists" key — the form
+    // id is user-supplied, and the player may already be gone (double submit).
+    // Match explicitly so a Redis fault is reported as such, not masked as a
+    // missing user (this is a destructive action).
+    match conn
+        .exists::<_, bool>(format!("player:{}:token_hash", id))
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => return Redirect::to("/admin/users?err=No+such+user").into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, id = %id, "redis exists check failed");
+            return Redirect::to("/admin/users?err=Redis+error").into_response();
+        }
+    }
+
+    // Wipe the complete per-player key set: secret token, username, dev-flag.
+    let keys = vec![
+        format!("player:{}:token_hash", id),
+        format!("player:{}:username", id),
+        format!("player:{}:dev_flag", id),
+    ];
+    if let Err(e) = conn.del::<_, ()>(keys).await {
+        tracing::error!(error = %e, id = %id, "failed to delete player keys");
+        return Redirect::to("/admin/users?err=Redis+error").into_response();
+    }
+
+    // Return the id number to the reuse pool. The id is the zero-padded counter
+    // value (a legacy 7-digit id parses the same way); store the bare numeric
+    // form as both member and score so ZPOPMIN reissues lowest-first. Best
+    // effort: the user is already deleted, so a recycle failure is logged but
+    // never fails the request.
+    match id.parse::<u64>() {
+        Ok(number) => {
+            if let Err(e) = conn.zadd::<_, _, _, ()>(FREELIST_KEY, number, number).await {
+                tracing::error!(error = %e, id = %id, "failed to add id to freelist");
+            }
+        }
+        Err(_) => tracing::warn!(id = %id, "deleted id is non-numeric; not recycling"),
+    }
+
+    tracing::info!("admin deleted player {}", id);
+    Redirect::to(&format!("/admin/users?ok=Deleted+{}", id)).into_response()
 }

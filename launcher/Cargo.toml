@@ -1,6 +1,6 @@
 [package]
 name = "launcher"
-version = "0.10.0"
+version = "0.20.1"
 edition = "2021"
 description = "BriskaBlast Launcher — manages install, update, and launch of the BriskaBlast game across stable, ea, and dev channels."
 license = "AGPL-3.0-or-later"
@@ -19,14 +19,20 @@ dotenvy            = "0.15"
 shared             = { path = "../shared" }
 # Self-update: rename-trick binary swap via GitHub Releases. rustls keeps us
 # off the OpenSSL build path on Linux. self_update transitively pulls reqwest.
-self_update        = { version = "0.41", default-features = false, features = ["rustls", "compression-zip-deflate", "archive-zip"] }
+# tar features: the Linux/macOS self-update assets are .tar.gz — without
+# archive-tar + compression-flate2 the swap fails at extraction on both
+# (the original "self-update broken off-Windows" bug). Windows stays on zip.
+self_update        = { version = "0.41", default-features = false, features = ["rustls", "compression-zip-deflate", "archive-zip", "archive-tar", "compression-flate2"] }
 # Direct HTTP client for /register and /me/username, and for streaming
 # downloads of per-channel game-files archives from GitHub Releases.
 # `stream` feature lets the downloader emit chunked progress updates so
 # the bottom progress bar can fill smoothly (Stage 6).
 reqwest            = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 semver             = "1"
-tokio              = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs", "process"] }
+# SHA-256 for deep Verify File Integrity — re-hashes installed files against the
+# build-time `files.json` manifest. RustCrypto, pure-Rust, no OpenSSL path.
+sha2               = "0.10"
+tokio              = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs", "process", "net", "time"] }
 # Per-channel game-files install pipeline: download from GitHub Releases,
 # extract to <install_root>/<channel>/, write installed.json manifest.
 futures-util       = "0.3"

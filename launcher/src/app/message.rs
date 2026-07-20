@@ -1,0 +1,272 @@
+//! The closed set of things the UI can ask to happen (`Message`) plus the
+//! center-panel view enum (`CenterView`) and settings-tab selector
+//! (`SettingsTab`). These are the public vocabulary the `ui/*` modules read
+//! and emit; behaviour lives in `super::update` and `super::handlers`.
+
+use crate::channel::Channel;
+use crate::server_api;
+use crate::updater::UpdateCheckOutcome;
+use shared::protocol::messages::RegisterResponse;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    ChannelManagement,
+    Graphics,
+    LauncherOptions,
+}
+
+#[derive(Debug, Clone)]
+pub enum CenterView {
+    Default,
+    Settings {
+        tab: SettingsTab,
+    },
+    ChangeUsername {
+        draft: String,
+    },
+    LauncherUpdate,
+    /// Per-channel game install prompt — opened by clicking the bottom-left
+    /// "Install <Channel> Game" button when that channel has no install on
+    /// disk. The latest_release fetch is kicked off when the prompt opens
+    /// and writes into `available`; the folder picker writes `install_root`.
+    InstallPrompt {
+        channel: Channel,
+        install_root: Option<std::path::PathBuf>,
+        available: Option<String>,
+        error: Option<String>,
+    },
+    /// Per-channel uninstall confirmation (Stage 7). `keep_saves` reflects
+    /// the user's choice in the radio; defaults to true (Foundation §2
+    /// preference). `error` surfaces any failure from the destructive
+    /// task without closing the prompt.
+    UninstallConfirm {
+        channel: Channel,
+        install_dir: std::path::PathBuf,
+        installed_version: String,
+        keep_saves: bool,
+        error: Option<String>,
+    },
+    /// Per-channel repair confirmation. Repair = reinstall the *installed*
+    /// version (fetch-by-tag), reusing the transactional install pipeline so a
+    /// failed repair leaves the prior install intact. `version` is the version
+    /// being reinstalled; `error` surfaces a fetch/reinstall failure without
+    /// closing the prompt.
+    RepairConfirm {
+        channel: Channel,
+        version: String,
+        error: Option<String>,
+    },
+    /// Reset Runtime Cache confirmation (Windows). Deletes the game's .NET
+    /// runtime-extraction cache so it rebuilds on next launch — for when Verify
+    /// passes but the game still won't start. `error` surfaces a delete failure
+    /// without closing the prompt. Constructed only on Windows (the button is
+    /// Windows-gated), so allow it to read as dead elsewhere.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    ResetCacheConfirm {
+        channel: Channel,
+        error: Option<String>,
+    },
+    /// First-Play firewall prompt (Windows). Shown when a Play is requested for
+    /// a channel that has no inbound rule yet (option A). Carries the resolved
+    /// `exe` (rule target + display) plus the `install_dir`/`username` needed to
+    /// launch the game once the user picks Allow or Skip. `in_progress` is true
+    /// while the elevated `netsh` task runs; `error` surfaces an add-rule
+    /// failure without closing the prompt.
+    FirewallPrompt {
+        channel: Channel,
+        exe: std::path::PathBuf,
+        install_dir: std::path::PathBuf,
+        username: String,
+        in_progress: bool,
+        error: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum Message {
+    PlayPressed,
+    UpdatePressed,
+    OpenSettings,
+    ChannelPicked(Channel),
+    ChangeNamePressed,
+    LauncherUpdatePressed,
+    CloseCenterMenu,
+    SettingsTabSelected(SettingsTab),
+    UsernameDraftChanged(String),
+    ConfirmUsernameChange,
+    UninstallChannel(Channel),
+    VerifyChannel(Channel),
+    /// User pressed the left-rail "Check for Updates" button under the channel
+    /// picker. Re-runs the GitHub `latest_release` query for the focused channel
+    /// so the bottom-bar button and the left-rail verdict box pick up new
+    /// releases published since launcher boot.
+    CheckChannelUpdatePressed(Channel),
+    /// Result of a manual `CheckChannelUpdatePressed` fetch. Refreshes
+    /// `available_versions[channel]` (driving the bottom-bar button) and sets
+    /// the per-channel `channel_update_status` box.
+    ChannelUpdateCheckDone {
+        channel: Channel,
+        result: Result<Option<crate::updater::branches::GameRelease>, String>,
+    },
+    GameSavePressed(Channel),
+    /// User asked to open a channel's log folder (`data/log<channel>`) so they
+    /// can hand the game's per-run logs to the developer.
+    GameLogsPressed(Channel),
+    StartLauncherUpdatePressed,
+    CheckForUpdatesPressed,
+    LauncherUpdateCheckDone(Result<UpdateCheckOutcome, String>),
+    SelfUpdateDone(Result<(), String>),
+    RegisterDone {
+        channel: Channel,
+        result: Result<RegisterResponse, String>,
+    },
+    UpdateUsernameDone {
+        channel: Channel,
+        result: Result<server_api::UpdateUsernameOutcome, server_api::ServerApiError>,
+    },
+    WelcomeDraftChanged(String),
+    ConfirmWelcomeUsername,
+    // ---- Stage 3: per-channel game install pipeline ----
+    /// Open the OS-native folder picker for the install_prompt route.
+    PickInstallLocation,
+    /// Result of the folder picker; `None` if the user cancelled.
+    InstallLocationPicked(Option<std::path::PathBuf>),
+    /// `latest_release` task finished for the currently-open install_prompt.
+    InstallPromptLatestFetched {
+        channel: Channel,
+        result: Result<Option<crate::updater::branches::GameRelease>, String>,
+    },
+    /// User confirmed the install prompt — kick off download_and_install.
+    InstallConfirmed,
+    /// download_and_install finished; updates identity.json on success.
+    InstallComplete {
+        channel: Channel,
+        result: Result<crate::updater::branches::InstallResult, String>,
+    },
+    /// Per-chunk download / extract progress event from the installer
+    /// pipeline (Stage 6). Drives the bottom-bar progress widget.
+    DownloadProgress {
+        channel: Channel,
+        progress: crate::updater::branches::InstallProgress,
+    },
+    /// Boot-time per-channel `latest_release` query landed (Stage 4). Drives
+    /// the bottom-left button's state machine and the top "Updates
+    /// available" banner. One fires per visible channel; Dev's fires only
+    /// after dev_flag returns true on the dev /register response.
+    LatestReleaseFetched {
+        channel: Channel,
+        result: Result<Option<crate::updater::branches::GameRelease>, String>,
+    },
+    /// Game process exited (Stage 5). `result` is the exit code (or `Ok(None)`
+    /// if the process was killed by a signal) on success, or a spawn /
+    /// wait error string. Clears `game_running` so the launcher returns
+    /// to its idle layout.
+    GameExited {
+        channel: Channel,
+        result: Result<Option<i32>, String>,
+    },
+    /// Result of the one-shot boot liveness probe (`rendezvous::game_is_running`):
+    /// `true` means a game was already running when this launcher started (it was
+    /// restarted mid-game). Sets `game_running` + `recovered_game_running`, which
+    /// turns on the poll subscription. See `super::handlers::play::boot_game_probe`.
+    BootGameProbe(bool),
+    /// Periodic tick from the poll subscription that is active only while a game
+    /// was **recovered** by the boot probe (the launcher was restarted mid-game,
+    /// so there is no `spawn_and_wait` task to report exit). Each tick fires a
+    /// fresh liveness probe; its result arrives as `RecoveredGameProbe`. See
+    /// `crate::rendezvous` and `super::subscription`.
+    RecoveredGamePoll,
+    /// Result of a poll-tick liveness probe. When `false`, the recovered game has
+    /// exited: `game_running` + `recovered_game_running` are cleared, which stops
+    /// the subscription. See `super::handlers::play::recovered_game_probe`.
+    RecoveredGameProbe(bool),
+    // ---- Stage 7: uninstall / verify / game save ----
+    /// Toggle the Keep-saves radio inside the uninstall confirmation prompt.
+    UninstallKeepSavesToggled(bool),
+    /// User confirmed the uninstall prompt — kick off the destructive task.
+    UninstallConfirmed,
+    /// uninstall_install finished; clears install_location / installed_version
+    /// from the channel row of identity.json and persists.
+    UninstallComplete {
+        channel: Channel,
+        result: Result<(), String>,
+    },
+    /// verify_install finished — outcome cached in state.verify_results for
+    /// the inline status cell in Settings → Game Channel Management.
+    VerifyComplete {
+        channel: Channel,
+        outcome: crate::updater::branches::VerifyOutcome,
+    },
+    /// User pressed "Repair" on a channel row — opens the RepairConfirm prompt.
+    RepairChannel(Channel),
+    /// User confirmed Repair — kicks off the fetch-by-tag reinstall through the
+    /// shared install pipeline (drives the existing DownloadProgress bar).
+    RepairConfirmed,
+    /// Repair reinstall finished. On success: persist + auto re-verify and
+    /// return to the channel-management view; on failure: keep the prompt open
+    /// with an error.
+    RepairComplete {
+        channel: Channel,
+        result: Result<crate::updater::branches::InstallResult, String>,
+    },
+    /// User pressed "Reset Runtime Cache" on a channel row (Windows only) —
+    /// opens the ResetCacheConfirm prompt. Constructed only by the Windows-gated
+    /// Settings button, so it reads as dead on other targets.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    ResetRuntimeCache(Channel),
+    /// User confirmed Reset Runtime Cache — deletes the cache via
+    /// `paths::clear_runtime_cache`.
+    ResetRuntimeCacheConfirmed,
+    /// Runtime-cache delete finished. On success: return to channel management;
+    /// on failure: keep the prompt open with the error.
+    RuntimeCacheResetComplete {
+        channel: Channel,
+        result: Result<(), String>,
+    },
+    /// Result of the platform `open` call for the Game Save button. Only
+    /// logged for now; the button itself doesn't surface failures in the UI.
+    GameSaveOpenDone {
+        channel: Channel,
+        result: Result<(), String>,
+    },
+    /// Result of the platform `open` call for the Logs button. Only logged for
+    /// now; the button itself doesn't surface failures in the UI.
+    GameLogsOpenDone {
+        channel: Channel,
+        result: Result<(), String>,
+    },
+    /// User asked to (re)check the Windows-Firewall inbound rule for a
+    /// channel's installed game exe (P3). Non-elevated, read-only.
+    CheckFirewall(Channel),
+    /// Firewall check finished — status cached in state.firewall_status.
+    FirewallCheckComplete {
+        channel: Channel,
+        status: crate::firewall::FirewallStatus,
+    },
+    /// Pre-launch (first-Play) firewall check resolved. If `status` is
+    /// `NotDetected` and `exe` is known we open the FirewallPrompt; otherwise we
+    /// launch directly. `install_dir`/`username` are threaded through so the
+    /// launch can proceed without re-deriving them. Only constructed on the
+    /// Windows Play path, so it reads as dead on other targets.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    PlayFirewallResolved {
+        channel: Channel,
+        status: crate::firewall::FirewallStatus,
+        exe: Option<std::path::PathBuf>,
+        install_dir: std::path::PathBuf,
+        username: String,
+    },
+    /// User chose "Allow & Play" on the firewall prompt — run the elevated
+    /// `netsh add rule` (single UAC), reading the target from the open prompt.
+    FirewallPromptAllow,
+    /// User chose "Skip & Play" — launch without a rule and suppress the prompt
+    /// for this channel for the rest of the session.
+    FirewallPromptSkip,
+    /// Elevated add-rule task finished. On success we close the prompt and
+    /// launch; on failure we keep it open with an error so the user can retry
+    /// or skip.
+    FirewallRuleAddDone {
+        channel: Channel,
+        result: Result<(), String>,
+    },
+}

@@ -10,6 +10,7 @@
 //! users must not even reach the GitHub API for the dev channel.
 
 use crate::channel::Channel;
+use crate::updater::github_client;
 use semver::Version;
 
 const REPO_OWNER: &str = "Warstorm548";
@@ -43,23 +44,16 @@ pub struct ReleaseAsset {
 /// when no matching release exists upstream yet (expected during pre-release
 /// development before the first `game-v*` tag is pushed).
 pub async fn latest_release(channel: Channel) -> Result<Option<GameRelease>, String> {
-    tokio::task::spawn_blocking(move || latest_release_blocking(channel))
+    // Goes through `github_client` (our owned request) so the rate-limit safety
+    // net sees the status + headers; a closed gate or a confirmed `403`/`429`
+    // surfaces as the user-facing rate-limit message.
+    let releases = github_client::fetch_releases(REPO_OWNER, REPO_NAME)
         .await
-        .map_err(|e| format!("game release fetch join: {e}"))?
-}
-
-fn latest_release_blocking(channel: Channel) -> Result<Option<GameRelease>, String> {
-    let releases = self_update::backends::github::ReleaseList::configure()
-        .repo_owner(REPO_OWNER)
-        .repo_name(REPO_NAME)
-        .build()
-        .map_err(|e| format!("release list build: {e}"))?
-        .fetch()
-        .map_err(|e| format!("release list fetch: {e}"))?;
+        .map_err(|e| e.to_user_string())?;
 
     let mut best: Option<GameRelease> = None;
     for r in releases {
-        let Some(stripped) = r.version.strip_prefix(TAG_PREFIX) else {
+        let Some(stripped) = r.tag_name.strip_prefix(TAG_PREFIX) else {
             continue;
         };
         let Some(v) = parse_for_channel(stripped, channel) else {
@@ -68,20 +62,61 @@ fn latest_release_blocking(channel: Channel) -> Result<Option<GameRelease>, Stri
         if best.as_ref().is_none_or(|b| v > b.version) {
             best = Some(GameRelease {
                 version: v,
-                tag: r.version.clone(),
+                tag: r.tag_name.clone(),
                 body: r.body.unwrap_or_default(),
                 assets: r
                     .assets
                     .into_iter()
+                    // `Asset.url` is the GitHub REST API asset endpoint the
+                    // installer downloads from (Accept: octet-stream) — same URL
+                    // self_update handed us before.
                     .map(|a| ReleaseAsset {
                         name: a.name,
-                        download_url: a.download_url,
+                        download_url: a.url,
                     })
                     .collect(),
             });
         }
     }
     Ok(best)
+}
+
+/// Fetch the release for a **specific** version on `channel`. Used by Repair,
+/// which reinstalls the currently-installed version rather than upgrading to
+/// latest, so a "repair" never becomes a stealth update. Returns `Ok(None)`
+/// when no release with that exact version still exists for the channel (e.g.
+/// it was deleted from GitHub) so the caller can surface a clean message.
+pub async fn release_for_version(
+    channel: Channel,
+    target: &Version,
+) -> Result<Option<GameRelease>, String> {
+    let releases = github_client::fetch_releases(REPO_OWNER, REPO_NAME)
+        .await
+        .map_err(|e| e.to_user_string())?;
+    for r in releases {
+        let Some(stripped) = r.tag_name.strip_prefix(TAG_PREFIX) else {
+            continue;
+        };
+        let Some(v) = parse_for_channel(stripped, channel) else {
+            continue;
+        };
+        if &v == target {
+            return Ok(Some(GameRelease {
+                version: v,
+                tag: r.tag_name.clone(),
+                body: r.body.unwrap_or_default(),
+                assets: r
+                    .assets
+                    .into_iter()
+                    .map(|a| ReleaseAsset {
+                        name: a.name,
+                        download_url: a.url,
+                    })
+                    .collect(),
+            }));
+        }
+    }
+    Ok(None)
 }
 
 /// Anchored channel match. The stripped form (no `game-v` prefix) is:

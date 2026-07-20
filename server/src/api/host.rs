@@ -25,6 +25,8 @@ fn generate_code() -> String {
         .collect()
 }
 
+/// `POST /host` — create a new session: validate the caller, allocate a unique
+/// join code, and persist a fresh `Waiting` `Session` with this player as host.
 pub async fn host(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -37,6 +39,17 @@ pub async fn host(
     }
 
     gamemode::validate_player_count(body.gamemode, body.player_count)?;
+
+    // Defense in depth: the client UI caps the score input to the same range, but
+    // a tampered client could send anything — refuse out-of-range here too.
+    body.win_condition
+        .validate()
+        .map_err(|(min, max, requested)| AppError::InvalidWinCondition { min, max, requested })?;
+
+    // Same trust boundary for the random-spawn settings (the UI slider caps input).
+    body.spawn_settings
+        .validate()
+        .map_err(|(min, max, requested)| AppError::InvalidSpawnSettings { min, max, requested })?;
 
     let mut conn = state
         .redis
@@ -61,9 +74,12 @@ pub async fn host(
         code: session_code.clone(),
         host_player_id: body.player_id.clone(),
         gamemode: body.gamemode,
+        win_condition: body.win_condition,
+        spawn_settings: body.spawn_settings,
         player_count: body.player_count,
         joiners: Vec::new(),
         status: SessionStatus::Waiting,
+        seat_order: Vec::new(),
     };
 
     let json = serde_json::to_string(&session)

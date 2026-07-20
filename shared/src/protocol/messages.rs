@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::gamemode::GameMode;
 use crate::types::session::SessionStatus;
+use crate::types::spawn_settings::SpawnSettings;
+use crate::types::win_condition::WinCondition;
+
+/// Maximum username length, in Unicode scalar values (`char`s, not bytes).
+/// Single source of truth shared by the launcher's input cap and the server's
+/// authoritative `/register` + `/me/username` validation, so the client-side UX
+/// limit and the server's trust-boundary check can never drift apart.
+pub const MAX_USERNAME_LEN: usize = 20;
 
 /// Sent by the launcher on every boot. `prior_*` are present when the launcher
 /// has a cached identity for this channel — the server reuses the existing
@@ -33,12 +41,32 @@ pub struct UpdateUsernameRequest {
     pub username: String,
 }
 
+/// Response to `/me/username`. Always carries the username the server now has on
+/// file for this player: the **new** name on a `200` accept, or the **unchanged
+/// stored** name on a `422` reject (e.g. a tampered client that bypassed the
+/// launcher's input cap). The launcher adopts this value either way, so a reject
+/// snaps it back to the last stable username. Mirrors `RegisterResponse.username`
+/// being canonical.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateUsernameResponse {
+    pub username: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HostRequest {
     pub player_id: String,
     pub secret_token: String,
     pub gamemode: GameMode,
     pub player_count: u8,
+    /// Required: the server refuses to host without a win condition. An omitted
+    /// field is a serde deserialize error (422 naming the field); an out-of-range
+    /// value is rejected with `invalid_win_condition` (see `WinCondition::validate`).
+    pub win_condition: WinCondition,
+    /// Random-spawn rules (BallSpliter cadence + chain-split). Optional on the wire
+    /// (`#[serde(default)]`) so an older client that omits it still hosts with the
+    /// defaults; an out-of-range value is rejected with `invalid_spawn_settings`.
+    #[serde(default)]
+    pub spawn_settings: SpawnSettings,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -61,6 +89,9 @@ pub struct JoinedPeer {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct JoinResponse {
     pub gamemode: GameMode,
+    pub win_condition: WinCondition,
+    #[serde(default)]
+    pub spawn_settings: SpawnSettings,
     pub player_count: u8,
     pub current_player_count: u8,
     pub joiners: Vec<JoinedPeer>,
@@ -70,6 +101,9 @@ pub struct JoinResponse {
 pub struct SessionPollResponse {
     pub status: SessionStatus,
     pub gamemode: GameMode,
+    pub win_condition: WinCondition,
+    #[serde(default)]
+    pub spawn_settings: SpawnSettings,
     pub player_count: u8,
     pub current_player_count: u8,
     pub joiner_player_ids: Vec<String>,
@@ -85,4 +119,14 @@ pub struct CloseSessionRequest {
 pub struct StartSessionRequest {
     pub player_id: String,
     pub secret_token: String,
+}
+
+/// Host voluntarily hands the host role to another player already in the
+/// lobby. `player_id`/`secret_token` authenticate the *current* host;
+/// `new_host_player_id` must be one of the session's joiners.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TransferHostRequest {
+    pub player_id: String,
+    pub secret_token: String,
+    pub new_host_player_id: String,
 }

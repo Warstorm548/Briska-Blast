@@ -10,8 +10,7 @@ exhibits today and whether they're considered correct. Treat the **Open
 questions** section as decisions the project has chosen to defer; each
 records the current default and what would have to change.
 
-Last reviewed: introduced alongside the WebSocket signaling work
-(server v0.5.0).
+Last reviewed: server v0.10.0 — Stage 5 process-death rejoin + uniform reconnect window.
 
 ---
 
@@ -47,11 +46,22 @@ re-run `concurrent_join.rs`.
 
 ### WS reconnect
 
-Launchers remember the session code. When a WebSocket drops (network
-blip, server restart, etc.), the launcher opens a new WS and sends
-`Identify` again. The server has no idempotency token for this —
-re-Identifying with the same `player_id` is treated as a duplicate
-identify (see below).
+**Now implemented client-side (game v0.7.0, Stage 4).** When a session WS drops
+unexpectedly, the Godot client re-dials the same `/ws/session/{code}` and
+re-sends `Identify` for ~30s before giving up (only a deliberate close or an
+auth-level 4401/4403/4404 is terminal). This is what makes the host-reconnect
+grace below reachable. The server still has no idempotency token —
+re-Identifying with the same `player_id` is treated as a duplicate identify
+(see below) — but when a *host* returns within its grace window, the reconnect
+path additionally cancels the pending promotion timer (`take_grace`).
+
+**Process-death rejoin (Stage 5, game v0.8.0 / server v0.10.0).** A *transient
+WS blip* (process alive) is recovered automatically by the above re-dial. A
+**full process death** is recovered *manually*: the player re-enters the session
+code on the Join screen, which re-Identifies them into the still-held slot and
+re-establishes the WebRTC mesh (see the disconnect sections below for the slot
+hold). The slow re-dial isn't automatic because the relaunched process has lost
+its in-memory session state.
 
 ### Host WS disconnect during Waiting
 
@@ -65,26 +75,65 @@ still Waiting, the Redis session key is deleted and `SessionEnded
 { reason: "host_disconnect" }` is broadcast to remaining peers. Their
 WS handlers see the broadcast and propagate it to clients.
 
+### Host WS disconnect during Starting / Active
+
+**Implemented in Stage 4, extended in Stage 5 (server v0.10.0).** Past Waiting the
+session must survive host loss. On the host's WS dropping, the server broadcasts
+`HostReconnecting { grace_secs: 30 }` and arms **two** timers
+(`ws.rs::arm_host_disconnect_grace`): a 30s `Promotion` timer and the uniform
+`RECONNECT_GRACE` (120s) slot-hold. If the host re-Identifies before promotion,
+the reconnect path cancels both and broadcasts `HostReconnected`. Otherwise at
+30s `promote_demote_or_end_active` promotes the oldest **still-connected** joiner
+(`HostChanged`) — or ends the session if fewer than two connected players remain
+(`SessionEnded { reason: "host_disconnect" }`). **Stage 5 change:** on a transient
+drop the promotion now **demotes the ex-host into `joiners`** (kept, not removed),
+so they keep the rest of their 120s window and can rejoin **as a non-host**. A
+deliberate mid-game host `Leave` skips the grace, promotes immediately, and drops
+the ex-host. The grace registry's single-winner `take_grace` guarantees promotion
+can't race a reconnect.
+
 ### Joiner WS disconnect during Waiting
 
-Joiner loses their WS while the lobby is still filling. The joiner's
-entry stays in `Session.joiners` so capacity accounting is unaffected,
-and `PeerLeft { reason: "disconnect" }` broadcasts to the lobby.
+The server distinguishes a **deliberate leave** (the client sent a
+`Leave` frame) from a **transient drop** (the socket just died):
 
-The joiner can re-`Identify` on a new WS to rejoin signaling. `/start`
-will refuse to transition while their WS is missing (the `not_all_peers_ready`
-precondition), so the host either waits for them or asks them to leave.
+- **Transient drop:** the joiner's entry stays in `Session.joiners` so
+  capacity accounting is unaffected, and `PeerLeft { reason: "disconnect" }`
+  broadcasts to the lobby. The joiner can re-`Identify` on a new WS to
+  rejoin signaling. `/start` refuses to transition while their WS is
+  missing (the `not_all_peers_ready` precondition), so the host either
+  waits for them or asks them to leave.
+- **Deliberate leave (Waiting only):** `ws.rs::remove_joiner_if_waiting`
+  removes the joiner from `Session.joiners` in Redis via a single Lua
+  script, and `PeerLeft { reason: "leave" }` broadcasts. This frees the
+  slot so the lobby capacity is correct and `/start`'s "all peers ready"
+  check can pass for the remaining members. (Without this, a player who
+  left would keep their slot until TTL and permanently block `/start`.)
+
+A leave **past Waiting** (Starting/Active) still only broadcasts
+`PeerLeft` and removes the SignalHub sender — the Redis roster mutation
+there is the deferred auto-promotion concern (see below).
 
 ### Joiner WS disconnect during Starting / Active
 
-Currently the server broadcasts `PeerLeft` and removes the joiner from
-the SignalHub, but does **not** mutate `Session.joiners` in Redis.
+**Updated in Stage 4 (server v0.9.0).** The server now distinguishes the two
+cases, mirroring the Waiting semantics:
 
-This is intentional and deferred: mutating the session JSON from the WS
-disconnect path races with `/start` (which also writes the session), and
-the cleanup logic deserves its own focused commit. Until then, remaining
-peers see `PeerLeft` and can route around the loss in their WebRTC mesh,
-but a subsequent `GET /session/<code>` still lists the departed player.
+- **Explicit `Leave`:** `remove_joiner_on_leave` frees the slot in Redis (one
+  atomic Lua script, so it can't corrupt a concurrent `/start` write) and ends
+  the session if the leave empties the roster, leaving the host alone
+  (`SessionEnded { reason: "last_player_left" }`). `GET /session/<code>` is now
+  accurate after a deliberate mid-game leave.
+- **Transient drop (updated in Stage 5):** the server arms the uniform
+  `RECONNECT_GRACE` (120s) slot-hold and broadcasts `PeerReconnecting` (peers show
+  a "reconnecting…" overlay) instead of an immediate `PeerLeft`. Remaining peers
+  wall off the departed portal client-side (`NetGameController.OnPeerLost`) until
+  they return. The player can rejoin within the window (auto re-dial for a WS
+  blip, or manual code re-entry after a process death) — `PeerJoined` then heals
+  the mesh (`OnPeerRejoined` → `ResyncPeer`). If the window elapses the slot is
+  freed for good (`PeerLeft { reason: "reconnect_timeout" }`), so `GET
+  /session/<code>` stops listing them. (Previously the slot was kept until the
+  session TTL.)
 
 ### WebRTC fails for one peer to all others (symmetric NAT)
 

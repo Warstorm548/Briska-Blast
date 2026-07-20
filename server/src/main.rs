@@ -7,6 +7,7 @@ mod middleware;
 mod signaling;
 mod state;
 mod testharness;
+mod turn;
 mod update;
 
 use axum::{
@@ -17,18 +18,25 @@ use axum::{
 use deadpool_redis::{redis::AsyncCommands, Config as RedisConfig, Runtime};
 use std::net::SocketAddr;
 use tower_http::trace::TraceLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 #[tokio::main]
 async fn main() {
     let cfg = config::Config::from_env();
 
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "server=info,tower_http=info".into());
+    // LOG_FORMAT=json emits structured lines (for log shippers / the future admin
+    // Logs tab); anything else stays human-readable. Boxed so both branches share
+    // one subscriber type.
+    let fmt_layer = if cfg.log_format == "json" {
+        tracing_subscriber::fmt::layer().json().boxed()
+    } else {
+        tracing_subscriber::fmt::layer().boxed()
+    };
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "server=info,tower_http=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
+        .with(env_filter)
+        .with(fmt_layer)
         .init();
 
     let redis_cfg = RedisConfig::from_url(&cfg.redis_url);
@@ -37,6 +45,16 @@ async fn main() {
         .expect("failed to create Redis pool");
 
     seed_defaults(&redis_pool, &cfg).await;
+
+    // One-time visibility: without TURN credentials the game still works on
+    // friendly NATs (clients fall back to STUN-only), but symmetric-NAT peer
+    // pairs will fail ICE — the exact field failure TURN exists to fix.
+    if !turn::configured(&cfg) {
+        tracing::warn!(
+            "TURN_KEY_ID / TURN_API_TOKEN not set — TURN relay disabled; \
+             symmetric-NAT peers will fail to connect (STUN-only fallback)"
+        );
+    }
 
     let game_port = cfg.game_port;
     let admin_port = cfg.admin_port;
@@ -55,6 +73,7 @@ async fn main() {
         .route("/host", post(api::host::host))
         .route("/join", post(api::join::join))
         .route("/session/:code/start", post(api::start::start_session))
+        .route("/session/:code/host", post(api::session::transfer_host))
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::version::check_version,
@@ -85,7 +104,9 @@ async fn main() {
         .route("/admin", get(admin::auth::login_page))
         .route("/admin/login", post(admin::auth::login))
         .route("/admin/logout", post(admin::auth::logout))
+        .route("/admin/keepalive", post(admin::auth::keepalive))
         .route("/admin/dashboard", get(admin::dashboard::dashboard))
+        .route("/admin/stats", get(admin::stats::stats))
         .route("/admin/update/launcher-version", post(admin::dashboard::update_launcher_version))
         .route("/admin/update/game-version", post(admin::dashboard::update_game_version))
         .route("/admin/update/password", post(admin::dashboard::update_password))
@@ -97,6 +118,7 @@ async fn main() {
         .route("/admin/update/rollback", post(admin::dashboard::rollback_update))
         .route("/admin/users", get(admin::users::users_page))
         .route("/admin/users/dev-flag", post(admin::users::save_dev_flags))
+        .route("/admin/users/delete", post(admin::users::delete_user))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

@@ -54,6 +54,16 @@ if #session.joiners ~= tonumber(ARGV[3]) then
   return cjson.encode({result = 'conflict'})
 end
 session.status = 'starting'
+-- Freeze the seating roster ([host, ...joiners] in join order) at the instant
+-- of Start. Nothing mutates session.seat_order afterwards, so a later host
+-- promotion (which reorders joiners/host_player_id) leaves the original seating
+-- intact for every client, including a rejoiner. Mirrors `session_members` in
+-- the Rust StartSignaling broadcast.
+local seat_order = {session.host_player_id}
+for i = 1, #session.joiners do
+  seat_order[#seat_order + 1] = session.joiners[i].player_id
+end
+session.seat_order = seat_order
 redis.call('SET', KEYS[1], cjson.encode(session), 'EX', tonumber(ARGV[4]))
 return cjson.encode({result = 'ok'})
 "#;
@@ -71,6 +81,9 @@ enum StartOutcome {
 
 const MAX_START_RETRIES: u32 = 3;
 
+/// `POST /session/:code/start` — host-only `Waiting` → `Starting` transition. Runs
+/// a Lua CAS (WS-ready check + optimistic retry) that also freezes the seating
+/// roster, then broadcasts `StartSignaling` so every client begins WebRTC setup.
 pub async fn start_session(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -144,6 +157,45 @@ pub async fn start_session(
 
         match outcome {
             StartOutcome::Ok => {
+                // Redis work is done for good on this path — return the pooled
+                // connection now rather than holding it across the external
+                // TURN mint (an HTTPS round-trip, up to 5s) and the broadcast.
+                drop(conn);
+
+                // Seed the in-memory room with the win target so the scoring path
+                // can detect game over. Every member is WS-ready here (checked
+                // above), so the room exists. Lost on a server restart along with
+                // the in-memory tally, same as the score state itself.
+                state
+                    .signal_hub
+                    .set_win_target(&code, session.win_condition.target() as i64)
+                    .await;
+
+                // Seed the ready barrier with the same frozen roster: the
+                // session stays Starting until every member's mesh is up (each
+                // sends `client_ready`) or the grace valve — armed below, after
+                // the broadcast — fires, whereupon it flips to Active and
+                // `MatchStarted` is broadcast. In-memory like the win target,
+                // with the same restart caveat.
+                state
+                    .signal_hub
+                    .set_ready_roster(&code, session_members.clone())
+                    .await;
+
+                // One credential set shared by the whole match (TTL outlives
+                // it — see turn.rs); empty on mint failure or when TURN is
+                // unconfigured, in which case clients keep their built-in
+                // STUN-only fallback rather than the start being blocked.
+                // Cached on the room so later mid-game identifies (rejoins and
+                // transient WS reconnects) reuse it instead of re-minting.
+                let ice_servers = crate::turn::mint_ice_servers(&state.config).await;
+                if !ice_servers.is_empty() {
+                    state
+                        .signal_hub
+                        .set_ice_servers(&code, ice_servers.clone())
+                        .await;
+                }
+
                 // Best-effort broadcast. Clients that miss it can re-poll
                 // /session/:code to discover the new Starting status.
                 state
@@ -152,12 +204,22 @@ pub async fn start_session(
                         &code,
                         ServerMsg::StartSignaling {
                             gamemode: session.gamemode,
+                            win_condition: session.win_condition,
+                            spawn_settings: session.spawn_settings,
                             player_count: session.player_count,
                             peers: session_members,
+                            ice_servers,
                         },
                         None,
                     )
                     .await;
+
+                // Arm the barrier's grace valve only now — after the TURN mint
+                // (an external HTTPS round-trip, up to 5s) and the broadcast —
+                // so the READY_GRACE_SECS budget measures the clients' mesh
+                // bring-up, not server-side start latency they never saw.
+                crate::signaling::ws::spawn_ready_barrier(state.clone(), code.clone());
+
                 tracing::info!(
                     "player {} started session {} ({}/{} players)",
                     body.player_id,

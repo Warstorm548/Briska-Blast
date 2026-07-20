@@ -1,8 +1,9 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://src/ui/menus/SessionLobby.cs" id="1_script"]
 [ext_resource type="Texture2D" path="res://src/assets/sprites/backgrounds/BackgroundDefault.png" id="2_bg"]
 [ext_resource type="Theme" path="res://src/ui/theme/MenuTheme.tres" id="3_theme"]
+[ext_resource type="Texture2D" path="res://src/assets/sprites/ui/CopyIcon.png" id="4_copyicon"]
 
 [node name="SessionLobby" type="Control"]
 layout_mode = 3
@@ -35,10 +36,14 @@ theme_override_font_sizes/font_size = 84
 
 [node name="LeftPanel" type="PanelContainer" parent="."]
 layout_mode = 1
-offset_left = 80.0
+anchor_left = 0.03
+anchor_top = 0.0
+anchor_right = 0.3
+anchor_bottom = 1.0
+offset_left = 0.0
 offset_top = 200.0
-offset_right = 720.0
-offset_bottom = 1100.0
+offset_right = 0.0
+offset_bottom = -160.0
 
 [node name="LeftMargins" type="MarginContainer" parent="LeftPanel"]
 layout_mode = 2
@@ -57,14 +62,38 @@ text = "Game Session Code"
 horizontal_alignment = 1
 theme_override_font_sizes/font_size = 32
 
-[node name="SessionCodeValue" type="Label" parent="LeftPanel/LeftMargins/LeftContent"]
+[node name="CodeRow" type="HBoxContainer" parent="LeftPanel/LeftMargins/LeftContent"]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="SessionCodeValue" type="Label" parent="LeftPanel/LeftMargins/LeftContent/CodeRow"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 88)
 layout_mode = 2
+size_flags_vertical = 4
 text = "ABC123"
 horizontal_alignment = 1
 vertical_alignment = 1
 theme_override_font_sizes/font_size = 64
+
+[node name="CopyCodeButton" type="TextureButton" parent="LeftPanel/LeftMargins/LeftContent/CodeRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+size_flags_vertical = 4
+tooltip_text = "Copy code"
+texture_normal = ExtResource("4_copyicon")
+ignore_texture_size = true
+stretch_mode = 5
+
+[node name="CopiedFlash" type="Label" parent="LeftPanel/LeftMargins/LeftContent"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Copied!"
+horizontal_alignment = 1
+visible = false
+theme_override_font_sizes/font_size = 22
 
 [node name="CodeSpacer" type="Control" parent="LeftPanel/LeftMargins/LeftContent"]
 custom_minimum_size = Vector2(0, 16)
@@ -108,26 +137,28 @@ text = "4"
 horizontal_alignment = 2
 theme_override_font_sizes/font_size = 26
 
-[node name="LeftSpacer" type="Control" parent="LeftPanel/LeftMargins/LeftContent"]
-layout_mode = 2
-size_flags_vertical = 3
-
 [node name="ReturnToSetupButton" type="Button" parent="LeftPanel/LeftMargins/LeftContent"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 72)
 layout_mode = 2
 text = "Return to Game Setup Screen"
 
+[node name="LeftSpacer" type="Control" parent="LeftPanel/LeftMargins/LeftContent"]
+layout_mode = 2
+size_flags_vertical = 3
+
 ; ============ RIGHT PANEL ============
 
 [node name="RightPanel" type="PanelContainer" parent="."]
 layout_mode = 1
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -720.0
+anchor_left = 0.7
+anchor_top = 0.0
+anchor_right = 0.97
+anchor_bottom = 1.0
+offset_left = 0.0
 offset_top = 200.0
-offset_right = -80.0
-offset_bottom = 1300.0
+offset_right = 0.0
+offset_bottom = -160.0
 
 [node name="RightMargins" type="MarginContainer" parent="RightPanel"]
 layout_mode = 2
@@ -146,17 +177,28 @@ text = "Connected Players"
 horizontal_alignment = 1
 theme_override_font_sizes/font_size = 32
 
-[node name="PlayerSlots" type="VBoxContainer" parent="RightPanel/RightMargins/RightContent"]
+[node name="RosterBox" type="PanelContainer" parent="RightPanel/RightMargins/RightContent"]
+layout_mode = 2
+theme_type_variation = &"InnerPanel"
+
+[node name="RosterMargins" type="MarginContainer" parent="RightPanel/RightMargins/RightContent/RosterBox"]
+layout_mode = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="PlayerSlots" type="VBoxContainer" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
 ; ---- Slot 1 ----
 
-[node name="Slot1" type="HBoxContainer" parent="RightPanel/RightMargins/RightContent/PlayerSlots"]
+[node name="Slot1" type="HBoxContainer" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots"]
 custom_minimum_size = Vector2(0, 64)
 layout_mode = 2
 
-[node name="Name" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot1"]
+[node name="Name" type="Label" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot1"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
@@ -164,7 +206,7 @@ text = "Empty Slot"
 vertical_alignment = 1
 theme_override_font_sizes/font_size = 24
 
-[node name="IsHost" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot1"]
+[node name="IsHost" type="Label" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot1"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(140, 0)
 layout_mode = 2
@@ -174,7 +216,7 @@ horizontal_alignment = 1
 vertical_alignment = 1
 theme_override_font_sizes/font_size = 22
 
-[node name="Promote" type="Button" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot1"]
+[node name="Promote" type="Button" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot1"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(220, 0)
 layout_mode = 2
@@ -183,11 +225,11 @@ text = "Promote to Host"
 
 ; ---- Slot 2 ----
 
-[node name="Slot2" type="HBoxContainer" parent="RightPanel/RightMargins/RightContent/PlayerSlots"]
+[node name="Slot2" type="HBoxContainer" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots"]
 custom_minimum_size = Vector2(0, 64)
 layout_mode = 2
 
-[node name="Name" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot2"]
+[node name="Name" type="Label" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot2"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
@@ -195,7 +237,7 @@ text = "Empty Slot"
 vertical_alignment = 1
 theme_override_font_sizes/font_size = 24
 
-[node name="IsHost" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot2"]
+[node name="IsHost" type="Label" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot2"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(140, 0)
 layout_mode = 2
@@ -205,7 +247,7 @@ horizontal_alignment = 1
 vertical_alignment = 1
 theme_override_font_sizes/font_size = 22
 
-[node name="Promote" type="Button" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot2"]
+[node name="Promote" type="Button" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot2"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(220, 0)
 layout_mode = 2
@@ -214,11 +256,11 @@ text = "Promote to Host"
 
 ; ---- Slot 3 ----
 
-[node name="Slot3" type="HBoxContainer" parent="RightPanel/RightMargins/RightContent/PlayerSlots"]
+[node name="Slot3" type="HBoxContainer" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots"]
 custom_minimum_size = Vector2(0, 64)
 layout_mode = 2
 
-[node name="Name" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot3"]
+[node name="Name" type="Label" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot3"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
@@ -226,7 +268,7 @@ text = "Empty Slot"
 vertical_alignment = 1
 theme_override_font_sizes/font_size = 24
 
-[node name="IsHost" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot3"]
+[node name="IsHost" type="Label" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot3"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(140, 0)
 layout_mode = 2
@@ -236,7 +278,7 @@ horizontal_alignment = 1
 vertical_alignment = 1
 theme_override_font_sizes/font_size = 22
 
-[node name="Promote" type="Button" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot3"]
+[node name="Promote" type="Button" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot3"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(220, 0)
 layout_mode = 2
@@ -245,11 +287,11 @@ text = "Promote to Host"
 
 ; ---- Slot 4 ----
 
-[node name="Slot4" type="HBoxContainer" parent="RightPanel/RightMargins/RightContent/PlayerSlots"]
+[node name="Slot4" type="HBoxContainer" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots"]
 custom_minimum_size = Vector2(0, 64)
 layout_mode = 2
 
-[node name="Name" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot4"]
+[node name="Name" type="Label" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot4"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
@@ -257,7 +299,7 @@ text = "Empty Slot"
 vertical_alignment = 1
 theme_override_font_sizes/font_size = 24
 
-[node name="IsHost" type="Label" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot4"]
+[node name="IsHost" type="Label" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot4"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(140, 0)
 layout_mode = 2
@@ -267,7 +309,7 @@ horizontal_alignment = 1
 vertical_alignment = 1
 theme_override_font_sizes/font_size = 22
 
-[node name="Promote" type="Button" parent="RightPanel/RightMargins/RightContent/PlayerSlots/Slot4"]
+[node name="Promote" type="Button" parent="RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot4"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(220, 0)
 layout_mode = 2
@@ -276,13 +318,11 @@ text = "Promote to Host"
 
 ; ---- Chat ----
 
-[node name="RightVSpacer" type="Control" parent="RightPanel/RightMargins/RightContent"]
+[node name="ChatBox" type="PanelContainer" parent="RightPanel/RightMargins/RightContent"]
+custom_minimum_size = Vector2(0, 160)
 layout_mode = 2
 size_flags_vertical = 3
-
-[node name="ChatBox" type="PanelContainer" parent="RightPanel/RightMargins/RightContent"]
-custom_minimum_size = Vector2(0, 320)
-layout_mode = 2
+theme_type_variation = &"InnerPanel"
 
 [node name="ChatMargins" type="MarginContainer" parent="RightPanel/RightMargins/RightContent/ChatBox"]
 layout_mode = 2
@@ -305,7 +345,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 bbcode_enabled = true
-text = "[i]Player Post started Session[/i]"
 scroll_following = true
 autowrap_mode = 3
 

@@ -3,18 +3,32 @@ using BriskaBlast.Core;
 
 namespace BriskaBlast.UI.Menus;
 
+/// <summary>
+/// Live lobby — a thin view over <see cref="MatchFlow"/>. On entry it hands the
+/// lifecycle to the orchestrator (<see cref="MatchFlow.EnterLobby"/>), renders
+/// the roster whenever MatchFlow reports it changed, and backs the buttons with
+/// the REST endpoints. Everything stateful — the signaling socket, the start
+/// choreography, teardown, scene transitions — lives in MatchFlow; this scene
+/// only subscribes to the pure-UI signaling events (chat, reconnect status).
+/// </summary>
 public partial class SessionLobby : Control
 {
     private HBoxContainer[] _slots = null!;
+    private Label _status = null!;
+
+    // The signaling instance this scene subscribed to for pure-UI events.
+    // Captured (not re-read from MatchFlow) so _ExitTree unsubscribes from the
+    // same object even after a teardown already nulled MatchFlow.Signaling.
+    private Net.SignalingClient? _signaling;
 
     public override void _Ready()
     {
         _slots = new[]
         {
-            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/PlayerSlots/Slot1"),
-            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/PlayerSlots/Slot2"),
-            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/PlayerSlots/Slot3"),
-            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/PlayerSlots/Slot4"),
+            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot1"),
+            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot2"),
+            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot3"),
+            GetNode<HBoxContainer>("RightPanel/RightMargins/RightContent/RosterBox/RosterMargins/PlayerSlots/Slot4"),
         };
 
         for (int i = 0; i < _slots.Length; i++)
@@ -26,50 +40,180 @@ public partial class SessionLobby : Control
         GetNode<Button>("%StartSessionButton").Pressed += OnStartPressed;
         GetNode<Button>("%CancelSessionButton").Pressed += OnCancelOrLeavePressed;
         GetNode<Button>("%ReturnToSetupButton").Pressed += OnReturnToSetupPressed;
+        GetNode<TextureButton>("%CopyCodeButton").Pressed += OnCopyCode;
 
-        RefreshFromContext();
+        // Lobby chat: Enter in the input sends (LineEdit.TextSubmitted). The log
+        // starts empty (drop the scene's sample line) and fills only from
+        // server-broadcast chat_message frames so every client shows the same
+        // transcript.
+        GetNode<LineEdit>("%ChatInput").TextSubmitted += OnChatSubmitted;
+        GetNode<RichTextLabel>("%ChatLog").Clear();
 
-#if DEBUG
-        GD.Print("[lobby debug] F1 = toggle host view, F2 = add player, F3 = remove last player");
-#endif
+        _status = new Label { HorizontalAlignment = HorizontalAlignment.Center, Visible = false };
+        GetNode("LeftPanel/LeftMargins/LeftContent").AddChild(_status);
+
+        // Hand the lifecycle to the orchestrator: it opens the signaling socket,
+        // owns the roster mutations, and will swap scenes on start_signaling.
+        var flow = MatchFlow.Instance;
+        flow.EnterLobby();
+        flow.RosterChanged += Render;
+
+        // Pure-UI signaling events stay view-subscribed (chat lines, transient
+        // reconnect status). Lifecycle events are MatchFlow's alone.
+        _signaling = flow.Signaling;
+        if (_signaling != null)
+        {
+            _signaling.ChatMessage += OnChatMessage;
+            _signaling.Reconnecting += OnReconnecting;
+            _signaling.Reconnected += OnReconnected;
+        }
+
+        Render();
     }
 
-#if DEBUG
-    public override void _UnhandledInput(InputEvent @event)
+    public override void _ExitTree()
     {
-        if (@event is not InputEventKey keyEvent || !keyEvent.Pressed || keyEvent.Echo) return;
-        var ctx = SessionContext.Instance;
-
-        switch (keyEvent.Keycode)
+        // Detach from the orchestrator and the surviving socket so neither
+        // calls into a freed scene (the socket lives on across the change to
+        // the Preparing/game scenes).
+        MatchFlow.Instance.RosterChanged -= Render;
+        if (_signaling != null)
         {
-            case Key.F1:
-                ctx.LocalPlayerIsHost = !ctx.LocalPlayerIsHost;
-                GD.Print($"[lobby debug] LocalPlayerIsHost = {ctx.LocalPlayerIsHost}");
-                RefreshFromContext();
-                break;
-            case Key.F2:
-                if (ctx.PlayerNames.Count < ctx.MaxPlayers)
-                {
-                    var n = ctx.PlayerNames.Count + 1;
-                    ctx.PlayerNames.Add($"Player Username {n}");
-                    GD.Print($"[lobby debug] added Player Username {n}");
-                    RefreshFromContext();
-                }
-                break;
-            case Key.F3:
-                if (ctx.PlayerNames.Count > 1)
-                {
-                    ctx.PlayerNames.RemoveAt(ctx.PlayerNames.Count - 1);
-                    if (ctx.HostIndex >= ctx.PlayerNames.Count) ctx.HostIndex = 0;
-                    GD.Print($"[lobby debug] removed last player; remaining = {ctx.PlayerNames.Count}");
-                    RefreshFromContext();
-                }
-                break;
+            _signaling.ChatMessage -= OnChatMessage;
+            _signaling.Reconnecting -= OnReconnecting;
+            _signaling.Reconnected -= OnReconnected;
+            _signaling = null;
         }
     }
-#endif
 
-    private void RefreshFromContext()
+    /// <summary>Copy the session code to the OS clipboard and flash a brief confirmation.</summary>
+    private void OnCopyCode() =>
+        ClipboardCopy.CopyWithFlash(GetTree(), SessionContext.Instance?.SessionCode,
+            GetNode<Label>("%CopiedFlash"));
+
+    // ---- pure-UI signaling callbacks (main thread) ----
+
+    // The WS dropped but the client is re-dialing (transient blip) rather than
+    // leaving — surface it on the status line instead of bouncing to the menu.
+    private void OnReconnecting() => ShowStatus("Reconnecting…");
+
+    private void OnReconnected() => ShowStatus("");
+
+    // Enter pressed in the chat input. Trim, send through the orchestrator (the
+    // server echoes it back to everyone, including us, so we render on receipt
+    // rather than locally — keeping all clients' transcripts identical), then
+    // clear the field. Empty/whitespace input is dropped without a round-trip.
+    private void OnChatSubmitted(string text)
+    {
+        var input = GetNode<LineEdit>("%ChatInput");
+        var trimmed = text.Trim();
+        if (trimmed.Length > 0)
+            MatchFlow.Instance.SendChat(trimmed);
+        input.Clear();
+    }
+
+    // A chat line broadcast by the server (ours or a peer's). Keep the roster's
+    // name map in step with what chat reports, then label via the same
+    // DisplayNameFor fallback (Player <id>) the rest of the lobby uses.
+    private void OnChatMessage(string from, string username, string text)
+    {
+        var ctx = SessionContext.Instance;
+        if (!string.IsNullOrEmpty(username))
+            ctx.SetUsername(from, username);
+        AppendChatLine(ctx.DisplayNameFor(from), text);
+    }
+
+    // Append one "<name>: <text>" line. Uses AddText (not AppendText) for the
+    // server- and user-supplied strings so they are never parsed as BBCode —
+    // only the bold tag around the name is pushed by us, so no tag injection.
+    private void AppendChatLine(string name, string text)
+    {
+        var log = GetNode<RichTextLabel>("%ChatLog");
+        log.PushBold();
+        log.AddText(name);
+        log.Pop();
+        log.AddText($": {text}\n");
+    }
+
+    // ---- buttons ----
+
+    private async void OnStartPressed()
+    {
+        var ctx = SessionContext.Instance;
+        ShowStatus("Starting…");
+        var result = await ctx.Api.StartSessionAsync(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
+        if (!result.Ok)
+        {
+            var why = result.ErrorCode switch
+            {
+                "session_not_startable" => "Not everyone is connected yet.",
+                _ => $"Could not start: {result.ErrorCode}",
+            };
+            Callable.From(() => ShowStatus(why)).CallDeferred();
+        }
+        // Success → the server broadcasts start_signaling; MatchFlow handles it
+        // (rule adoption, seat freeze, mesh, and the scene change).
+    }
+
+    private async void OnCancelOrLeavePressed()
+    {
+        var ctx = SessionContext.Instance;
+        if (ctx.LocalPlayerIsHost)
+        {
+            // Host cancels → tear the session down server-side, then leave
+            // locally. No leave frame — the session is being deleted anyway.
+            // Only leave once the server actually closed it; otherwise stay so
+            // the lobby doesn't diverge from a still-live session.
+            var result = await ctx.Api.CloseSessionAsync(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
+            Callable.From(() =>
+            {
+                if (result.Ok)
+                    MatchFlow.Instance.LeaveSession(sendLeaveFrame: false);
+                else
+                    ShowStatus($"Could not close the session: {result.ErrorCode}");
+            }).CallDeferred();
+        }
+        else
+        {
+            // Joiner leaves → explicit Leave frees the slot in the lobby.
+            MatchFlow.Instance.LeaveSession(sendLeaveFrame: true);
+        }
+    }
+
+    private async void OnReturnToSetupPressed()
+    {
+        var ctx = SessionContext.Instance;
+        var result = await ctx.Api.CloseSessionAsync(ctx.SessionCode, ctx.PlayerId, ctx.SecretToken);
+        Callable.From(() =>
+        {
+            if (result.Ok)
+                MatchFlow.Instance.EndMatchTo("res://src/ui/menus/HostSetupMenu.tscn");
+            else
+                ShowStatus($"Could not close the session: {result.ErrorCode}");
+        }).CallDeferred();
+    }
+
+    private async void OnPromote(int slotIndex)
+    {
+        var ctx = SessionContext.Instance;
+        if (slotIndex < 0 || slotIndex >= ctx.PlayerIds.Count)
+            return;
+        var target = ctx.PlayerIds[slotIndex];
+        if (target == ctx.HostPlayerId)
+            return;
+
+        ShowStatus($"Promoting {ctx.DisplayNameFor(target)}…");
+        var result = await ctx.Api.TransferHostAsync(
+            ctx.SessionCode, ctx.PlayerId, ctx.SecretToken, target);
+        if (!result.Ok)
+            Callable.From(() => ShowStatus($"Promote failed: {result.ErrorCode}")).CallDeferred();
+        // Success → server broadcasts host_changed; MatchFlow updates the
+        // roster and fires RosterChanged on every client.
+    }
+
+    // ---- rendering ----
+
+    private void Render()
     {
         var ctx = SessionContext.Instance;
 
@@ -82,47 +226,24 @@ public partial class SessionLobby : Control
         for (int i = 0; i < _slots.Length; i++)
         {
             var slot = _slots[i];
-            var nameLabel = slot.GetNode<Label>("Name");
-            var isHostLabel = slot.GetNode<Label>("IsHost");
-            var promoteBtn = slot.GetNode<Button>("Promote");
+            bool slotUsed = i < ctx.PlayerIds.Count;
+            string pid = slotUsed ? ctx.PlayerIds[i] : "";
+            bool slotIsHost = slotUsed && pid == ctx.HostPlayerId;
 
-            bool slotUsed = i < ctx.PlayerNames.Count;
-            bool slotIsHost = slotUsed && i == ctx.HostIndex;
-
-            nameLabel.Text = slotUsed ? ctx.PlayerNames[i] : "Empty Slot";
-            isHostLabel.Visible = slotIsHost;
-            promoteBtn.Visible = slotUsed && !slotIsHost && ctx.LocalPlayerIsHost;
+            slot.GetNode<Label>("Name").Text = slotUsed ? ctx.DisplayNameFor(pid) : "Empty Slot";
+            slot.GetNode<Label>("IsHost").Visible = slotIsHost;
+            slot.GetNode<Button>("Promote").Visible = slotUsed && ctx.LocalPlayerIsHost && !slotIsHost;
         }
 
         GetNode<Button>("%StartSessionButton").Visible = ctx.LocalPlayerIsHost;
         GetNode<Button>("%ReturnToSetupButton").Visible = ctx.LocalPlayerIsHost;
-        var cancelBtn = GetNode<Button>("%CancelSessionButton");
-        cancelBtn.Visible = true;
-        cancelBtn.Text = ctx.LocalPlayerIsHost ? "Cancel Session" : "Leave Session";
+        GetNode<Button>("%CancelSessionButton").Text =
+            ctx.LocalPlayerIsHost ? "Cancel Session" : "Leave Session";
     }
 
-    private void OnPromote(int slotIndex)
+    private void ShowStatus(string message)
     {
-        var ctx = SessionContext.Instance;
-        ctx.PromoteToHost(slotIndex);
-        ctx.LocalPlayerIsHost = false;
-        RefreshFromContext();
-    }
-
-    private void OnStartPressed()
-    {
-        GD.Print($"Start: would start session {SessionContext.Instance.SessionCode}");
-    }
-
-    private void OnCancelOrLeavePressed()
-    {
-        SessionContext.Instance.ClearSession();
-        GetTree().ChangeSceneToFile("res://src/ui/menus/MainMenu.tscn");
-    }
-
-    private void OnReturnToSetupPressed()
-    {
-        SessionContext.Instance.ClearSession();
-        GetTree().ChangeSceneToFile("res://src/ui/menus/HostSetupMenu.tscn");
+        _status.Text = message;
+        _status.Visible = !string.IsNullOrEmpty(message);
     }
 }

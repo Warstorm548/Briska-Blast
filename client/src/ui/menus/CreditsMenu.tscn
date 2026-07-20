@@ -1,0 +1,192 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://src/ui/menus/CreditsMenu.cs" id="1_script"]
+[ext_resource type="Texture2D" path="res://src/assets/sprites/backgrounds/BackgroundDefault.png" id="2_bg"]
+[ext_resource type="Theme" path="res://src/ui/theme/MenuTheme.tres" id="3_theme"]
+
+[node name="CreditsMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme = ExtResource("3_theme")
+script = ExtResource("1_script")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+texture = ExtResource("2_bg")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="Title" type="Label" parent="."]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_top = 60.0
+offset_bottom = 180.0
+text = "Credits"
+horizontal_alignment = 1
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 84
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 120.0
+
+[node name="Content" type="VBoxContainer" parent="CenterContainer"]
+layout_mode = 2
+theme_override_constants/separation = 44
+
+[node name="HeaderSection" type="VBoxContainer" parent="CenterContainer/Content"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="HeaderRow" type="HBoxContainer" parent="CenterContainer/Content/HeaderSection"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="NameHeader" type="Label" parent="CenterContainer/Content/HeaderSection/HeaderRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Name"
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 30
+
+[node name="UsernameHeader" type="Label" parent="CenterContainer/Content/HeaderSection/HeaderRow"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+text = "Username"
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 30
+
+[node name="HeaderSep" type="HSeparator" parent="CenterContainer/Content/HeaderSection"]
+layout_mode = 2
+
+[node name="LeadDevSection" type="VBoxContainer" parent="CenterContainer/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="LeadDevTitle" type="Label" parent="CenterContainer/Content/LeadDevSection"]
+layout_mode = 2
+text = "Lead Developer"
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 36
+
+[node name="LeadDevRow" type="HBoxContainer" parent="CenterContainer/Content/LeadDevSection"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="Name" type="Label" parent="CenterContainer/Content/LeadDevSection/LeadDevRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Jean-Luc Watt"
+theme_override_font_sizes/font_size = 28
+
+[node name="Username" type="Label" parent="CenterContainer/Content/LeadDevSection/LeadDevRow"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+text = "Warstorm"
+theme_override_font_sizes/font_size = 28
+
+[node name="AdviserSection" type="VBoxContainer" parent="CenterContainer/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="AdviserTitle" type="Label" parent="CenterContainer/Content/AdviserSection"]
+layout_mode = 2
+text = "Lead Architecture Adviser and Pre-Alpha Tester"
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 36
+
+[node name="AdviserRow" type="HBoxContainer" parent="CenterContainer/Content/AdviserSection"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="Name" type="Label" parent="CenterContainer/Content/AdviserSection/AdviserRow"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "NidPlays"
+theme_override_font_sizes/font_size = 28
+
+[node name="Username" type="Label" parent="CenterContainer/Content/AdviserSection/AdviserRow"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+text = "NidGaming"
+theme_override_font_sizes/font_size = 28
+
+[node name="TestersSection" type="VBoxContainer" parent="CenterContainer/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="TestersTitle" type="Label" parent="CenterContainer/Content/TestersSection"]
+layout_mode = 2
+text = "Pre-Alpha Testers"
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 36
+
+[node name="Tester1Row" type="HBoxContainer" parent="CenterContainer/Content/TestersSection"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="Name" type="Label" parent="CenterContainer/Content/TestersSection/Tester1Row"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Correy Russel"
+theme_override_font_sizes/font_size = 28
+
+[node name="Username" type="Label" parent="CenterContainer/Content/TestersSection/Tester1Row"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+text = "Eldridge"
+theme_override_font_sizes/font_size = 28
+
+[node name="Tester2Row" type="HBoxContainer" parent="CenterContainer/Content/TestersSection"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="Name" type="Label" parent="CenterContainer/Content/TestersSection/Tester2Row"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+text = "Jeff FA FA"
+theme_override_font_sizes/font_size = 28
+
+[node name="Username" type="Label" parent="CenterContainer/Content/TestersSection/Tester2Row"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+text = "Neo"
+theme_override_font_sizes/font_size = 28
+
+[node name="PhrasesSection" type="VBoxContainer" parent="CenterContainer/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="PhrasesTitle" type="Label" parent="CenterContainer/Content/PhrasesSection"]
+layout_mode = 2
+text = "Fun Phrases"
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 36
+
+[node name="Phrase1" type="Label" parent="CenterContainer/Content/PhrasesSection"]
+layout_mode = 2
+text = "\"All hail the Jeff only one!!\"   —   Jeff FA FA"
+theme_override_font_sizes/font_size = 28
+
+[node name="ReturnButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 3
+anchor_top = 1.0
+anchor_left = 0.0
+anchor_right = 0.0
+anchor_bottom = 1.0
+offset_left = 40.0
+offset_top = -120.0
+offset_right = 320.0
+offset_bottom = -40.0
+text = "Return to Main Menu"

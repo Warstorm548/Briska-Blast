@@ -27,9 +27,12 @@ pub fn view<'a>(
     let header = row_header(channel);
 
     container(
-        column![header, content(state, channel, exe, in_progress, error)]
-            .spacing(ZONE_GAP * 4)
-            .align_x(Alignment::Center),
+        column![
+            header,
+            super::scroll_area(content(state, channel, exe, in_progress, error))
+        ]
+        .spacing(ZONE_GAP * 4)
+        .align_x(Alignment::Center),
     )
     .style(theme::menu_pane)
     .width(Length::Fill)

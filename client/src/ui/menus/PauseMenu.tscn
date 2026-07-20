@@ -1,0 +1,138 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://src/ui/menus/PauseMenu.cs" id="1_script"]
+[ext_resource type="Theme" path="res://src/ui/theme/MenuTheme.tres" id="2_theme"]
+[ext_resource type="Texture2D" path="res://src/assets/sprites/ui/CopyIcon.png" id="3_copyicon"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+content_margin_left = 40.0
+content_margin_top = 32.0
+content_margin_right = 40.0
+content_margin_bottom = 32.0
+bg_color = Color(0.08, 0.16, 0.32, 0.97)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.25, 0.5, 0.85, 1)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_codebox"]
+content_margin_left = 16.0
+content_margin_top = 10.0
+content_margin_right = 16.0
+content_margin_bottom = 10.0
+bg_color = Color(0.05, 0.1, 0.22, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.25, 0.5, 0.85, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[node name="PauseMenu" type="CanvasLayer"]
+layer = 200
+script = ExtResource("1_script")
+
+[node name="Root" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme = ExtResource("2_theme")
+
+[node name="Dim" type="ColorRect" parent="Root"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0, 0, 0, 0.6)
+
+[node name="Center" type="CenterContainer" parent="Root"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Panel" type="PanelContainer" parent="Root/Center"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="Content" type="VBoxContainer" parent="Root/Center/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Header" type="Label" parent="Root/Center/Panel/Content"]
+layout_mode = 2
+text = "Session Code"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 32
+
+[node name="CodeBox" type="PanelContainer" parent="Root/Center/Panel/Content"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_codebox")
+
+[node name="CodeRow" type="HBoxContainer" parent="Root/Center/Panel/Content/CodeBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="CodeValue" type="Label" parent="Root/Center/Panel/Content/CodeBox/CodeRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+text = "ABC123"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 40
+
+[node name="CopyCodeButton" type="TextureButton" parent="Root/Center/Panel/Content/CodeBox/CodeRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+size_flags_vertical = 4
+tooltip_text = "Copy code"
+texture_normal = ExtResource("3_copyicon")
+ignore_texture_size = true
+stretch_mode = 5
+
+[node name="CopiedFlash" type="Label" parent="Root/Center/Panel/Content"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Copied!"
+horizontal_alignment = 1
+visible = false
+theme_override_font_sizes/font_size = 22
+
+[node name="GapTop" type="Control" parent="Root/Center/Panel/Content"]
+custom_minimum_size = Vector2(0, 8)
+layout_mode = 2
+
+[node name="ReturnButton" type="Button" parent="Root/Center/Panel/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(360, 64)
+layout_mode = 2
+text = "Return to Session"
+
+[node name="Gap" type="Control" parent="Root/Center/Panel/Content"]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+
+[node name="ExitButton" type="Button" parent="Root/Center/Panel/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(360, 64)
+layout_mode = 2
+text = "Exit to main menu"
+
+[node name="QuitButton" type="Button" parent="Root/Center/Panel/Content"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(360, 64)
+layout_mode = 2
+text = "Quit Game"

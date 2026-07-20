@@ -133,6 +133,8 @@ pub async fn join(
 
     Ok(Json(JoinResponse {
         gamemode: session.gamemode,
+        win_condition: session.win_condition,
+        spawn_settings: session.spawn_settings,
         player_count: session.player_count,
         current_player_count,
         joiners,

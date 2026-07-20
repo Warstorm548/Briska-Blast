@@ -2427,7 +2427,7 @@ dependencies = [
 
 [[package]]
 name = "launcher"
-version = "0.10.0"
+version = "0.20.1"
 dependencies = [
  "chrono",
  "directories",
@@ -2443,6 +2443,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2",
  "shared",
  "tar",
  "tempfile",
@@ -4056,6 +4057,8 @@ version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "469a3970061380c19852269f393e74c0fe607a4e23d85267382cf25486aa8de5"
 dependencies = [
+ "either",
+ "flate2",
  "hyper",
  "indicatif",
  "log",
@@ -4065,6 +4068,7 @@ dependencies = [
  "self-replace",
  "semver",
  "serde_json",
+ "tar",
  "tempfile",
  "urlencoding",
  "zip",
@@ -4175,7 +4179,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.6.0"
+version = "0.25.0"
 dependencies = [
  "axum",
  "bcrypt",
@@ -4241,7 +4245,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "0.1.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4967,6 +4971,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4976,12 +4990,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
@@ -6433,6 +6450,7 @@ version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dba6063ff82cdbd9a765add16d369abe81e520f836054e997c2db217ceca40c0"
 dependencies = [
+ "base64",
  "ed25519-dalek",
  "thiserror 2.0.18",
 ]

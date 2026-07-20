@@ -108,6 +108,18 @@ Player B disconnects → Player C becomes host
 Player C disconnects → 1 player remains → session ends
 ```
 
+> **As shipped (server v0.9.0 / game v0.7.0):** implemented for the **host**. On
+> an unexpected host WS drop mid-game the server arms a 30s grace window and, if
+> the host doesn't return, promotes the oldest **still-connected** joiner in join
+> order — or ends the session when fewer than two connected players remain. The
+> grace is only useful because the Godot client now re-dials a dropped session WS
+> for ~30s (see [`session-multiplayer-edge-cases.md`](session-multiplayer-edge-cases.md)).
+> The "barrier on a disconnected peer's edge" is the portal→wall flip in
+> `NetGameController.OnPeerLost`. Not yet built: per-player `reconnect_timer`
+> state persisted in the session object (the grace lives in the in-memory
+> `SignalHub`, not Redis), and a non-host rejoining after their slot was freed by
+> an explicit leave.
+
 **Score Validation:**
 - Ball packets sent to both receiving player AND server
 - Server independently calculates expected trajectory
@@ -235,6 +247,16 @@ When a correction packet arrives and predicted position differs from actual:
 Smooth interpolation keeps the ball visually trackable for players reacting with paddles.
 
 ### Score Validation Flow
+
+> **As shipped (game v0.6.0 / server v0.8.0):** scoring is **server-relayed but
+> not yet validated**. The client whose goal a ball enters reports the last
+> hitter over the session WebSocket (`ReportScore`); the server holds the
+> authoritative per-session tally (crediting only players currently in the room)
+> and broadcasts `ScoreUpdate` to everyone. Ball trajectories are **not** sent to
+> the server, and the trajectory check below is **not implemented** — it remains
+> the documented later hook this channel exists to enable. See
+> [`extended-mode.md`](extended-mode.md). The flow below is the eventual design.
+
 ```
 Player A hits ball toward Player B
     → Ball packet sent to Player B AND server
@@ -268,7 +290,7 @@ Game launches for first time
 ```
 
 ### Two-Part Identity (Hotel Analogy)
-- **Player ID** `0000001` → room number, short, readable, sequential
+- **Player ID** `0000001` → room number, short, readable, sequential — and **recyclable**: like a hotel room, once a guest checks out (an admin deletes the user) the number can be reassigned to a new guest with a new key card. See *ID Reuse & Admin Deletion* below.
 - **Secret Token** `k9mX2$nP8qL...` → key card, long, random, impossible to guess
 
 Both together prove identity. Neither alone is sufficient.
@@ -293,6 +315,12 @@ Player 100,000,000      → 000000001 (9 digits, adds another digit)
 - Previous data is lost (accepted tradeoff — no cloud saves planned)
 - Future: Steam/Epic store integration would replace this with their auth system
 
+### ID Reuse & Admin Deletion
+- An operator can delete a stale player from the admin **Users tab** (`POST /admin/users/delete`). This wipes that player's id number, secret token, and username.
+- The freed **number** returns to a reuse pool (`player:freelist`). The next brand-new registration takes the **lowest** freed number first (with a fresh secret); when the pool is empty the counter keeps climbing as before, so totals still trend upward.
+- A reissued id belongs to a *new* person and has a new secret — the old key card no longer opens the room.
+- **Recovery for a deleted-but-active player:** their stored creds stop validating, so the next authenticated call returns `401`. The launcher heals this automatically — it re-registers (on its next launch, or immediately on a `401` from a username change) and is handed a fresh id from the pool. Release game clients never self-register; they recover by being relaunched through the launcher.
+
 ### Reconnection Validation Flow
 ```
 Player A disconnects
@@ -303,6 +331,14 @@ Player A disconnects
     → Confirms genuine Player A
     → Restores host status if applicable
 ```
+
+> **As shipped (server v0.9.0 / game v0.7.0):** the re-`Identify` already
+> re-validates `player_id` + `secret_token` on every WS (re)connection, and a
+> host returning within the grace window keeps its role — the pending promotion
+> timer is cancelled, so the role is never lost rather than "restored." The 30s
+> grace is enforced server-side for the host; the per-player `reconnect_timer`
+> field sketched above is not persisted (grace lives in the in-memory
+> `SignalHub`, not the Redis session).
 
 ---
 

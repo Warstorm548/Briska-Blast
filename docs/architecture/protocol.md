@@ -25,16 +25,19 @@ Once WebRTC peer connections are established, the server is **not** in the game-
 
 | Endpoint | Method | Auth | Purpose |
 |---|---|---|---|
-| `/register` | POST | none | First-contact: issue `player_id` + `secret_token` |
+| `/register` | POST | none | First-contact or recovery: issue `player_id` + `secret_token`. Reuses prior creds when valid; otherwise allocates a fresh id (see ID allocation below) |
 | `/host` | POST | token | Host requests a session with a `gamemode` + `player_count`; receives a session code |
 | `/join` | POST | token | Joiner submits the code; receives the gamemode, capacity, and current roster |
 | `/session/{code}` | GET | none | Poll session status, capacity, and joiner roster |
 | `/session/{code}` | DELETE | token (host) | Explicit session teardown — frees the code immediately |
 | `/session/{code}/start` | POST | token (host) | Transition lobby Waiting → Starting and trigger signaling |
+| `/session/{code}/host` | POST | token (host) | Voluntarily hand the host role to a listed joiner (Waiting only); broadcasts `HostChanged` |
 
-All authenticated POSTs carry `player_id` + `secret_token` in the JSON body. Token validation: SHA-256 of the supplied token compared against `player:<id>:token_hash` in Redis.
+All authenticated POSTs carry `player_id` + `secret_token` in the JSON body. Token validation: SHA-256 of the supplied token compared against `player:<id>:token_hash` in Redis. A request whose creds no longer match a stored hash gets `401 unauthorized`; the launcher self-heals by re-registering (see below).
 
-`/host`, `/join`, and `/session/{code}/start` are version-gated — see [Version Enforcement](#version-enforcement) below. `/ws/session/{code}` is not — clients are already gated by the REST step they used to learn the code.
+**ID allocation & reuse.** `/register` first tries to reuse the caller's `prior_player_id` + `prior_secret_token` when they still validate. Otherwise it allocates a fresh number: it pops the **lowest** entry from the `player:freelist` sorted set (`ZPOPMIN`) if the pool is non-empty, else increments the monotonic `player:counter` (`INCR`). `player:counter` is never decremented, so issued-id totals keep climbing even as numbers are recycled. A number re-enters the pool only when an admin deletes that user via **`POST /admin/users/delete`** (admin listener), which wipes the player's `token_hash` / `username` / `dev_flag` keys and `ZADD`s the freed number back. The reissued id always carries a brand-new secret. A still-active player whose id was deleted gets `401` on their next authenticated call and is re-registered by the launcher onto a fresh id.
+
+`/host`, `/join`, `/session/{code}/start`, and `/session/{code}/host` are version-gated — see [Version Enforcement](#version-enforcement) below. `/ws/session/{code}` is not — clients are already gated by the REST step they used to learn the code.
 
 ## WebSocket Endpoint
 
@@ -43,6 +46,17 @@ All authenticated POSTs carry `player_id` + `secret_token` in the JSON body. Tok
 | `/ws/session/{code}` | GET (Upgrade) | identify frame | WebRTC signaling channel for one player in one session |
 
 The client must send `{"type":"identify","player_id":"…","secret_token":"…"}` as the first text frame within 5 seconds of the upgrade. The server validates the token, confirms the player is a member of `session:{code}` in Redis, registers them in the in-process SignalHub, and replies with `Identified`. Any other initial frame closes the connection with code `4400`.
+
+The `Identified` reply carries the lobby roster (`peers`) plus a `usernames` map — `player_id → display name` for the ids in the frame (self, host, peers), resolved from Redis `player:<id>:username`. Ids with no stored username are omitted, so the client labels the lobby roster and in-game scoreboard by username and falls back to `Player <id>` only when a name is unavailable. The numeric `player_id` stays an internal identifier and is never shown to players otherwise.
+
+### TURN credentials (`ice_servers`)
+
+STUN-only ICE cannot connect peers behind symmetric/endpoint-dependent NATs, so the server mints short-lived STUN+TURN credentials from Cloudflare's managed TURN service (`server/src/turn.rs`, `TURN_KEY_ID`/`TURN_API_TOKEN` env — the API token never leaves the server) and delivers them as an `ice_servers` array (`[{urls, username?, credential?}]`) on two frames:
+
+- **`start_signaling`** — one fresh credential set per match (4 h TTL, outlives any match), shared by every member; clients feed it to the WebRTC transport before building the mesh.
+- **`identified`** — populated **only when `seat_order` is non-empty** (the match already started ⇒ a process-death rejoiner that missed the Start broadcast, or a transient WS reconnect that will ignore it); serves the match's set cached in-memory on the signaling room at `/start`, so repeated identifies never re-hit Cloudflare. A cache miss (server restarted mid-match) re-mints once and re-caches. Empty on lobby identifies.
+
+Fail-open: when TURN is unconfigured or the Cloudflare mint fails, `ice_servers` is empty and clients keep their built-in STUN-only fallback — playable on friendly NATs, degraded exactly to pre-TURN behavior. Credentials are never stored in the Redis `Session` (minted on demand), which also sidesteps the lua-cjson empty-array re-encode pitfall.
 
 Close codes (4xxx, app-defined):
 
@@ -55,6 +69,8 @@ Close codes (4xxx, app-defined):
 | `4500` | `internal` | Redis fault, decoding failure, etc. |
 
 After `Identified`, the client and server exchange the messages documented in `server/src/signaling/protocol.rs` (`ClientMsg` for incoming, `ServerMsg` for outgoing). The server attests `from` on every relayed message based on the authenticated WS connection — clients cannot forge a `from` field.
+
+Lobby lifecycle frames (server → client): `PeerJoined { player_id, username }` (`username` empty when none is on file), `PeerLeft { reason }` (`"disconnect"` for a dropped socket, `"leave"` for a deliberate `Leave`), `HostChanged { player_id }` (host role moved — currently only via a voluntary `/session/{code}/host` transfer), `SessionEnded { reason }`, and `Kicked { reason }`.
 
 ## End-to-end signaling flow
 
@@ -91,6 +107,8 @@ Host                    Server                Joiner(s)
  |<======= direct WebRTC peer connection =======>|
  |======= server is no longer in the path =======|
 ```
+
+`start_signaling` (and a rejoiner's `identified`) carries the `ice_servers` TURN credential list described above; when a peer pair has no direct path, their traffic flows via Cloudflare's TURN relay instead of the arrow labeled "direct" — the game server is still not in the media path either way.
 
 Multi-peer sessions follow the same pattern but every pair exchanges its own offer/answer/ICE — `n` players form an `n*(n-1)/2` mesh.
 
