@@ -18,7 +18,8 @@
   behaviour/math change yet**.
 - **Blocked on:** field logs from the reporter (can't test the night of
   2026-07-19). Once the logs confirm, implement **Plan B** (§Fix plan).
-- **Next action:** collect logs → confirm → build the fix on the same branch.
+- **Next action:** collect logs → confirm → build the fix on a **fresh branch off
+  `dev`** (this diagnostic branch is merged to dev and retired).
 
 ## Symptom (as reported)
 
@@ -214,7 +215,8 @@ See the two resolved entries in [`known-bugs.md`](known-bugs.md).
 1. Get the tester logs (both machines) and `grep -E "IN transit|time_sync"`.
 2. Confirm the pattern above (biased/jumpy offset on India; negative `raw` on the
    US side). Update this doc + `known-bugs.md` with the measured numbers.
-3. Implement **Plan B** on `fix/ball-handoff-entry-position`: spatial cap first,
-   then clock hardening; **remove the `TEMP diagnostic` logging**.
+3. Implement **Plan B** on a **fresh branch off `dev`** (the diagnostic branch is
+   merged/retired): spatial cap first, then clock hardening; **remove the
+   `TEMP diagnostic` logging**.
 4. Bump `client/project.godot` `config/version` (0.28.1 → next), changelog entry,
    tag `game-v<next>-dev.1`, ship, re-test with the same logs.
