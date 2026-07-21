@@ -7,8 +7,9 @@ use deadpool_redis::redis::{self, AsyncCommands};
 use std::collections::HashMap;
 
 use super::{
-    require_session,
+    require_role,
     templates::{self, UserRow},
+    AdminRole,
 };
 use crate::api::FREELIST_KEY;
 use crate::state::AppState;
@@ -20,9 +21,10 @@ pub async fn users_page(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
-    }
+    let session = match require_role(&headers, &state.redis, AdminRole::Admin).await {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
 
     let mut conn = match state.redis.get().await {
         Ok(c) => c,
@@ -101,7 +103,15 @@ pub async fn users_page(
         params.get("err").map(|err| (false, err.clone()))
     };
 
-    Html(templates::users_page(&users, &q, &field, message)).into_response()
+    Html(templates::users_page(
+        &users,
+        &q,
+        &field,
+        message,
+        session.role,
+        &session.username,
+    ))
+    .into_response()
 }
 
 /// POST /admin/users/dev-flag — commit checkbox state for every id listed in
@@ -112,8 +122,8 @@ pub async fn save_dev_flags(
     headers: HeaderMap,
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
+    if let Err(resp) = require_role(&headers, &state.redis, AdminRole::Admin).await {
+        return resp;
     }
 
     let known: Vec<String> = form
@@ -168,8 +178,8 @@ pub async fn delete_user(
     headers: HeaderMap,
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
+    if let Err(resp) = require_role(&headers, &state.redis, AdminRole::Admin).await {
+        return resp;
     }
 
     let id = form.get("id").map(|s| s.trim().to_string()).unwrap_or_default();

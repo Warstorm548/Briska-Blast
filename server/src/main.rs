@@ -56,6 +56,23 @@ async fn main() {
         );
     }
 
+    // One-time visibility for admin-login setup: echo the callback URL to
+    // register in Pocket ID and the exact group names this deployment gates on
+    // (so dev/ea/stable can be verified independently).
+    if cfg.oidc_enabled() {
+        let [superadmin, admin, moderator] = cfg.oidc_group_names();
+        tracing::info!(
+            "OIDC admin login enabled — issuer {}, callback {}, groups: {} / {} / {}",
+            cfg.oidc_issuer_url,
+            cfg.oidc_redirect_uri(),
+            superadmin,
+            admin,
+            moderator
+        );
+    } else {
+        tracing::info!("OIDC admin login not configured — /admin uses password login");
+    }
+
     let game_port = cfg.game_port;
     let admin_port = cfg.admin_port;
 
@@ -105,6 +122,15 @@ async fn main() {
         .route("/admin/login", post(admin::auth::login))
         .route("/admin/logout", post(admin::auth::logout))
         .route("/admin/keepalive", post(admin::auth::keepalive))
+        // Pocket ID OIDC login + the always-available break-glass backstop.
+        .route("/admin/oidc/login", get(admin::oidc::oidc_login))
+        .route("/admin/oidc/callback", get(admin::oidc::oidc_callback))
+        .route("/admin/break-glass", get(admin::auth::break_glass_page))
+        // Forced rotation of the seeded default password before it can grant access.
+        .route(
+            "/admin/force-password",
+            get(admin::auth::force_password_page).post(admin::auth::force_password),
+        )
         .route("/admin/dashboard", get(admin::dashboard::dashboard))
         .route("/admin/stats", get(admin::stats::stats))
         .route("/admin/update/launcher-version", post(admin::dashboard::update_launcher_version))
@@ -205,11 +231,21 @@ async fn seed_defaults(pool: &deadpool_redis::Pool, cfg: &config::Config) {
         .unwrap_or(false);
     if !exists {
         let password = cfg.admin_password.clone();
+        // Flag the seeded, publicly-known default for forced rotation so it can
+        // never open a SuperAdmin session (enforced in admin::auth::login). A
+        // real ADMIN_PASSWORD set in the environment is not flagged.
+        let is_default = password == "@admin";
+        let pepper = cfg.break_glass_pepper.clone();
         if let Ok(Ok(hash)) =
-            tokio::task::spawn_blocking(move || bcrypt::hash(&password, bcrypt::DEFAULT_COST))
-                .await
+            tokio::task::spawn_blocking(move || admin::hash_break_glass(&pepper, &password)).await
         {
             let _: () = conn.set("admin:password_hash", hash).await.unwrap_or(());
+            if is_default {
+                let _: () = conn
+                    .set(admin::PASSWORD_MUST_ROTATE_KEY, "1")
+                    .await
+                    .unwrap_or(());
+            }
         }
     }
 }

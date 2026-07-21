@@ -1,9 +1,15 @@
 //! The admin Stats page — live session/player counts + placeholder metrics.
 
 use super::common::{nav_html, CSS};
+use crate::admin::AdminRole;
 
-pub fn stats_page(session_count: usize, player_count: u64) -> String {
-    let nav = nav_html("stats");
+pub fn stats_page(
+    session_count: usize,
+    player_count: u64,
+    role: AdminRole,
+    username: &str,
+) -> String {
+    let nav = nav_html("stats", role, username);
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">

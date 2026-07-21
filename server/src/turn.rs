@@ -186,6 +186,12 @@ mod tests {
             log_format: String::new(),
             turn_key_id: String::new(),
             turn_api_token: String::new(),
+            admin_public_url: String::new(),
+            oidc_issuer_url: String::new(),
+            oidc_client_id: String::new(),
+            oidc_client_secret: String::new(),
+            break_glass_pepper: String::new(),
+            oidc_group_prefix: String::new(),
         }
     }
 }

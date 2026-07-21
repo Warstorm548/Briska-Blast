@@ -12,9 +12,10 @@ use crate::state::AppState;
 /// counters surfaced on the dashboard (live session count + total players);
 /// further metrics are scaffolded as placeholders in the template for now.
 pub async fn stats(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
+    // Any authenticated role (Moderator and up) may view stats.
+    let Some(session) = require_session(&headers, &state.redis).await else {
         return Redirect::to("/admin").into_response();
-    }
+    };
 
     let mut conn = match state.redis.get().await {
         Ok(c) => c,
@@ -32,5 +33,11 @@ pub async fn stats(State(state): State<AppState>, headers: HeaderMap) -> Respons
         .unwrap_or_default();
     let session_count = session_keys.len();
 
-    Html(templates::stats_page(session_count, player_count)).into_response()
+    Html(templates::stats_page(
+        session_count,
+        player_count,
+        session.role,
+        &session.username,
+    ))
+    .into_response()
 }

@@ -5,6 +5,83 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.26.0] — 2026-07-21
+
+**Pocket ID (OIDC) login for the admin panel — Stage 1 of 3.** Adds "Sign in
+with Pocket ID" (OAuth 2.0 Authorization Code + PKCE, confidential client)
+alongside role-based access driven by Pocket ID group membership, plus a
+conditional break-glass password path. Login + roles only — the SuperAdmin-only
+Admins/Roles management page (Stage 2) and inbound SCIM sync (Stage 3) land in
+later releases.
+
+### Added
+
+- **OIDC login** (`admin/oidc.rs`): `GET /admin/oidc/login` (PKCE-S256 authorize
+  redirect; verifier + nonce stashed in Redis keyed by `state`, one-time, 15-min
+  TTL) and `GET /admin/oidc/callback` (code exchange with client-secret-basic +
+  `code_verifier`, full `id_token` validation — JWKS signature by `kid`, plus
+  `iss` / `aud` / `exp` / `nonce` — then the `groups` claim maps to a role).
+  Discovery is fetched and cached.
+- **Roles** from Pocket ID groups: `briska-superadmin` (all), `briska-admin`
+  (all operations incl. deploy/rollback, version bumps, user management — but
+  NOT changing the break-glass password; the Stage-2 Admins/Roles page will also
+  be SuperAdmin-only), `briska-moderator` (read-only Dashboard + Stats; reserved
+  for future session-chat moderation). Highest group wins; a user in no Briska
+  group is denied. Server-side guards on every sensitive route; the nav +
+  dashboard hide what a role can't use, and the nav shows "user · Role".
+- **Conditional break-glass**: the local password form is hidden while Pocket ID
+  is reachable (a live health probe on the login page) and revealed only when
+  it's unreachable, plus an always-available `GET /admin/break-glass` backstop.
+  Break-glass logs in as SuperAdmin.
+- **Default-password forced rotation**: the seeded, publicly-known default
+  (`@admin`) is flagged at seed time and can no longer open a session — break-glass
+  with it redirects to `GET/POST /admin/force-password` to set a real password
+  first (which then grants the session). Any password change clears the flag, and
+  neither change flow accepts `@admin`.
+- **Break-glass password pepper** (optional `BREAK_GLASS_PEPPER`):
+  `bcrypt(HMAC-SHA256(pepper, password))` via one shared helper used by all four
+  password sites (boot seed, login, change-password, default-password check).
+  Empty ⇒ plain bcrypt (backward compatible).
+- **Per-deployment groups**: the three group names are derived from
+  `OIDC_GROUP_PREFIX` (default `briska-`), so dev/ea/stable gate on **distinct**
+  groups (`briska-ea-superadmin`, etc.) — an admin on one channel has no access
+  to another. The resolved group names + callback URL are logged once at boot.
+- New optional env: `ADMIN_PUBLIC_URL`, `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`,
+  `OIDC_CLIENT_SECRET`, `OIDC_GROUP_PREFIX`, `BREAK_GLASS_PEPPER` (secrets stay
+  server-side). Fail-open: absent OIDC config ⇒ the panel behaves as before.
+- Dependencies: `jsonwebtoken`, `base64`, `hmac`.
+
+### Changed
+
+- Admin sessions now store `{role, user, sub}` (JSON) instead of the literal
+  `"1"`, and `require_session` fetches the record + slides the idle TTL in a
+  single `GETEX`. **On deploy every currently-logged-in admin is signed out
+  once** — the old `"1"` value no longer parses.
+
+### Security
+
+- `id_token` fully validated (signature / `iss` / `aud` / `exp` / `nonce`);
+  `state` guards CSRF, `nonce` guards replay, PKCE is S256. Login authorizes from
+  the validated token only; the OIDC refresh token is not stored (the local
+  Redis session governs idle timeout / keepalive / logout).
+- The break-glass pepper is a server-side secret kept out of Redis, hardening
+  the hash against a hash-store-only compromise. The break-glass POST stays
+  functional at all times (it IS the backstop); only its visibility is
+  probe-gated, and it keeps the existing bcrypt + `rl_admin_login` rate limit.
+- The seeded default `@admin` can no longer open a SuperAdmin session — it must
+  be rotated first — so a fresh deployment never ships a usable, publicly-known
+  admin credential.
+
+### Operator notes
+
+- **No `min_game_version` bump** — this is admin-only; the game client is
+  untouched.
+- To enable Pocket ID: create a **confidential** OIDC client (Public Client
+  OFF), register `{ADMIN_PUBLIC_URL}/admin/oidc/callback` as a Callback URL,
+  create the three `briska-*` groups, and add your own Pocket ID account to
+  `briska-superadmin` (the bootstrap SuperAdmin — break-glass also logs in as
+  SuperAdmin, so there is no lockout).
+
 ## [0.25.0] — 2026-07-12
 
 Accepts the re-tuned **Set Score** range — default **100**, range **50–200**
