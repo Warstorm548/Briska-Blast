@@ -189,6 +189,9 @@ pub async fn update_password(
     if form.new_password.len() < 6 {
         return Redirect::to("/admin/dashboard?err=New+password+must+be+at+least+6+characters").into_response();
     }
+    if form.new_password == "@admin" {
+        return Redirect::to("/admin/dashboard?err=Choose+a+password+other+than+the+default").into_response();
+    }
 
     let mut conn = match state.redis.get().await {
         Ok(c) => c,
@@ -224,6 +227,9 @@ pub async fn update_password(
     };
 
     let _: () = conn.set("admin:password_hash", &new_hash).await.unwrap_or(());
+    // A SuperAdmin (e.g. via Pocket ID) rotating the break-glass password also
+    // clears any pending default-rotation marker.
+    let _: () = conn.del(super::PASSWORD_MUST_ROTATE_KEY).await.unwrap_or(());
     Redirect::to("/admin/dashboard?ok=Password+updated+successfully").into_response()
 }
 

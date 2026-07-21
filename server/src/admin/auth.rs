@@ -8,8 +8,8 @@ use std::net::IpAddr;
 
 use super::templates::LoginView;
 use super::{
-    clear_cookie, create_session, oidc, require_session, set_cookie, templates, verify_break_glass,
-    AdminRole, LoginForm,
+    clear_cookie, create_session, hash_break_glass, oidc, require_session, set_cookie, templates,
+    verify_break_glass, AdminRole, LoginForm, PasswordForm, PASSWORD_MUST_ROTATE_KEY,
 };
 use crate::state::AppState;
 
@@ -121,6 +121,14 @@ pub async fn login(
         return err_page("Invalid password.");
     }
 
+    // A seeded, publicly-known default password must never open a SuperAdmin
+    // session — route it through forced rotation instead. The marker is set at
+    // seed only for the literal default and cleared once rotated.
+    let must_rotate: bool = conn.exists(PASSWORD_MUST_ROTATE_KEY).await.unwrap_or(false);
+    if must_rotate {
+        return Redirect::to("/admin/force-password").into_response();
+    }
+
     // The break-glass password is SuperAdmin-equivalent — it exists precisely
     // to regain full control when Pocket ID is down.
     let Some(token) =
@@ -131,6 +139,104 @@ pub async fn login(
         return err_page("Server error. Try again.");
     };
 
+    let mut response = Redirect::to("/admin/dashboard").into_response();
+    response.headers_mut().insert(
+        "Set-Cookie",
+        HeaderValue::from_str(&set_cookie(&token)).unwrap(),
+    );
+    response
+}
+
+/// GET /admin/force-password — the forced-rotation form, shown only while the
+/// seeded default password is still in place. The default can prove identity
+/// (to change itself) but never open a session, so this is reachable without
+/// one; if nothing needs rotating it just bounces to the login page.
+pub async fn force_password_page(State(state): State<AppState>) -> Response {
+    let pending = match state.redis.get().await {
+        Ok(mut conn) => conn.exists(PASSWORD_MUST_ROTATE_KEY).await.unwrap_or(false),
+        Err(_) => false,
+    };
+    if !pending {
+        return Redirect::to("/admin").into_response();
+    }
+    Html(templates::force_password_page(None)).into_response()
+}
+
+/// POST /admin/force-password — replace the seeded default. Verifies the current
+/// (default) password, stores the new one, clears the must-rotate marker, and
+/// only then mints a SuperAdmin session. No-ops (redirects to login) once the
+/// marker is gone, so it can't be used as a general password-reset endpoint.
+pub async fn force_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<PasswordForm>,
+) -> Response {
+    let ip = request_ip(&headers);
+    let err_page = |msg: &str| Html(templates::force_password_page(Some(msg))).into_response();
+
+    if state.rl_admin_login.check_key(&ip).is_err() {
+        return err_page("Too many attempts. Try again later.");
+    }
+
+    let mut conn = match state.redis.get().await {
+        Ok(c) => c,
+        Err(_) => return err_page("Server error. Try again."),
+    };
+
+    // Only meaningful while the default is pending rotation.
+    let pending: bool = conn.exists(PASSWORD_MUST_ROTATE_KEY).await.unwrap_or(false);
+    if !pending {
+        return Redirect::to("/admin").into_response();
+    }
+
+    if form.new_password != form.confirm_password {
+        return err_page("New passwords do not match.");
+    }
+    if form.new_password.len() < 6 {
+        return err_page("New password must be at least 6 characters.");
+    }
+    if form.new_password == "@admin" {
+        return err_page("Choose a password other than the default.");
+    }
+
+    let stored_hash: Option<String> = conn.get("admin:password_hash").await.unwrap_or(None);
+    let Some(hash) = stored_hash else {
+        return err_page("Admin not configured.");
+    };
+
+    let current = form.current_password.clone();
+    let pepper = state.config.break_glass_pepper.clone();
+    let valid = tokio::task::spawn_blocking(move || verify_break_glass(&pepper, &current, &hash))
+        .await
+        .unwrap_or(false);
+    if !valid {
+        return err_page("Current password is incorrect.");
+    }
+
+    let new_pw = form.new_password.clone();
+    let pepper = state.config.break_glass_pepper.clone();
+    let new_hash = match tokio::task::spawn_blocking(move || hash_break_glass(&pepper, &new_pw)).await
+    {
+        Ok(Ok(h)) => h,
+        _ => return err_page("Failed to hash new password."),
+    };
+
+    if conn
+        .set::<_, _, ()>("admin:password_hash", &new_hash)
+        .await
+        .is_err()
+    {
+        return err_page("Server error. Try again.");
+    }
+    let _: () = conn.del(PASSWORD_MUST_ROTATE_KEY).await.unwrap_or(());
+
+    // Rotated — the credential is no longer the public default, so it's now safe
+    // to grant the SuperAdmin session break-glass is meant to provide.
+    let Some(token) =
+        create_session(&state.redis, AdminRole::SuperAdmin, "break-glass", "").await
+    else {
+        return err_page("Server error. Try again.");
+    };
     let mut response = Redirect::to("/admin/dashboard").into_response();
     response.headers_mut().insert(
         "Set-Cookie",

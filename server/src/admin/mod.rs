@@ -29,6 +29,11 @@ pub const ADMIN_IDLE_WARN_SECS: u64 = 300; // 5:00 — client shows the warning 
 pub const ADMIN_IDLE_LOGOUT_SECS: u64 = 330; // 5:30 — client force-logout
 pub const ADMIN_SESSION_TTL_SECS: u64 = 420; // 7:00 — server-side hard backstop
 
+/// Redis flag: the stored break-glass password is the seeded, publicly-known
+/// default (`@admin`) and must be rotated before it can grant access. Set at
+/// seed time (default only), cleared by any password change.
+pub const PASSWORD_MUST_ROTATE_KEY: &str = "admin:password_must_rotate";
+
 /// Admin capability tier. Ordinal — `derive(Ord)` ranks variants in
 /// declaration order, so `Moderator < Admin < SuperAdmin`; gate with
 /// [`AdminRole::at_least`].

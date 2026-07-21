@@ -33,6 +33,11 @@ later releases.
   is reachable (a live health probe on the login page) and revealed only when
   it's unreachable, plus an always-available `GET /admin/break-glass` backstop.
   Break-glass logs in as SuperAdmin.
+- **Default-password forced rotation**: the seeded, publicly-known default
+  (`@admin`) is flagged at seed time and can no longer open a session — break-glass
+  with it redirects to `GET/POST /admin/force-password` to set a real password
+  first (which then grants the session). Any password change clears the flag, and
+  neither change flow accepts `@admin`.
 - **Break-glass password pepper** (optional `BREAK_GLASS_PEPPER`):
   `bcrypt(HMAC-SHA256(pepper, password))` via one shared helper used by all four
   password sites (boot seed, login, change-password, default-password check).
@@ -63,6 +68,9 @@ later releases.
   the hash against a hash-store-only compromise. The break-glass POST stays
   functional at all times (it IS the backstop); only its visibility is
   probe-gated, and it keeps the existing bcrypt + `rl_admin_login` rate limit.
+- The seeded default `@admin` can no longer open a SuperAdmin session — it must
+  be rotated first — so a fresh deployment never ships a usable, publicly-known
+  admin credential.
 
 ### Operator notes
 

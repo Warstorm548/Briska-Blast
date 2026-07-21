@@ -77,6 +77,50 @@ pub fn login_page(v: &LoginView) -> String {
     )
 }
 
+/// The forced-rotation form shown when the seeded default password is still in
+/// place — it can only change itself, never open a session.
+pub fn force_password_page(error: Option<&str>) -> String {
+    let err_html = error
+        .map(|e| format!(r#"<div class="msg-err">{}</div>"#, escape(e)))
+        .unwrap_or_default();
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Briska Blast — Admin</title>
+  <style>{CSS}</style>
+</head>
+<body>
+  <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px 16px">
+    <div class="card" style="width:100%;max-width:360px">
+      <div class="brand" style="margin-bottom:2px">Briska Blast</div>
+      <p style="font-size:0.85rem;color:#6e7681;margin-bottom:16px">Admin Panel</p>
+      <div class="warn">The default admin password must be changed before you can sign in. Enter it as the current password and choose a new one.</div>
+      {err_html}
+      <form method="POST" action="/admin/force-password">
+        <div class="field" style="margin-bottom:12px">
+          <label for="cur">Current password</label>
+          <input type="password" id="cur" name="current_password" autofocus required>
+        </div>
+        <div class="field" style="margin-bottom:12px">
+          <label for="new">New password</label>
+          <input type="password" id="new" name="new_password" required>
+        </div>
+        <div class="field" style="margin-bottom:16px">
+          <label for="conf">Confirm new password</label>
+          <input type="password" id="conf" name="confirm_password" required>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%">Set password &amp; sign in</button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>"#
+    )
+}
+
 /// A standalone message page (no nav) — used by the OIDC callback for denied /
 /// error / expired outcomes, with a link back to the login page.
 pub fn notice_page(title: &str, message: &str) -> String {
