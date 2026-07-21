@@ -18,9 +18,9 @@ use crate::update::UpdateCommand;
 const ALLOWED_CHECK_INTERVALS: &[u64] = &[21600, 43200, 86400, 172800];
 const ALLOWED_APPLY_INTERVALS: &[u64] = &[0, 86400, 259200, 604800, 1209600];
 use super::{
-    require_session,
+    hash_break_glass, require_role, require_session, verify_break_glass,
     templates::{self, DashboardData},
-    PasswordForm, RollbackForm, ScheduleUpdateForm, UpdateSettingsForm, VersionForm,
+    AdminRole, PasswordForm, RollbackForm, ScheduleUpdateForm, UpdateSettingsForm, VersionForm,
 };
 
 pub async fn dashboard(
@@ -28,9 +28,12 @@ pub async fn dashboard(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
-    }
+    // Any authenticated role (Moderator and up) may view the dashboard; the
+    // template gates the operational sections by role.
+    let session = match require_session(&headers, &state.redis).await {
+        Some(s) => s,
+        None => return Redirect::to("/admin").into_response(),
+    };
 
     let mut conn = match state.redis.get().await {
         Ok(c) => c,
@@ -59,8 +62,9 @@ pub async fn dashboard(
     let session_count = session_keys.len();
 
     let stored_hash: String = conn.get("admin:password_hash").await.unwrap_or_default();
+    let pepper = state.config.break_glass_pepper.clone();
     let using_default = tokio::task::spawn_blocking(move || {
-        bcrypt::verify("@admin", &stored_hash).unwrap_or(false)
+        verify_break_glass(&pepper, "@admin", &stored_hash)
     })
     .await
     .unwrap_or(false);
@@ -98,6 +102,8 @@ pub async fn dashboard(
         player_count,
         message,
         using_default_password: using_default,
+        role: session.role,
+        username: session.username,
         release_channel: env!("RELEASE_CHANNEL"),
         server_version: env!("CARGO_PKG_VERSION"),
         update_last_checked: fmt_ts(&update_last_checked),
@@ -132,8 +138,8 @@ pub async fn update_launcher_version(
     headers: HeaderMap,
     Form(form): Form<VersionForm>,
 ) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
+    if let Err(resp) = require_role(&headers, &state.redis, AdminRole::Admin).await {
+        return resp;
     }
     if Version::parse(&form.version).is_err() {
         return Redirect::to("/admin/dashboard?err=Invalid+version+format+%28use+1.2.3%29").into_response();
@@ -152,8 +158,8 @@ pub async fn update_game_version(
     headers: HeaderMap,
     Form(form): Form<VersionForm>,
 ) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
+    if let Err(resp) = require_role(&headers, &state.redis, AdminRole::Admin).await {
+        return resp;
     }
     if Version::parse(&form.version).is_err() {
         return Redirect::to("/admin/dashboard?err=Invalid+version+format+%28use+1.2.3%29").into_response();
@@ -172,8 +178,10 @@ pub async fn update_password(
     headers: HeaderMap,
     Form(form): Form<PasswordForm>,
 ) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
+    // Changing the break-glass password is SuperAdmin-only — it's the
+    // credential that grants SuperAdmin login, so it sits with identity control.
+    if let Err(resp) = require_role(&headers, &state.redis, AdminRole::SuperAdmin).await {
+        return resp;
     }
     if form.new_password != form.confirm_password {
         return Redirect::to("/admin/dashboard?err=New+passwords+do+not+match").into_response();
@@ -193,8 +201,9 @@ pub async fn update_password(
     };
 
     let current = form.current_password.clone();
+    let pepper = state.config.break_glass_pepper.clone();
     let valid = tokio::task::spawn_blocking(move || {
-        bcrypt::verify(&current, &hash).unwrap_or(false)
+        verify_break_glass(&pepper, &current, &hash)
     })
     .await
     .unwrap_or(false);
@@ -204,8 +213,9 @@ pub async fn update_password(
     }
 
     let new_pw = form.new_password.clone();
+    let pepper = state.config.break_glass_pepper.clone();
     let new_hash = match tokio::task::spawn_blocking(move || {
-        bcrypt::hash(&new_pw, bcrypt::DEFAULT_COST)
+        hash_break_glass(&pepper, &new_pw)
     })
     .await
     {
@@ -221,8 +231,8 @@ pub async fn check_for_update(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
+    if let Err(resp) = require_role(&headers, &state.redis, AdminRole::Admin).await {
+        return resp;
     }
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -277,8 +287,8 @@ pub async fn apply_update_now(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
+    if let Err(resp) = require_role(&headers, &state.redis, AdminRole::Admin).await {
+        return resp;
     }
     // Precondition: there must actually be an update available. The UI hides
     // the button otherwise, but a tampered POST would otherwise re-trigger
@@ -307,8 +317,8 @@ pub async fn schedule_update(
     headers: HeaderMap,
     Form(form): Form<ScheduleUpdateForm>,
 ) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
+    if let Err(resp) = require_role(&headers, &state.redis, AdminRole::Admin).await {
+        return resp;
     }
     // parse "2026-05-20T03:00" from datetime-local
     let ts = NaiveDateTime::parse_from_str(&form.scheduled_at, "%Y-%m-%dT%H:%M")
@@ -366,8 +376,8 @@ pub async fn cancel_update(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
+    if let Err(resp) = require_role(&headers, &state.redis, AdminRole::Admin).await {
+        return resp;
     }
     let _ = state.update_tx.send(UpdateCommand::CancelSchedule).await;
     if let Ok(mut conn) = state.redis.get().await {
@@ -385,8 +395,8 @@ pub async fn save_update_settings(
     headers: HeaderMap,
     Form(form): Form<UpdateSettingsForm>,
 ) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
+    if let Err(resp) = require_role(&headers, &state.redis, AdminRole::Admin).await {
+        return resp;
     }
     let auto_enabled = form.auto_enabled.as_deref() == Some("on");
     if let Ok(mut conn) = state.redis.get().await {
@@ -419,8 +429,8 @@ pub async fn rollback_update(
     headers: HeaderMap,
     Form(form): Form<RollbackForm>,
 ) -> Response {
-    if require_session(&headers, &state.redis).await.is_none() {
-        return Redirect::to("/admin").into_response();
+    if let Err(resp) = require_role(&headers, &state.redis, AdminRole::Admin).await {
+        return resp;
     }
 
     let channel = env!("RELEASE_CHANNEL");

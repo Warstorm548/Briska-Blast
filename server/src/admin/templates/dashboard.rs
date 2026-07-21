@@ -2,6 +2,7 @@
 //! system section, and change-password.
 
 use super::common::{escape, nav_html, CSS};
+use crate::admin::AdminRole;
 
 pub struct DashboardData {
     pub min_launcher_version: String,
@@ -12,6 +13,10 @@ pub struct DashboardData {
     pub player_count: u64,
     pub message: Option<(bool, String)>,
     pub using_default_password: bool,
+    // who is viewing — gates which sections render (server-side guards enforce
+    // the same tiers on the POST handlers)
+    pub role: AdminRole,
+    pub username: String,
     // update system
     pub release_channel: &'static str,
     pub server_version: &'static str,
@@ -167,20 +172,89 @@ pub fn dashboard_page(data: &DashboardData) -> String {
         None => String::new(),
     };
 
-    let default_pw_warn = if data.using_default_password {
+    let is_super = data.role == AdminRole::SuperAdmin;
+    let can_manage = data.role.at_least(AdminRole::Admin);
+
+    // Only SuperAdmins can change the break-glass password, so only they see
+    // the default-password nag.
+    let default_pw_warn = if data.using_default_password && is_super {
         r#"<div class="warn">&#9888; You are using the default password. Change it now in the section below.</div>"#.to_string()
     } else {
         String::new()
     };
 
-    let nav = nav_html("dashboard");
+    let nav = nav_html("dashboard", data.role, &data.username);
     let min_launcher = escape(&data.min_launcher_version);
     let min_game = escape(&data.min_game_version);
     let game_port = data.game_port;
     let admin_port = data.admin_port;
     let sessions = data.session_count;
     let players = data.player_count;
-    let update_section = build_update_section(data);
+
+    // Version minimums + the update system are operational controls — Admin and
+    // SuperAdmin only. Moderators get a read-only dashboard (stats + ports).
+    let version_section = if can_manage {
+        format!(
+            r#"<div class="section">
+      <p class="section-title">Version Control</p>
+      <p class="section-sub">Version Minimums to Join Game Sessions</p>
+
+      <div class="field">
+        <label>Launcher Version</label>
+        <p class="current">Currently enforcing: {min_launcher}</p>
+        <form method="POST" action="/admin/update/launcher-version">
+          <div class="row">
+            <input type="text" name="version" placeholder="e.g. 1.2.0" required>
+            <button type="submit" class="btn btn-sm">Update</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="field">
+        <label>Game Version</label>
+        <p class="current">Currently enforcing: {min_game}</p>
+        <form method="POST" action="/admin/update/game-version">
+          <div class="row">
+            <input type="text" name="version" placeholder="e.g. 1.2.0" required>
+            <button type="submit" class="btn btn-sm">Update</button>
+          </div>
+        </form>
+      </div>
+    </div>"#
+        )
+    } else {
+        String::new()
+    };
+
+    let update_section = if can_manage {
+        build_update_section(data)
+    } else {
+        String::new()
+    };
+
+    let change_pw_section = if is_super {
+        r#"<div class="section">
+      <p class="section-title">Change Password</p>
+      <form method="POST" action="/admin/update/password" style="margin-top:12px">
+        <div class="field">
+          <label>Current Password</label>
+          <input type="password" name="current_password" required>
+        </div>
+        <div class="field">
+          <label>New Password</label>
+          <input type="password" name="new_password" required>
+        </div>
+        <div class="field" style="margin-bottom:16px">
+          <label>Confirm New Password</label>
+          <input type="password" name="confirm_password" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Update Password</button>
+      </form>
+    </div>"#
+            .to_string()
+    } else {
+        String::new()
+    };
 
     format!(
         r#"<!DOCTYPE html>
@@ -228,53 +302,11 @@ pub fn dashboard_page(data: &DashboardData) -> String {
       </div>
     </div>
 
-    <div class="section">
-      <p class="section-title">Version Control</p>
-      <p class="section-sub">Version Minimums to Join Game Sessions</p>
-
-      <div class="field">
-        <label>Launcher Version</label>
-        <p class="current">Currently enforcing: {min_launcher}</p>
-        <form method="POST" action="/admin/update/launcher-version">
-          <div class="row">
-            <input type="text" name="version" placeholder="e.g. 1.2.0" required>
-            <button type="submit" class="btn btn-sm">Update</button>
-          </div>
-        </form>
-      </div>
-
-      <div class="field">
-        <label>Game Version</label>
-        <p class="current">Currently enforcing: {min_game}</p>
-        <form method="POST" action="/admin/update/game-version">
-          <div class="row">
-            <input type="text" name="version" placeholder="e.g. 1.2.0" required>
-            <button type="submit" class="btn btn-sm">Update</button>
-          </div>
-        </form>
-      </div>
-    </div>
+    {version_section}
 
     {update_section}
 
-    <div class="section">
-      <p class="section-title">Change Password</p>
-      <form method="POST" action="/admin/update/password" style="margin-top:12px">
-        <div class="field">
-          <label>Current Password</label>
-          <input type="password" name="current_password" required>
-        </div>
-        <div class="field">
-          <label>New Password</label>
-          <input type="password" name="new_password" required>
-        </div>
-        <div class="field" style="margin-bottom:16px">
-          <label>Confirm New Password</label>
-          <input type="password" name="confirm_password" required>
-        </div>
-        <button type="submit" class="btn btn-primary">Update Password</button>
-      </form>
-    </div>
+    {change_pw_section}
 
   </div>
 </div>

@@ -33,6 +33,17 @@ services:
       # most NATs.
       - TURN_KEY_ID=${TURN_KEY_ID:-}
       - TURN_API_TOKEN=${TURN_API_TOKEN:-}
+      # Optional Pocket ID (OIDC) login for the /admin panel + the break-glass
+      # password pepper (see .env.example). All optional via ":-": unset OIDC
+      # vars ⇒ the panel falls back to plain password login; unset pepper ⇒
+      # plain bcrypt. The client secret + pepper never leave the server.
+      - ADMIN_PUBLIC_URL=${ADMIN_PUBLIC_URL:-}
+      - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      # Per-deployment group prefix (dev/ea/stable gate on distinct groups).
+      - OIDC_GROUP_PREFIX=${OIDC_GROUP_PREFIX:-briska-}
+      - BREAK_GLASS_PEPPER=${BREAK_GLASS_PEPPER:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     labels:

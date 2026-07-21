@@ -21,6 +21,32 @@ pub struct Config {
     /// credentials minted from it (see `turn.rs`).
     pub turn_key_id: String,
     pub turn_api_token: String,
+
+    /// Pocket ID OIDC login for the admin panel (see `admin/oidc.rs`). All
+    /// four empty ⇒ OIDC is disabled and the panel falls back to plain
+    /// password login (fail-open, same posture as TURN above). Never panics
+    /// on absence, so a local/dev server runs with no Pocket ID configured.
+    /// `admin_public_url` is the panel's externally-reachable origin — the
+    /// OIDC callback is *derived* from it so it can't drift from what's
+    /// registered in Pocket ID. `oidc_client_secret` never leaves the server.
+    pub admin_public_url: String,
+    pub oidc_issuer_url: String,
+    pub oidc_client_id: String,
+    pub oidc_client_secret: String,
+
+    /// Optional secret *pepper* for the break-glass admin password. When set,
+    /// the password is HMAC-SHA256'd with this key before bcrypt (see
+    /// `admin::hash_break_glass`), so a Redis-only compromise can't offline
+    /// brute-force the hash. Empty ⇒ plain bcrypt (backward compatible with
+    /// existing stored hashes). NOTE: changing it invalidates the stored hash
+    /// — rotating requires re-seeding the password. Never leaves the server.
+    pub break_glass_pepper: String,
+
+    /// Prefix for the three admin group names Pocket ID must contain, so each
+    /// deployment (dev/ea/stable) gates on DISTINCT groups. The server
+    /// authorizes against `{prefix}superadmin` / `{prefix}admin` /
+    /// `{prefix}moderator`. Default `briska-`.
+    pub oidc_group_prefix: String,
 }
 
 impl Config {
@@ -72,6 +98,44 @@ impl Config {
             log_format: env::var("LOG_FORMAT").unwrap_or_else(|_| "pretty".to_string()),
             turn_key_id: env::var("TURN_KEY_ID").unwrap_or_default(),
             turn_api_token: env::var("TURN_API_TOKEN").unwrap_or_default(),
+            admin_public_url: env::var("ADMIN_PUBLIC_URL").unwrap_or_default(),
+            oidc_issuer_url: env::var("OIDC_ISSUER_URL").unwrap_or_default(),
+            oidc_client_id: env::var("OIDC_CLIENT_ID").unwrap_or_default(),
+            oidc_client_secret: env::var("OIDC_CLIENT_SECRET").unwrap_or_default(),
+            break_glass_pepper: env::var("BREAK_GLASS_PEPPER").unwrap_or_default(),
+            oidc_group_prefix: env::var("OIDC_GROUP_PREFIX")
+                .unwrap_or_else(|_| "briska-".to_string()),
         }
+    }
+
+    /// True only when every OIDC field is present. Gates the "Sign in with
+    /// Pocket ID" button and the callback route; when false the panel is
+    /// plain-password-only (fail-open).
+    pub fn oidc_enabled(&self) -> bool {
+        !self.admin_public_url.trim().is_empty()
+            && !self.oidc_issuer_url.trim().is_empty()
+            && !self.oidc_client_id.trim().is_empty()
+            && !self.oidc_client_secret.trim().is_empty()
+    }
+
+    /// The OIDC redirect/callback URL, derived from the panel's public origin
+    /// so it always matches whatever is entered here — register the *same*
+    /// value in the Pocket ID client's Callback URLs.
+    pub fn oidc_redirect_uri(&self) -> String {
+        format!(
+            "{}/admin/oidc/callback",
+            self.admin_public_url.trim_end_matches('/')
+        )
+    }
+
+    /// This server's admin group names, in `[SuperAdmin, Admin, Moderator]`
+    /// order. Derived from `oidc_group_prefix` so each deployment gates on
+    /// distinct groups.
+    pub fn oidc_group_names(&self) -> [String; 3] {
+        [
+            format!("{}superadmin", self.oidc_group_prefix),
+            format!("{}admin", self.oidc_group_prefix),
+            format!("{}moderator", self.oidc_group_prefix),
+        ]
     }
 }

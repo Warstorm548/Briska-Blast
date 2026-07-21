@@ -2,6 +2,8 @@
 //! single `<style>` sheet reused by every page, and the nav bar (+ idle-timeout
 //! modal script) rendered on every authenticated page.
 
+use crate::admin::AdminRole;
+
 /// Minimal HTML-entity escaper for interpolated user/config text.
 pub(super) fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -96,15 +98,23 @@ nav.drawer-open .nav-backdrop { display: block; }
 }
 ";
 
-pub(super) fn nav_html(active: &str) -> String {
+pub(super) fn nav_html(active: &str, role: AdminRole, username: &str) -> String {
     let dash_active = if active == "dashboard" { " nav-link-active" } else { "" };
     let users_active = if active == "users" { " nav-link-active" } else { "" };
     let stats_active = if active == "stats" { " nav-link-active" } else { "" };
+    // Moderators have no Users access, so the link is omitted from both the
+    // desktop bar and the drawer (server-side guards enforce this regardless).
+    let users_link = if role.at_least(AdminRole::Admin) {
+        format!(r#"<a href="/admin/users" class="nav-link{users_active}">Users</a>"#)
+    } else {
+        String::new()
+    };
+    let identity_label = format!("{} · {}", escape(username), role.label());
     // Built once and reused in both the desktop top bar (.nav-links) and the
     // mobile drawer (.nav-drawer) so the two link lists can never drift apart.
     let links = format!(
         r#"<a href="/admin/dashboard" class="nav-link{dash_active}">Dashboard</a>
-    <a href="/admin/users" class="nav-link{users_active}">Users</a>
+    {users_link}
     <a href="/admin/stats" class="nav-link{stats_active}">Stats</a>"#
     );
     // A real <button> toggles the mobile drawer (with aria-controls /
@@ -130,9 +140,14 @@ pub(super) fn nav_html(active: &str) -> String {
     <span class="brand">Briska Blast Admin</span>
     <span class="nav-links">{links}</span>
   </div>
-  <form class="nav-logout" method="POST" action="/admin/logout" style="margin:0">
-    <button type="submit" class="btn btn-sm">Logout</button>
-  </form>
+  <div class="nav-logout">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="color:#6e7681;font-size:0.78rem">{identity_label}</span>
+      <form method="POST" action="/admin/logout" style="margin:0">
+        <button type="submit" class="btn btn-sm">Logout</button>
+      </form>
+    </div>
+  </div>
   <div class="nav-backdrop" onclick="bbCloseNav()"></div>
   <aside class="nav-drawer" id="nav-drawer">
     <div class="drawer-head">
@@ -140,9 +155,12 @@ pub(super) fn nav_html(active: &str) -> String {
       <span class="drawer-title">Menu</span>
     </div>
     {links}
-    <form class="drawer-logout" method="POST" action="/admin/logout" style="margin:0">
-      <button type="submit" class="btn btn-sm" style="width:100%">Logout</button>
-    </form>
+    <div class="drawer-logout">
+      <div style="color:#6e7681;font-size:0.78rem;margin-bottom:8px">{identity_label}</div>
+      <form method="POST" action="/admin/logout" style="margin:0">
+        <button type="submit" class="btn btn-sm" style="width:100%">Logout</button>
+      </form>
+    </div>
   </aside>
 </nav>
 <script>

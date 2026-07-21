@@ -1,6 +1,7 @@
 //! The admin Users page — search, dev-flag toggles, and a delete-confirm modal.
 
 use super::common::{escape, nav_html, CSS};
+use crate::admin::AdminRole;
 
 pub struct UserRow {
     pub id: String,
@@ -13,8 +14,10 @@ pub fn users_page(
     q: &str,
     field: &str,
     message: Option<(bool, String)>,
+    role: AdminRole,
+    username: &str,
 ) -> String {
-    let nav = nav_html("users");
+    let nav = nav_html("users", role, username);
     let msg_html = match &message {
         Some((true, text)) => format!(r#"<div class="msg-ok">&#10003; {}</div>"#, escape(text)),
         Some((false, text)) => format!(r#"<div class="msg-err">&#10007; {}</div>"#, escape(text)),

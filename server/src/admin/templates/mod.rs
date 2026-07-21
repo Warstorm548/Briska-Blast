@@ -9,6 +9,6 @@ mod stats;
 mod users;
 
 pub use dashboard::{dashboard_page, DashboardData};
-pub use login::login_page;
+pub use login::{login_page, notice_page, LoginView};
 pub use stats::stats_page;
 pub use users::{users_page, UserRow};
