@@ -298,11 +298,14 @@ async fn exchange_code(
     verifier: &str,
 ) -> Result<String, String> {
     let redirect_uri = state.config.oidc_redirect_uri();
+    // Confidential client: authenticate with HTTP Basic (client_secret_basic).
+    // Deliberately do NOT also send `client_id` in the body — some Pocket ID
+    // versions reject the duplicate client-auth combination with 400
+    // invalid_request. Basic-only is the canonical PKCE + confidential request.
     let params = [
         ("grant_type", "authorization_code"),
         ("code", code),
         ("redirect_uri", redirect_uri.as_str()),
-        ("client_id", state.config.oidc_client_id.as_str()),
         ("code_verifier", verifier),
     ];
     let resp = client()
@@ -315,8 +318,12 @@ async fn exchange_code(
         .send()
         .await
         .map_err(|e| format!("request error: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("token endpoint returned {}", resp.status()));
+    let status = resp.status();
+    if !status.is_success() {
+        // Surface Pocket ID's error body (e.g. {"error":"invalid_request",...})
+        // — it names the exact cause and carries no secrets.
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("token endpoint returned {status}: {}", body.trim()));
     }
     let body: TokenResponse = resp
         .json()
