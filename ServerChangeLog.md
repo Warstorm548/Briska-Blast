@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.27.1] — 2026-07-21
+
+**Logs tab container-discovery fix.** The tab returned `no running 'server'
+container found` on managed hosts where the server can't inspect its own compose
+project (`$HOSTNAME` not resolvable, or a non-Compose deploy). Discovery now uses
+the sole matching **running** container when there is exactly one on the host,
+only refuses on genuine ambiguity (several candidates and no resolvable compose
+project), and falls back to a container-name match when no compose service label
+is present. Shipped as a patch bump because a `-dev.2` prerelease sorts *below*
+`0.27.0` in semver, so the update check never offered it.
+
 ## [0.27.0] — 2026-07-21
 
 **Admin Logs tab + client-IP redaction.** A browser-readable Logs tab tails this
@@ -43,16 +54,6 @@ client IP ever reaches the web surface.
 ### Changed
 
 - Added `regex` as a direct dependency for IPv4/IPv6 matching.
-
-### Fixed
-
-- **Logs tab container discovery** (post-dev.1): the tab returned
-  `no running 'server' container found` whenever the server couldn't resolve its
-  own compose project (e.g. `$HOSTNAME` not inspectable, or a non-Compose
-  deploy). Discovery now uses the sole matching **running** container when there
-  is exactly one, only refusing on genuine ambiguity (several candidates and no
-  resolvable project), and falls back to a container-name match when no compose
-  service label is present.
 
 ## [0.26.0] — 2026-07-21
 
