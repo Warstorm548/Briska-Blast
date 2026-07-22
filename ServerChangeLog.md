@@ -33,8 +33,12 @@ client IP ever reaches the web surface.
   the source dropdown, and every request re-check the same table — so opening a
   future source to a different group is a one-line change.
 - **`IP_HASH_PEPPER`** config (optional; documented in `.env.example` +
-  `docker-compose.yml`). The admin-login rate-limit rejection now logs the
-  offending client as a hashed token instead of nothing.
+  `docker-compose.yml`). Unset ⇒ a random per-boot key.
+- **Raw client IP logged on abuse events** for on-box tracing: every rate-limit
+  rejection (`register`/`host`/`join`/`session`/`username`/`start`) and the
+  admin-login + password-rotation rejections log `client=<ip>` at WARN. These
+  are visible only via direct `docker logs`/SSH access — the web Logs tab
+  redacts them to `⟨ip:…⟩` like everything else.
 
 ### Changed
 

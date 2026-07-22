@@ -90,19 +90,28 @@ and every request check the same table, so opening a source to a different group
 is a one-line change. (The durable Redis audit stream and live SSE follow remain
 deferred — see [`../planning/roadmap.md`](../planning/roadmap.md).)
 
-### Client-IP redaction (`server/src/redact.rs`) — the render-boundary guarantee
+### Client-IP handling — raw on the box, redacted on the web (`server/src/redact.rs`)
 
-The server's own tracing never logs raw client IPs, but the Logs tab renders
-output the server doesn't author (redis, watchtower, dependencies), which can
-print client addresses. So **every** line is passed through `redact_ips` before
-it leaves the handler (page, refresh `/data`, and `/download` alike): each
-IPv4/IPv6 literal is rewritten to a `⟨ip:…⟩` token — `HMAC-SHA256(key,
-salt‖ip)`, truncated. Tokens are deterministic (identical IPs collapse to one,
-so abuse patterns stay visible) but non-reversible: the key is `IP_HASH_PEPPER`
-when set (tokens stable across restarts), else a random per-boot key, so an IP is
-never a weak unkeyed hash. `hash_ip_token` is the same primitive used to log the
-offending client on an admin-login rate-limit rejection. **No raw client IP can
-reach the web surface.**
+Client IPs are traceable exactly **one** place: directly on the host (`docker
+logs` / SSH). The server logs the **raw** client IP on abuse events — every
+rate-limit rejection (`register` / `host` / `join` / `session` / `username` /
+`start`) and the admin-login + password-rotation rejections emit `client=<ip>`
+at WARN — so an operator on the box can trace a bad actor.
+
+Redaction happens only at the **web render boundary**: the Logs tab passes
+**every** line through `redact_ips` before it leaves the handler (page, refresh
+`/data`, and `/download` alike), rewriting each IPv4/IPv6 literal to a `⟨ip:…⟩`
+token — `HMAC-SHA256(key, salt‖ip)`, truncated, `IpAddr`-validated so versions
+and timestamps survive. Tokens are deterministic (identical IPs collapse to one,
+so patterns stay visible) but non-reversible: the key is `IP_HASH_PEPPER` when
+set (tokens stable across restarts), else a random per-boot key, so a token is
+never a weak unkeyed hash. **No raw client IP ever reaches the web surface** —
+even the raw ones the server itself logs are scrubbed by the render-boundary
+redactor before the browser sees them.
+
+Trade-off: raw IPs live in the host's container logs on disk (and anywhere logs
+are shipped). That's the deliberate cost of on-box traceability; the browser
+surface stays clean.
 
 ## Diagnosing "balls don't cross portals"
 

@@ -75,6 +75,7 @@ pub async fn join(
 ) -> Result<Json<JoinResponse>> {
     let ip = client_ip(&ConnectInfo(addr), &headers);
     if state.rl_join.check_key(&ip).is_err() {
+        tracing::warn!(client = %ip, "join rate-limited");
         return Err(AppError::TooManyRequests);
     }
 

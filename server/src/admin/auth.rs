@@ -98,12 +98,10 @@ pub async fn login(
     };
 
     if state.rl_admin_login.check_key(&ip).is_err() {
-        // Record the abuse signal keyed by a pseudonymized IP — enough to see
-        // one client hammering login without ever writing a raw address.
-        tracing::warn!(
-            client = %crate::redact::hash_ip_token(&state.ip_hash_key, &ip.to_string()),
-            "admin login rate-limited"
-        );
+        // Raw client IP so an admin can trace a brute-forcer directly on the box
+        // (docker logs / SSH). The web Logs tab redacts it to ⟨ip:…⟩ at render —
+        // the raw address never reaches the browser.
+        tracing::warn!(client = %ip, "admin login rate-limited");
         return err_page("Too many attempts. Try again later.");
     }
 
@@ -181,6 +179,7 @@ pub async fn force_password(
     let err_page = |msg: &str| Html(templates::force_password_page(Some(msg))).into_response();
 
     if state.rl_admin_login.check_key(&ip).is_err() {
+        tracing::warn!(client = %ip, "admin password-rotation rate-limited");
         return err_page("Too many attempts. Try again later.");
     }
 

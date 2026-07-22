@@ -23,6 +23,9 @@ pub async fn register(
 ) -> Result<Json<RegisterResponse>> {
     let ip = client_ip(&ConnectInfo(addr), &headers);
     if state.rl_register.check_key(&ip).is_err() {
+        // Raw IP so abuse is traceable directly on the box (docker logs / SSH);
+        // the admin web Logs tab redacts it to ⟨ip:…⟩ at render.
+        tracing::warn!(client = %ip, "register rate-limited");
         return Err(AppError::TooManyRequests);
     }
 

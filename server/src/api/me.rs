@@ -22,6 +22,7 @@ pub async fn update_username(
 ) -> Result<impl IntoResponse> {
     let ip = client_ip(&ConnectInfo(addr), &headers);
     if state.rl_me_username.check_key(&ip).is_err() {
+        tracing::warn!(client = %ip, "username change rate-limited");
         return Err(AppError::TooManyRequests);
     }
 

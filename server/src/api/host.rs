@@ -35,6 +35,7 @@ pub async fn host(
 ) -> Result<Json<HostResponse>> {
     let ip = client_ip(&ConnectInfo(addr), &headers);
     if state.rl_host.check_key(&ip).is_err() {
+        tracing::warn!(client = %ip, "host create rate-limited");
         return Err(AppError::TooManyRequests);
     }
 
