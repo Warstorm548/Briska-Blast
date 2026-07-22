@@ -243,17 +243,33 @@ async fn own_compose_project(docker: &Docker) -> Option<String> {
         .cloned()
 }
 
-/// Find the container id for a compose `service`, scoped to `project` when
-/// known. Falls back to service-label-only match (bare/dev runs).
+/// Find the **running** container id for a compose `service`, scoped to
+/// `project` when known.
+///
+/// When the project can't be resolved, a release build (the deployed container)
+/// refuses to fall back to a service-only match: on a multi-channel host that
+/// could return another deployment's container, breaking the "never cross-read"
+/// guarantee. Only a dev build (`cargo run`, no Compose) is allowed the
+/// service-only match.
 async fn find_container(docker: &Docker, project: Option<&str>, service: &str) -> Option<String> {
     let mut labels = vec![format!("com.docker.compose.service={service}")];
-    if let Some(p) = project {
-        labels.push(format!("com.docker.compose.project={p}"));
+    match project {
+        Some(p) => labels.push(format!("com.docker.compose.project={p}")),
+        None if !cfg!(debug_assertions) => {
+            tracing::error!(
+                service,
+                "cannot resolve own compose project; refusing unscoped container match"
+            );
+            return None;
+        }
+        None => {} // dev build only: service-only match is acceptable
     }
     let mut filters = HashMap::new();
     filters.insert("label".to_string(), labels);
+    // `all: false` ⇒ running containers only, so a stopped/old container left
+    // over from a recreation is never selected for live logs.
     let opts = ListContainersOptions::<String> {
-        all: true,
+        all: false,
         filters,
         ..Default::default()
     };

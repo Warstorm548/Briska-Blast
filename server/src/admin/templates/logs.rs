@@ -115,6 +115,10 @@ pub fn logs_page(
   window.bbLogsLoad = function() {{
     document.getElementById('dl').href = '/admin/logs/download?' + qs();
     fetch('/admin/logs/data?' + qs()).then(function(r) {{
+      // A session-expiry / role-loss response is a 302 to the login page, which
+      // fetch follows into 200 HTML. Detect the followed redirect and bounce,
+      // so the login page is never rendered into the log view.
+      if (r.redirected) {{ window.location.href = r.url; return null; }}
       if (r.status === 401 || r.status === 403) {{ window.location.href = '/admin'; return null; }}
       return r.text();
     }}).then(function(t) {{ if (t !== null) {{ rawLog = t; render(); }} }}).catch(function(){{}});

@@ -26,7 +26,7 @@ pub async fn get_session(
 ) -> Result<Json<SessionPollResponse>> {
     let ip = client_ip(&ConnectInfo(addr), &headers);
     if state.rl_session.check_key(&ip).is_err() {
-        tracing::warn!(client = %ip, "session request rate-limited");
+        state.warn_rate_limited(&ip, "session request");
         return Err(AppError::TooManyRequests);
     }
 
@@ -73,7 +73,7 @@ pub async fn close_session(
 ) -> Result<StatusCode> {
     let ip = client_ip(&ConnectInfo(addr), &headers);
     if state.rl_session.check_key(&ip).is_err() {
-        tracing::warn!(client = %ip, "session request rate-limited");
+        state.warn_rate_limited(&ip, "session request");
         return Err(AppError::TooManyRequests);
     }
 
@@ -171,7 +171,7 @@ pub async fn transfer_host(
 ) -> Result<StatusCode> {
     let ip = client_ip(&ConnectInfo(addr), &headers);
     if state.rl_session.check_key(&ip).is_err() {
-        tracing::warn!(client = %ip, "session request rate-limited");
+        state.warn_rate_limited(&ip, "session request");
         return Err(AppError::TooManyRequests);
     }
 
