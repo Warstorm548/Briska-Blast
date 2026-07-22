@@ -44,6 +44,16 @@ client IP ever reaches the web surface.
 
 - Added `regex` as a direct dependency for IPv4/IPv6 matching.
 
+### Fixed
+
+- **Logs tab container discovery** (post-dev.1): the tab returned
+  `no running 'server' container found` whenever the server couldn't resolve its
+  own compose project (e.g. `$HOSTNAME` not inspectable, or a non-Compose
+  deploy). Discovery now uses the sole matching **running** container when there
+  is exactly one, only refusing on genuine ambiguity (several candidates and no
+  resolvable project), and falls back to a container-name match when no compose
+  service label is present.
+
 ## [0.26.0] — 2026-07-21
 
 **Pocket ID (OIDC) login for the admin panel — Stage 1 of 3.** Adds "Sign in

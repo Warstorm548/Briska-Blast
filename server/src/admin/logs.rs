@@ -243,38 +243,75 @@ async fn own_compose_project(docker: &Docker) -> Option<String> {
         .cloned()
 }
 
-/// Find the **running** container id for a compose `service`, scoped to
-/// `project` when known.
+/// Find the **running** container id for compose `service`.
 ///
-/// When the project can't be resolved, a release build (the deployed container)
-/// refuses to fall back to a service-only match: on a multi-channel host that
-/// could return another deployment's container, breaking the "never cross-read"
-/// guarantee. Only a dev build (`cargo run`, no Compose) is allowed the
-/// service-only match.
+/// Cross-read safety (side-by-side dev/ea/stable on one host) without being
+/// brittle: prefer a project-scoped match when the project is known; when it is
+/// not, use the sole matching container if there is exactly one, and only refuse
+/// when the choice is genuinely ambiguous (more than one candidate). Falls back
+/// to a name match for non-Compose deployments that carry no service label.
 async fn find_container(docker: &Docker, project: Option<&str>, service: &str) -> Option<String> {
-    let mut labels = vec![format!("com.docker.compose.service={service}")];
-    match project {
-        Some(p) => labels.push(format!("com.docker.compose.project={p}")),
-        None if !cfg!(debug_assertions) => {
-            tracing::error!(
-                service,
-                "cannot resolve own compose project; refusing unscoped container match"
-            );
-            return None;
-        }
-        None => {} // dev build only: service-only match is acceptable
-    }
+    // Running containers carrying this compose service label.
     let mut filters = HashMap::new();
-    filters.insert("label".to_string(), labels);
-    // `all: false` ⇒ running containers only, so a stopped/old container left
-    // over from a recreation is never selected for live logs.
+    filters.insert(
+        "label".to_string(),
+        vec![format!("com.docker.compose.service={service}")],
+    );
     let opts = ListContainersOptions::<String> {
         all: false,
         filters,
         ..Default::default()
     };
-    let list = docker.list_containers(Some(opts)).await.ok()?;
-    list.into_iter().find_map(|c| c.id)
+    let mut candidates = docker.list_containers(Some(opts)).await.ok()?;
+
+    // Non-Compose deployment (no service label): fall back to running containers
+    // whose name contains the service.
+    if candidates.is_empty() {
+        let opts = ListContainersOptions::<String> {
+            all: false,
+            ..Default::default()
+        };
+        candidates = docker
+            .list_containers(Some(opts))
+            .await
+            .ok()?
+            .into_iter()
+            .filter(|c| {
+                c.names
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .iter()
+                    .any(|n| n.trim_start_matches('/').contains(service))
+            })
+            .collect();
+    }
+
+    match project {
+        // Project known: never return another deployment's container.
+        Some(p) => candidates
+            .into_iter()
+            .find(|c| {
+                c.labels
+                    .as_ref()
+                    .and_then(|l| l.get("com.docker.compose.project"))
+                    .map(String::as_str)
+                    == Some(p)
+            })
+            .and_then(|c| c.id),
+        // Project unknown: safe only when there's no ambiguity.
+        None => match candidates.len() {
+            0 => None,
+            1 => candidates.into_iter().next().and_then(|c| c.id),
+            n => {
+                tracing::error!(
+                    service,
+                    candidates = n,
+                    "multiple '{service}' containers and no resolvable compose project; refusing to guess"
+                );
+                None
+            }
+        },
+    }
 }
 
 #[cfg(test)]
