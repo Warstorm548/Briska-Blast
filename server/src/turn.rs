@@ -192,6 +192,7 @@ mod tests {
             oidc_client_secret: String::new(),
             break_glass_pepper: String::new(),
             oidc_group_prefix: String::new(),
+            ip_hash_pepper: String::new(),
         }
     }
 }

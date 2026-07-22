@@ -35,6 +35,7 @@ pub async fn host(
 ) -> Result<Json<HostResponse>> {
     let ip = client_ip(&ConnectInfo(addr), &headers);
     if state.rl_host.check_key(&ip).is_err() {
+        state.warn_rate_limited(&ip, "host create");
         return Err(AppError::TooManyRequests);
     }
 

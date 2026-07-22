@@ -5,6 +5,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.27.0] — 2026-07-21
+
+**Admin Logs tab + client-IP redaction.** A browser-readable Logs tab tails this
+deployment's container output, and a new redaction layer guarantees no raw
+client IP ever reaches the web surface.
+
+### Added
+
+- **Client-IP pseudonymization** (`redact.rs`): `hash_ip_token` turns an IP into
+  a stable, non-reversible `⟨ip:…⟩` token (`HMAC-SHA256(key, salt‖ip)`), and
+  `redact_ips` scrubs every IPv4/IPv6 literal out of an arbitrary log line. The
+  HMAC key is `IP_HASH_PEPPER` when set (tokens stable across restarts), else a
+  random per-boot key — so an IP is never hashed with a guessable key. Identical
+  IPs collapse to one token, so abuse patterns stay visible without a raw
+  address. Matched candidates are `IpAddr`-validated, so version strings and
+  timestamps are left untouched.
+- **Admin Logs tab** (`admin/logs.rs`, `/admin/logs` + `/data` + `/download`):
+  tails the `server` / `redis` / `watchtower` containers via the already-mounted
+  docker socket (`bollard`, containers discovered by compose service+project
+  labels so side-by-side channels never cross-read). Source + line-count
+  selectors, client-side level/text filters, manual + auto-refresh polling, and
+  a redacted Download `.log`. **Every** line is passed through `redact_ips`
+  before it leaves the server.
+- **Per-source access policy**: each log source carries a minimum role (v1:
+  `server`/`redis`/`watchtower` all Admin+, Moderators excluded). The nav link,
+  the source dropdown, and every request re-check the same table — so opening a
+  future source to a different group is a one-line change.
+- **`IP_HASH_PEPPER`** config (optional; documented in `.env.example` +
+  `docker-compose.yml`). Unset ⇒ a random per-boot key.
+- **Raw client IP logged on abuse events** for on-box tracing: every rate-limit
+  rejection (`register`/`host`/`join`/`session`/`username`/`start`) and the
+  admin-login + password-rotation rejections log `client=<ip>` at WARN. These
+  are visible only via direct `docker logs`/SSH access — the web Logs tab
+  redacts them to `⟨ip:…⟩` like everything else.
+
+### Changed
+
+- Added `regex` as a direct dependency for IPv4/IPv6 matching.
+
 ## [0.26.0] — 2026-07-21
 
 **Pocket ID (OIDC) login for the admin panel — Stage 1 of 3.** Adds "Sign in

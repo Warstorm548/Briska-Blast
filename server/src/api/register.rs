@@ -23,6 +23,7 @@ pub async fn register(
 ) -> Result<Json<RegisterResponse>> {
     let ip = client_ip(&ConnectInfo(addr), &headers);
     if state.rl_register.check_key(&ip).is_err() {
+        state.warn_rate_limited(&ip, "register");
         return Err(AppError::TooManyRequests);
     }
 

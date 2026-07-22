@@ -93,6 +93,7 @@ pub async fn start_session(
 ) -> Result<StatusCode> {
     let ip = client_ip(&ConnectInfo(addr), &headers);
     if state.rl_session.check_key(&ip).is_err() {
+        state.warn_rate_limited(&ip, "match start");
         return Err(AppError::TooManyRequests);
     }
 

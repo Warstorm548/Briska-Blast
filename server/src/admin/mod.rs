@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod dashboard;
+pub mod logs;
 pub mod oidc;
 pub mod stats;
 pub(crate) mod templates;

@@ -23,6 +23,15 @@ fn make_login_limiter() -> Arc<KeyedLimiter> {
     Arc::new(RateLimiter::keyed(quota))
 }
 
+fn make_log_limiter() -> Arc<KeyedLimiter> {
+    // Throttles rate-limit-rejection WARNs (see `AppState::warn_rate_limited`):
+    // a burst of 3 then ~1/min per client IP, so a flood of rejected requests
+    // can't turn into a matching flood of log lines.
+    let quota = Quota::per_minute(NonZeroU32::new(1).unwrap())
+        .allow_burst(NonZeroU32::new(3).unwrap());
+    Arc::new(RateLimiter::keyed(quota))
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub redis: Pool,
@@ -33,6 +42,9 @@ pub struct AppState {
     pub rl_join: Arc<KeyedLimiter>,
     pub rl_session: Arc<KeyedLimiter>,
     pub rl_admin_login: Arc<KeyedLimiter>,
+    /// Per-IP throttle for the rate-limit-rejection WARNs, not for any request
+    /// path — keeps abuse logging bounded (see `warn_rate_limited`).
+    pub rl_abuse_log: Arc<KeyedLimiter>,
     pub update_tx: Arc<mpsc::Sender<UpdateCommand>>,
     // Single-flight guard around the local Docker `:channel` ref AND
     // `watchtower::trigger_update`. All paths that mutate the channel image
@@ -54,10 +66,28 @@ pub struct AppState {
     /// Lives on AppState so handlers (/start, /ws/session/:code) receive
     /// it transparently via the same State<AppState> they already take.
     pub signal_hub: Arc<SignalHub>,
+    /// HMAC key for pseudonymizing client IPs before they reach any log or the
+    /// admin Logs tab (see `redact.rs`). Derived once at boot from
+    /// `Config::ip_hash_pepper`, or a random 32 bytes when that's unset — so a
+    /// raw IP is never hashed with an empty/guessable key.
+    pub ip_hash_key: Arc<Vec<u8>>,
 }
 
 impl AppState {
     pub fn new(redis: Pool, config: Config, update_tx: Arc<mpsc::Sender<UpdateCommand>>) -> Self {
+        // Derive the IP-redaction key once. A configured pepper keeps `⟨ip:…⟩`
+        // tokens stable across restarts; without one we still key on a random
+        // per-boot secret, so an IP is never hashed with a guessable key.
+        let ip_hash_key = if config.ip_hash_pepper.is_empty() {
+            tracing::warn!(
+                "IP_HASH_PEPPER unset — IP redaction uses a random per-boot key \
+                 (tokens won't correlate across restarts). Set it in .env for stable tokens."
+            );
+            Arc::new(rand::random::<[u8; 32]>().to_vec())
+        } else {
+            tracing::info!("IP redaction keyed by IP_HASH_PEPPER");
+            Arc::new(config.ip_hash_pepper.clone().into_bytes())
+        };
         Self {
             redis,
             config: Arc::new(config),
@@ -67,9 +97,21 @@ impl AppState {
             rl_join: make_limiter(20),
             rl_session: make_limiter(60),
             rl_admin_login: make_login_limiter(),
+            rl_abuse_log: make_log_limiter(),
             update_tx,
             update_apply_lock: Arc::new(Mutex::new(())),
             signal_hub: Arc::new(SignalHub::default()),
+            ip_hash_key,
+        }
+    }
+
+    /// Emit a bounded WARN for a rate-limit rejection. The **raw** client IP is
+    /// logged for on-box tracing (the web Logs tab redacts it), but throttled
+    /// per IP via `rl_abuse_log` so an attacker can't turn a flood of rejected
+    /// requests into a matching flood of log lines.
+    pub fn warn_rate_limited(&self, ip: &IpAddr, event: &str) {
+        if self.rl_abuse_log.check_key(ip).is_ok() {
+            tracing::warn!(client = %ip, "{} rate-limited", event);
         }
     }
 }

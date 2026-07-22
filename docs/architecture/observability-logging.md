@@ -72,8 +72,46 @@ can open the same folder (`launcher/src/paths.rs::logs_dir`).
 - **`PeerConnectionFailed`** logs at **WARN** with structured `peer`/`reason` fields —
   this is the direct server-side signature of a failed WebRTC pair.
 - **`LOG_FORMAT`** env (via `Config`): `pretty` (default) or `json`. `json` feeds log
-  shippers and the future admin **Logs tab** ([`../planning/roadmap.md`](../planning/roadmap.md)).
+  shippers and the admin **Logs tab** (below).
   Level still comes from `RUST_LOG` (default `server=info,tower_http=info`).
+
+## Admin Logs tab (`server/src/admin/logs.rs`)
+
+A browser-readable **Logs** tab in the admin panel tails this deployment's
+container stdout/stderr via `bollard` over the `/var/run/docker.sock` already
+mounted for the update flow — no new privileges. Sources (`server` / `redis` /
+`watchtower`) are found by their `com.docker.compose.service` label, scoped to
+this server's `com.docker.compose.project` (read from its own container labels)
+so side-by-side channels never cross-read. Static tail-on-load with a line-count
+selector, client-side level/text filters, manual + auto-refresh polling, and a
+**Download .log** button. Access is a **per-source min-role policy** (v1: all
+three sources Admin+, Moderators excluded); the nav link, the source dropdown,
+and every request check the same table, so opening a source to a different group
+is a one-line change. (The durable Redis audit stream and live SSE follow remain
+deferred — see [`../planning/roadmap.md`](../planning/roadmap.md).)
+
+### Client-IP handling — raw on the box, redacted on the web (`server/src/redact.rs`)
+
+Client IPs are traceable exactly **one** place: directly on the host (`docker
+logs` / SSH). The server logs the **raw** client IP on abuse events — every
+rate-limit rejection (`register` / `host` / `join` / `session` / `username` /
+`start`) and the admin-login + password-rotation rejections emit `client=<ip>`
+at WARN — so an operator on the box can trace a bad actor.
+
+Redaction happens only at the **web render boundary**: the Logs tab passes
+**every** line through `redact_ips` before it leaves the handler (page, refresh
+`/data`, and `/download` alike), rewriting each IPv4/IPv6 literal to a `⟨ip:…⟩`
+token — `HMAC-SHA256(key, salt‖ip)`, truncated, `IpAddr`-validated so versions
+and timestamps survive. Tokens are deterministic (identical IPs collapse to one,
+so patterns stay visible) but non-reversible: the key is `IP_HASH_PEPPER` when
+set (tokens stable across restarts), else a random per-boot key, so a token is
+never a weak unkeyed hash. **No raw client IP ever reaches the web surface** —
+even the raw ones the server itself logs are scrubbed by the render-boundary
+redactor before the browser sees them.
+
+Trade-off: raw IPs live in the host's container logs on disk (and anywhere logs
+are shipped). That's the deliberate cost of on-box traceability; the browser
+surface stays clean.
 
 ## Diagnosing "balls don't cross portals"
 

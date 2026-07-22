@@ -4,6 +4,7 @@ mod config;
 mod error;
 mod gamemode;
 mod middleware;
+mod redact;
 mod signaling;
 mod state;
 mod testharness;
@@ -145,6 +146,11 @@ async fn main() {
         .route("/admin/users", get(admin::users::users_page))
         .route("/admin/users/dev-flag", post(admin::users::save_dev_flags))
         .route("/admin/users/delete", post(admin::users::delete_user))
+        // Container-logs tab (bollard over the mounted docker socket). Every
+        // line is IP-redacted before it leaves the handler.
+        .route("/admin/logs", get(admin::logs::logs_page))
+        .route("/admin/logs/data", get(admin::logs::logs_data))
+        .route("/admin/logs/download", get(admin::logs::logs_download))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

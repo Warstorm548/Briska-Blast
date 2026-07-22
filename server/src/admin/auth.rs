@@ -98,6 +98,7 @@ pub async fn login(
     };
 
     if state.rl_admin_login.check_key(&ip).is_err() {
+        state.warn_rate_limited(&ip, "admin login");
         return err_page("Too many attempts. Try again later.");
     }
 
@@ -175,6 +176,7 @@ pub async fn force_password(
     let err_page = |msg: &str| Html(templates::force_password_page(Some(msg))).into_response();
 
     if state.rl_admin_login.check_key(&ip).is_err() {
+        state.warn_rate_limited(&ip, "admin password-rotation");
         return err_page("Too many attempts. Try again later.");
     }
 
