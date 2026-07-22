@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.27.2] — 2026-07-22
+
+**Logs tab: reliable own-project resolution for same-host multi-channel.** When
+`dev`/`ea`/`stable` run side-by-side on one Docker daemon (each with its own
+redis + watchtower), the Logs tab must scope to *its own* Compose project. It
+learned that project by inspecting itself via `$HOSTNAME`, which fails on managed
+hosts — so on a shared box it would see several `server`/`redis`/`watchtower`
+candidates, hit the ambiguity guard, and show `no container found` on every
+channel. `own_compose_project` now falls back to finding the running container
+built from *this server's channel image* (`…/briska-blast:{dev|ea|stable}`,
+one per host) and reading its project label — so each channel reads only its own
+containers even when `$HOSTNAME` isn't inspectable.
+
 ## [0.27.1] — 2026-07-21
 
 **Logs tab container-discovery fix.** The tab returned `no running 'server'

@@ -27,7 +27,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 
 | Component | Status |
 |---|---|
-| Server foundation | ✓ Complete (current v0.27.1 — see `ServerChangeLog.md`) |
+| Server foundation | ✓ Complete (current v0.27.2 — see `ServerChangeLog.md`) |
 | Shared crate | ✓ Complete (v0.6.0 — see `SharedChangeLog.md`) |
 | Game client | In progress (v0.28.0 — see `GameChangeLog.md`) |
 | Launcher | In progress (v0.20.1 — see `LauncherChangeLog.md`) |

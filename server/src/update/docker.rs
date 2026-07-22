@@ -8,7 +8,7 @@ use futures_util::TryStreamExt;
 // Keeping the registry in the compiled binary means a runtime environment
 // compromise (.env tampering, container env injection) cannot redirect the
 // update / rollback path at a malicious registry.
-const IMAGE_REPO: &str = "ghcr.io/warstorm548/briska-blast";
+pub(crate) const IMAGE_REPO: &str = "ghcr.io/warstorm548/briska-blast";
 
 /// Pull the newest image for the given channel tag (e.g. `:stable`) into the
 /// local Docker daemon. Used by the auto-apply path to stage the new image

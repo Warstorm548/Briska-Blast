@@ -231,16 +231,43 @@ async fn fetch_logs(state: &AppState, spec: &SourceSpec, lines: u32) -> Result<S
     Ok(redact_ips(&state.ip_hash_key, &buf))
 }
 
-/// This server's docker-compose project, read from its own container labels —
-/// so a multi-channel host (dev+ea+stable side by side) never cross-reads
-/// another deployment's containers. `None` when not compose-managed.
+/// This server's docker-compose project — so a multi-channel host
+/// (dev+ea+stable side by side on one daemon) never cross-reads another
+/// deployment's containers. Resolved in order:
+///   1. Inspect our own container by `$HOSTNAME` (standard Docker).
+///   2. Fall back to the running container built from *our channel image*
+///      (`{IMAGE_REPO}:{RELEASE_CHANNEL}`) — exactly one per host, and each
+///      channel's server runs a distinct tag (`:dev`/`:ea`/`:stable`) — and read
+///      its project label. This path works on managed hosts where `$HOSTNAME`
+///      isn't an inspectable container id (the reason the dev deploy first
+///      failed), and is what makes same-host multi-channel isolation reliable.
+///
+/// `None` only when neither resolves (bare/non-Compose run).
 async fn own_compose_project(docker: &Docker) -> Option<String> {
-    let hostname = std::env::var("HOSTNAME").ok()?;
-    let info = docker.inspect_container(&hostname, None).await.ok()?;
-    info.config?
-        .labels?
-        .get("com.docker.compose.project")
-        .cloned()
+    fn project_label(labels: Option<std::collections::HashMap<String, String>>) -> Option<String> {
+        labels?.get("com.docker.compose.project").cloned()
+    }
+
+    // 1) Direct self-inspect by hostname.
+    if let Ok(hostname) = std::env::var("HOSTNAME") {
+        if let Ok(info) = docker.inspect_container(&hostname, None).await {
+            if let Some(p) = project_label(info.config.and_then(|c| c.labels)) {
+                return Some(p);
+            }
+        }
+    }
+
+    // 2) Fall back to the running container for our own channel image.
+    let own_image = format!("{}:{}", crate::update::docker::IMAGE_REPO, env!("RELEASE_CHANNEL"));
+    let mut filters = HashMap::new();
+    filters.insert("ancestor".to_string(), vec![own_image]);
+    let opts = ListContainersOptions::<String> {
+        all: false,
+        filters,
+        ..Default::default()
+    };
+    let list = docker.list_containers(Some(opts)).await.ok()?;
+    list.into_iter().find_map(|c| project_label(c.labels))
 }
 
 /// Find the **running** container id for compose `service`.
