@@ -98,6 +98,12 @@ pub async fn login(
     };
 
     if state.rl_admin_login.check_key(&ip).is_err() {
+        // Record the abuse signal keyed by a pseudonymized IP — enough to see
+        // one client hammering login without ever writing a raw address.
+        tracing::warn!(
+            client = %crate::redact::hash_ip_token(&state.ip_hash_key, &ip.to_string()),
+            "admin login rate-limited"
+        );
         return err_page("Too many attempts. Try again later.");
     }
 

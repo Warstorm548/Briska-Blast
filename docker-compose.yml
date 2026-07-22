@@ -44,6 +44,9 @@ services:
       # Per-deployment group prefix (dev/ea/stable gate on distinct groups).
       - OIDC_GROUP_PREFIX=${OIDC_GROUP_PREFIX:-briska-}
       - BREAK_GLASS_PEPPER=${BREAK_GLASS_PEPPER:-}
+      # Pepper for pseudonymizing client IPs in logs / the admin Logs tab; unset
+      # ⇒ a random per-boot key (tokens just won't be stable across restarts).
+      - IP_HASH_PEPPER=${IP_HASH_PEPPER:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     labels:

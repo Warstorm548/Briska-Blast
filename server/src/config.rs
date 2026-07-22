@@ -47,6 +47,14 @@ pub struct Config {
     /// authorizes against `{prefix}superadmin` / `{prefix}admin` /
     /// `{prefix}moderator`. Default `briska-`.
     pub oidc_group_prefix: String,
+
+    /// Secret pepper (HMAC key) for pseudonymizing client IPs before they reach
+    /// any log or the admin Logs tab (see `redact.rs`). Empty ⇒ `AppState`
+    /// generates a random per-boot key instead, so IPs are still never a weak
+    /// unkeyed hash; setting this only makes the `⟨ip:…⟩` tokens stable across
+    /// restarts (so the same client reads the same across a redeploy). Never
+    /// leaves the server.
+    pub ip_hash_pepper: String,
 }
 
 impl Config {
@@ -105,6 +113,7 @@ impl Config {
             break_glass_pepper: env::var("BREAK_GLASS_PEPPER").unwrap_or_default(),
             oidc_group_prefix: env::var("OIDC_GROUP_PREFIX")
                 .unwrap_or_else(|_| "briska-".to_string()),
+            ip_hash_pepper: env::var("IP_HASH_PEPPER").unwrap_or_default(),
         }
     }
 

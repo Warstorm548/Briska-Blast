@@ -72,8 +72,37 @@ can open the same folder (`launcher/src/paths.rs::logs_dir`).
 - **`PeerConnectionFailed`** logs at **WARN** with structured `peer`/`reason` fields —
   this is the direct server-side signature of a failed WebRTC pair.
 - **`LOG_FORMAT`** env (via `Config`): `pretty` (default) or `json`. `json` feeds log
-  shippers and the future admin **Logs tab** ([`../planning/roadmap.md`](../planning/roadmap.md)).
+  shippers and the admin **Logs tab** (below).
   Level still comes from `RUST_LOG` (default `server=info,tower_http=info`).
+
+## Admin Logs tab (`server/src/admin/logs.rs`)
+
+A browser-readable **Logs** tab in the admin panel tails this deployment's
+container stdout/stderr via `bollard` over the `/var/run/docker.sock` already
+mounted for the update flow — no new privileges. Sources (`server` / `redis` /
+`watchtower`) are found by their `com.docker.compose.service` label, scoped to
+this server's `com.docker.compose.project` (read from its own container labels)
+so side-by-side channels never cross-read. Static tail-on-load with a line-count
+selector, client-side level/text filters, manual + auto-refresh polling, and a
+**Download .log** button. Access is a **per-source min-role policy** (v1: all
+three sources Admin+, Moderators excluded); the nav link, the source dropdown,
+and every request check the same table, so opening a source to a different group
+is a one-line change. (The durable Redis audit stream and live SSE follow remain
+deferred — see [`../planning/roadmap.md`](../planning/roadmap.md).)
+
+### Client-IP redaction (`server/src/redact.rs`) — the render-boundary guarantee
+
+The server's own tracing never logs raw client IPs, but the Logs tab renders
+output the server doesn't author (redis, watchtower, dependencies), which can
+print client addresses. So **every** line is passed through `redact_ips` before
+it leaves the handler (page, refresh `/data`, and `/download` alike): each
+IPv4/IPv6 literal is rewritten to a `⟨ip:…⟩` token — `HMAC-SHA256(key,
+salt‖ip)`, truncated. Tokens are deterministic (identical IPs collapse to one,
+so abuse patterns stay visible) but non-reversible: the key is `IP_HASH_PEPPER`
+when set (tokens stable across restarts), else a random per-boot key, so an IP is
+never a weak unkeyed hash. `hash_ip_token` is the same primitive used to log the
+offending client on an admin-login rate-limit rejection. **No raw client IP can
+reach the web surface.**
 
 ## Diagnosing "balls don't cross portals"
 

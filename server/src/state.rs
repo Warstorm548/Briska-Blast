@@ -54,10 +54,28 @@ pub struct AppState {
     /// Lives on AppState so handlers (/start, /ws/session/:code) receive
     /// it transparently via the same State<AppState> they already take.
     pub signal_hub: Arc<SignalHub>,
+    /// HMAC key for pseudonymizing client IPs before they reach any log or the
+    /// admin Logs tab (see `redact.rs`). Derived once at boot from
+    /// `Config::ip_hash_pepper`, or a random 32 bytes when that's unset — so a
+    /// raw IP is never hashed with an empty/guessable key.
+    pub ip_hash_key: Arc<Vec<u8>>,
 }
 
 impl AppState {
     pub fn new(redis: Pool, config: Config, update_tx: Arc<mpsc::Sender<UpdateCommand>>) -> Self {
+        // Derive the IP-redaction key once. A configured pepper keeps `⟨ip:…⟩`
+        // tokens stable across restarts; without one we still key on a random
+        // per-boot secret, so an IP is never hashed with a guessable key.
+        let ip_hash_key = if config.ip_hash_pepper.is_empty() {
+            tracing::warn!(
+                "IP_HASH_PEPPER unset — IP redaction uses a random per-boot key \
+                 (tokens won't correlate across restarts). Set it in .env for stable tokens."
+            );
+            Arc::new(rand::random::<[u8; 32]>().to_vec())
+        } else {
+            tracing::info!("IP redaction keyed by IP_HASH_PEPPER");
+            Arc::new(config.ip_hash_pepper.clone().into_bytes())
+        };
         Self {
             redis,
             config: Arc::new(config),
@@ -70,6 +88,7 @@ impl AppState {
             update_tx,
             update_apply_lock: Arc::new(Mutex::new(())),
             signal_hub: Arc::new(SignalHub::default()),
+            ip_hash_key,
         }
     }
 }
