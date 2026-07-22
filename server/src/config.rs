@@ -48,12 +48,12 @@ pub struct Config {
     /// `{prefix}moderator`. Default `briska-`.
     pub oidc_group_prefix: String,
 
-    /// Secret pepper (HMAC key) for pseudonymizing client IPs before they reach
-    /// any log or the admin Logs tab (see `redact.rs`). Empty ⇒ `AppState`
-    /// generates a random per-boot key instead, so IPs are still never a weak
-    /// unkeyed hash; setting this only makes the `⟨ip:…⟩` tokens stable across
-    /// restarts (so the same client reads the same across a redeploy). Never
-    /// leaves the server.
+    /// Secret pepper (HMAC key) for the admin Logs tab's client-IP `⟨ip:…⟩`
+    /// tokens (`redact.rs`), applied only at the web render boundary. Empty ⇒
+    /// `AppState` uses a random per-boot key, so tokens are never a weak unkeyed
+    /// hash; setting it only keeps tokens STABLE ACROSS RESTARTS — which matters
+    /// solely for persisted/compared tokens (saved Download `.log`s or a future
+    /// audit stream). Nothing today depends on it. Never leaves the server.
     pub ip_hash_pepper: String,
 }
 
