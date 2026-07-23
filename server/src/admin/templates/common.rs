@@ -102,6 +102,7 @@ pub(super) fn nav_html(active: &str, role: AdminRole, username: &str) -> String 
     let dash_active = if active == "dashboard" { " nav-link-active" } else { "" };
     let users_active = if active == "users" { " nav-link-active" } else { "" };
     let stats_active = if active == "stats" { " nav-link-active" } else { "" };
+    let chatmod_active = if active == "chatmod" { " nav-link-active" } else { "" };
     let logs_active = if active == "logs" { " nav-link-active" } else { "" };
     // Moderators have no Users access, so the link is omitted from both the
     // desktop bar and the drawer (server-side guards enforce this regardless).
@@ -124,6 +125,7 @@ pub(super) fn nav_html(active: &str, role: AdminRole, username: &str) -> String 
         r#"<a href="/admin/dashboard" class="nav-link{dash_active}">Dashboard</a>
     {users_link}
     <a href="/admin/stats" class="nav-link{stats_active}">Stats</a>
+    <a href="/admin/chatmod" class="nav-link{chatmod_active}">Chat-Mod</a>
     {logs_link}"#
     );
     // A real <button> toggles the mobile drawer (with aria-controls /

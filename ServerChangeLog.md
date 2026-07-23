@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.28.0] — 2026-07-22
+
+**Chat-Mod tab (UI preview).** New chat-moderation panel in the admin panel —
+layout phase only, everything renders baked-in placeholder data and no
+moderation action is wired yet. Two views share a full-width three-column shell
+(the first tab to span the whole viewport instead of the `.page` container):
+the landing page shows an "Active Game Sessions" list (red-dot badge on
+sessions with flags) beside a "Flagged Messages" overview, and clicking either
+enters the session view — chat transcript with blacklisted words highlighted
+red, per-message select checkboxes, a moderator chat bar, and a Quick Access
+Tools panel (warn+delete, suspend, ban, blacklist/approve word, moderator chat
+settings). A right-hand "Chat Nav" lists upcoming sub-pages (Settings,
+Whitelist, Banned List, Suspensions, Chat Audit Logs, Mod User Settings) as
+inert placeholders. On narrow screens both side panels collapse into edge
+drawers toggled by corner burgers. Accessible to all admin roles (Moderator+).
+Wiring — live session data, SQLite-backed moderation datasets with per-role
+access, and server-assigned 12-char message-body identifiers — lands in later
+phases.
+
 ## [0.27.2] — 2026-07-22
 
 **Logs tab: reliable own-project resolution for same-host multi-channel.** When

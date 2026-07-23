@@ -2,6 +2,7 @@
 //! `common` module for the shared escaper / stylesheet / nav bar. The page
 //! renderers are re-exported here so callers keep using `templates::{...}`.
 
+mod chatmod;
 mod common;
 mod dashboard;
 mod login;
@@ -9,6 +10,10 @@ mod logs;
 mod stats;
 mod users;
 
+pub use chatmod::{
+    chatmod_landing_page, chatmod_session_page, ChatMessage, ChatSession, FlaggedBody,
+    FlaggedSession,
+};
 pub use dashboard::{dashboard_page, DashboardData};
 pub use login::{force_password_page, login_page, notice_page, LoginView};
 pub use logs::logs_page;
