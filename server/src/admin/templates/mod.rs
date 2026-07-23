@@ -12,7 +12,7 @@ mod users;
 
 pub use chatmod::{
     chatmod_landing_page, chatmod_session_page, ChatMessage, ChatSession, FlaggedBody,
-    FlaggedSession,
+    FlaggedSession, PreviewLine,
 };
 pub use dashboard::{dashboard_page, DashboardData};
 pub use login::{force_password_page, login_page, notice_page, LoginView};
