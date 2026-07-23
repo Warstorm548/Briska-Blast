@@ -5,6 +5,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.28.0] — 2026-07-23
+
+**Chat-Mod tab (UI preview).** New chat-moderation panel in the admin panel —
+layout phase only, everything renders baked-in placeholder data and no
+moderation action is wired yet. Two views share a full-width three-column shell
+(the first tab to span the whole viewport instead of the `.page` container):
+the landing page shows an "Active Game Sessions" list (red-dot badge on
+sessions with flags, drag-resizable width on desktop) beside a "Flagged
+Messages" overview, and clicking either enters the session view — chat
+transcript with a bottom-pinned moderator chat bar, per-message select
+checkboxes, and a grouped Quick Access Tools panel. A right-hand "Chat Nav"
+lists upcoming sub-pages (Settings, Moderation Lists, Suspensions, Chat Audit
+Logs, Mod User Settings) as inert placeholders. On narrow screens both side
+panels collapse into edge drawers toggled by corner burgers; on desktop every
+region scrolls independently under a pinned header. Accessible to all admin
+roles (Moderator+). Wiring — live session data, SQLite-backed moderation
+datasets with per-role access, and server-assigned 12-char message-body
+identifiers — lands in later phases.
+
+### Added
+
+- **Identity lines** everywhere a message appears: username, canonical
+  9-digit player id (shared `PlayerId::from_counter`), and message body id —
+  all ids click/tap-to-copy. Player ids and body ids are moderation-surface
+  only, never shown in game.
+- **Blacklisted-word highlighting** in session previews, flagged cards, and
+  the transcript; transcript occurrences are per-instance tappable toggles
+  feeding the Approve Word selection, with a "select all matching words"
+  widener. Approve restores a word contextually — the blacklist itself is
+  unchanged.
+- **Player Actions tool group**: shared multi-target player-id field
+  (`;`-separated, auto-fed by the message checkboxes), Warn + Delete Chat
+  Body, Warn Only, Suspend (three split duration fields, at least one
+  required) and Ban User (Chat) — each with an audited, player-facing reason
+  line. Ban opens a confirm/cancel dialog spelling out chat-privilege scope;
+  cancelling sends and records nothing.
+- **Word Tools group**: multi-word blacklist input (`;`-separated) with an
+  audit-logged reason, and Approve Word with live selection status.
+- **Module-doc contracts** for the wiring phase: censoring (game-side
+  blackout/hash until per-occurrence approval), audit records (reason +
+  username + player id + body + chat-history snapshot into SQLite), and
+  account-wide chat-privilege scope (Suspend = temporary mute, Ban =
+  permanent until removed from the ban list).
+
 ## [0.27.2] — 2026-07-22
 
 **Logs tab: reliable own-project resolution for same-host multi-channel.** When

@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod chatmod;
 pub mod dashboard;
 pub mod logs;
 pub mod oidc;
