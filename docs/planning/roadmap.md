@@ -22,6 +22,13 @@ Work intentionally deferred until after the initial production deployment of the
 - **Still deferred (NOT built)**: the durable **Redis audit-event stream** that survives container recreation on update (the "what happened over time" view — container logs reset when Watchtower recreates the container), and **live streaming follow** (bollard `follow:true` via SSE/WS) vs the current static-tail-on-load + polling. Revisit when a persistent audit trail is needed.
 - **Related**: leverages the existing bollard usage in `server/src/update/docker.rs`; auth via `server/src/admin/mod.rs::require_session`; the durable-audit option overlaps with the **Score / replay / audit persistence** entry's keyspace conventions.
 
+### Chat Audit Logs — statistics from the current filter selection
+
+- **What**: On the Chat Audit Logs page (Chat-Mod tab), surface summary statistics computed over the **currently filtered** rows — e.g. counts per action / per moderator / per group (including `System`), flags over the selected time range — recomputing as the Advanced Filter and category dropdown change.
+- **Why deferred**: The audit page is still in its UI-layout phase (baked-in placeholder data, filters inert). Stats only make sense once the filters and real audit records (SQLite) are wired, so they reflect live counts rather than static samples.
+- **Trigger to start**: After the audit log is wired to real data and the Advanced Filter is functional — the stats hang off the same filtered query.
+- **Related**: `server/src/admin/templates/chatmod.rs` (the category audit tables + `audit_filter_panel`); overlaps with the durable audit-event stream noted under the Admin Logs tab entry.
+
 ### Pocket ID admin SSO
 
 - **What**: Replace the bcrypt password login at `/admin/login` with Pocket ID OIDC (passkey-based SSO).

@@ -11,8 +11,9 @@ mod stats;
 mod users;
 
 pub use chatmod::{
-    chatmod_landing_page, chatmod_session_page, ChatMessage, ChatSession, FlaggedBody,
-    FlaggedSession, PreviewLine,
+    chatmod_audit_page, chatmod_landing_page, chatmod_session_page, AuditLog, ChatMessage,
+    ChatSession, FlaggedBody, FlaggedSession, ListAuditEntry, PlayerAuditEntry, PreviewLine,
+    SystemAuditEntry, WordAuditEntry,
 };
 pub use dashboard::{dashboard_page, DashboardData};
 pub use login::{force_password_page, login_page, notice_page, LoginView};

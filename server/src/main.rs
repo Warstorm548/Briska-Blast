@@ -154,6 +154,7 @@ async fn main() {
         // Chat-Mod tab (UI-layout preview — placeholder data until wired).
         .route("/admin/chatmod", get(admin::chatmod::chatmod_page))
         .route("/admin/chatmod/session/:code", get(admin::chatmod::chatmod_session_page))
+        .route("/admin/chatmod/audit", get(admin::chatmod::chatmod_audit_page))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

@@ -67,6 +67,117 @@ pub struct ChatMessage {
     pub flagged_word: Option<String>,
 }
 
+/// The Chat Audit Logs are split into category tables (chosen by a dropdown),
+/// each with its own direct headers. Every category shares the same leading
+/// "who / when / what / why" columns — Timestamp, Display Name, Group, Action,
+/// Reason — then adds its own subject/evidence columns. `AuditEntry` groups the
+/// three category records so a handler can pass all of them to the page.
+///
+/// (The admin-panel "Access" log — role/setting changes — deliberately lives
+/// elsewhere; it does not pertain to chat moderation.)
+///
+/// Automated (program-initiated) actions carry `Group = "System"`. Those that
+/// enforce on a player (auto-delete/suspend/ban) land in `players` like any
+/// other player action; the `system` table is only for automated events that
+/// aren't a Player/Word/List enforcement — chiefly word flagging.
+pub struct AuditLog {
+    pub players: Vec<PlayerAuditEntry>,
+    pub words: Vec<WordAuditEntry>,
+    pub lists: Vec<ListAuditEntry>,
+    pub system: Vec<SystemAuditEntry>,
+}
+
+/// **Player** category — an action taken on a player's chat privileges. One
+/// record per (action instance, target player); a bulk action spanning several
+/// players splits into one record per player, and repeated actions on the same
+/// player are never merged. See the audit-log contract in `admin::chatmod`.
+pub struct PlayerAuditEntry {
+    /// When the action was taken, shown at the start of the row.
+    pub timestamp: String,
+    /// The acting moderator's display name.
+    pub moderator_display: String,
+    /// The acting moderator's role/group (e.g. `Admin`, `Moderator`).
+    pub moderator_group: String,
+    /// The action taken (e.g. `Ban`, `Suspend 1d`, `Warn + Delete`).
+    pub action: String,
+    /// Reason recorded with the action (audit-logged, may be player-facing).
+    pub reason: String,
+    /// Target player's username.
+    pub target_username: String,
+    /// Target player's numeric id, rendered zero-padded via
+    /// [`PlayerId::from_counter`]. Moderation surfaces only.
+    pub target_player_id: u64,
+    /// Identifiers of the message bodies this action covered — any tool may act
+    /// on zero, one, or several of the player's bodies at once. Rendered as the
+    /// single id, an em-dash when body-less, or a `×N bodies` disclosure.
+    pub body_ids: Vec<String>,
+    /// Blacklisted word(s) tied to the record; rendered as red chips (em-dash
+    /// when empty).
+    pub flagged_words: Vec<String>,
+    /// Snapshot of the chat as it stood when the action was taken — surfaced
+    /// read-only in the Transcript overlay.
+    pub snapshot: Vec<ChatMessage>,
+}
+
+/// **Word** category — blacklist/approve actions on a word. Approve targets a
+/// specific occurrence (so it carries the sender + body + snapshot); Blacklist
+/// is a global add with no player/body.
+pub struct WordAuditEntry {
+    pub timestamp: String,
+    pub moderator_display: String,
+    pub moderator_group: String,
+    /// `Blacklist Word` or `Approve Word`.
+    pub action: String,
+    pub reason: String,
+    /// The word the action was about.
+    pub word: String,
+    /// The occurrence's sender (Approve only); `None` for a global Blacklist.
+    pub target_username: Option<String>,
+    pub target_player_id: Option<u64>,
+    /// The approved occurrence's bodies; empty for a global Blacklist.
+    pub body_ids: Vec<String>,
+    /// Chat snapshot; empty ⇒ the row's Transcript cell is a plain dash.
+    pub snapshot: Vec<ChatMessage>,
+}
+
+/// **List** category — moderation-list edits (un-ban, lift suspension, whitelist
+/// changes). Targets a player and names which list; no chat snapshot.
+pub struct ListAuditEntry {
+    pub timestamp: String,
+    pub moderator_display: String,
+    pub moderator_group: String,
+    /// `Remove Ban`, `Lift Suspension`, `Whitelist Add`, `Whitelist Remove`.
+    pub action: String,
+    pub reason: String,
+    pub target_username: String,
+    pub target_player_id: u64,
+    /// Which list was edited: `Ban List`, `Suspensions`, `Whitelist`.
+    pub list: String,
+}
+
+/// **System** category — an automated event that isn't a direct enforcement on a
+/// player (auto-enforcement lands in `PlayerAuditEntry` with `Group = System`).
+/// Chiefly word flagging: the system surfacing a blacklisted word to moderators.
+/// `Group` is always `System`, so the field is implied rather than stored.
+pub struct SystemAuditEntry {
+    pub timestamp: String,
+    /// The automated process (the Display Name slot): `Word Filter`, `Auto-Mod`.
+    pub source: String,
+    /// `Flag Word`, and future non-enforcement automated actions.
+    pub action: String,
+    /// The rule/condition that fired (the Reason slot): `Matched blacklist`.
+    pub trigger: String,
+    /// The word the event was about.
+    pub word: String,
+    /// The player whose message the event references.
+    pub target_username: String,
+    pub target_player_id: u64,
+    /// The referenced message bodies.
+    pub body_ids: Vec<String>,
+    /// Chat snapshot for the Transcript overlay.
+    pub snapshot: Vec<ChatMessage>,
+}
+
 /// Page-specific styles, appended after the shared `{CSS}`. A plain const
 /// (rather than text inside `format!`) so none of the braces need doubling.
 const CHATMOD_CSS: &str = "
@@ -122,7 +233,7 @@ body.cm-resizing { cursor: col-resize; user-select: none; }
 .cm-session-title { font-size: 0.95rem; font-weight: 600; margin-bottom: 3px; }
 .cm-code { color: #e94560; }
 .cm-session-sub { font-size: 0.82rem; color: #8b949e; }
-.cm-close { color: #8b949e; text-decoration: none; font-size: 1.05rem; line-height: 1; padding: 4px 8px; border-radius: 6px; }
+.cm-close { color: #8b949e; text-decoration: none; font-size: 1.05rem; line-height: 1; padding: 4px 8px; border-radius: 6px; background: none; border: none; cursor: pointer; font-family: inherit; }
 .cm-close:hover { color: #f85149; background: #2d1117; }
 .cm-session-body { display: grid; grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr); gap: 16px; }
 .cm-chat { display: flex; flex-direction: column; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 14px; min-height: 56vh; max-height: 76vh; }
@@ -173,6 +284,65 @@ body.cm-resizing { cursor: col-resize; user-select: none; }
   .cm-tools { max-height: none; }
   .cm-tools .cm-panel-scroll { flex: none; min-height: auto; overflow-y: visible; }
 }
+/* right nav: the live Chat Audit Logs entry — a link, or the current-page
+   marker — overriding the inert placeholders' cursor:not-allowed */
+.cm-nav-link { color: #c9d1d9; text-decoration: none; cursor: pointer; }
+.cm-nav-link:hover { color: #fff; background: #161b22; }
+.cm-nav-link:focus-visible { outline: 1px solid #388bfd; outline-offset: -1px; }
+.cm-nav-current { color: #e94560; cursor: default; }
+/* audit logs: advanced-filter placeholder bar + wide scrollable ledger table */
+.cm-audit-filter { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+.cm-audit-filter-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #8b949e; margin-bottom: 6px; }
+.cm-audit-filter-note { font-size: 0.8rem; color: #6e7681; min-height: 34px; }
+/* category dropdown: picks which log table + filter renders */
+.cm-audit-select { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.cm-audit-select label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #8b949e; }
+.cm-audit-select select { min-width: 180px; }
+/* per-table Advanced Filter: shared spine group beside the table-specific one */
+.cm-filter-grid { display: flex; flex-wrap: wrap; gap: 14px; }
+.cm-filter-group { flex: 1; min-width: 260px; border: 1px solid #30363d; border-radius: 8px; padding: 6px 14px 14px; margin: 0; display: flex; flex-wrap: wrap; gap: 10px 14px; }
+.cm-filter-group legend { font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #8b949e; padding: 0 6px; }
+.cm-filter-group label { display: flex; flex-direction: column; gap: 4px; font-size: 0.7rem; color: #8b949e; }
+.cm-filter-group input, .cm-filter-group select { min-width: 130px; }
+.cm-audit-list { display: inline-block; background: #21262d; border: 1px solid #30363d; border-radius: 10px; padding: 1px 9px; font-size: 0.74rem; color: #c9d1d9; }
+/* System (automated) actor badge — distinct from the red word flags so
+   program-initiated rows stand out in any table */
+.cm-audit-sys { display: inline-block; background: #10262b; border: 1px solid #1f6f78; border-radius: 10px; padding: 1px 9px; font-size: 0.72rem; font-weight: 600; color: #39c0c8; }
+.cm-audit-scroll { border: 1px solid #30363d; border-radius: 8px; overflow: auto; max-height: 68vh; }
+.cm-audit-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; white-space: nowrap; }
+.cm-audit-table th { position: sticky; top: 0; background: #161b22; text-align: left; font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #8b949e; padding: 10px 12px; border-bottom: 1px solid #30363d; }
+/* sortable column header: label + a flip-arrow (triangle with a line under it)
+   that rotates 180° to reverse the row order */
+.cm-sort { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; padding: 0; cursor: pointer; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; }
+.cm-sort:hover, .cm-sort[data-dir] { color: #c9d1d9; }
+.cm-sort:focus-visible { outline: 1px solid #388bfd; outline-offset: 2px; }
+.cm-sort-ico { display: inline-block; font-size: 0.85em; line-height: 1; border-bottom: 1px solid currentColor; padding-bottom: 1px; transition: transform .15s ease; }
+.cm-sort[data-dir='asc'] .cm-sort-ico { transform: rotate(180deg); }
+.cm-audit-table td { padding: 10px 12px; border-bottom: 1px solid #21262d; color: #c9d1d9; vertical-align: top; }
+.cm-audit-table tbody tr:last-child td { border-bottom: none; }
+.cm-audit-table tbody tr:hover td { background: #10151c; }
+.cm-audit-ts { color: #8b949e; }
+.cm-audit-words { white-space: normal; }
+.cm-audit-words .cm-flag { margin-right: 4px; }
+.cm-audit-none { color: #6e7681; }
+/* multi-body cell: a ×N disclosure condensing one player's covered bodies */
+.cm-audit-bodies > summary { cursor: pointer; list-style: none; }
+.cm-audit-bodies > summary::-webkit-details-marker { display: none; }
+.cm-audit-badge { display: inline-block; background: #21262d; border: 1px solid #30363d; border-radius: 10px; padding: 1px 9px; font-size: 0.72rem; color: #c9d1d9; }
+.cm-audit-bodies > summary:hover .cm-audit-badge, .cm-audit-bodies[open] > summary .cm-audit-badge { border-color: #8b949e; }
+.cm-audit-bodylist { list-style: none; margin: 8px 0 0; padding: 0; }
+.cm-audit-bodylist li { padding: 2px 0; }
+/* snapshot: mark the message bodies this action actually covered */
+.cm-msg-targeted { border-left: 3px solid #d29922; }
+.cm-msg-tag { display: inline-block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1px; color: #d29922; border: 1px solid #d29922; border-radius: 10px; padding: 0 6px; }
+/* transcript snapshot overlay: wider/taller than the shared 380px modal card so
+   the chat reads cleanly; the shared semi-transparent backdrop keeps the page
+   visible behind it */
+.cm-audit-modal { max-width: 720px; max-height: 82vh; padding: 0; display: flex; flex-direction: column; }
+.cm-audit-modal-head { display: flex; align-items: flex-start; gap: 12px; padding: 20px 22px 14px; border-bottom: 1px solid #30363d; }
+.cm-audit-modal-head > div { flex: 1; min-width: 0; }
+.cm-audit-modal-head .section-sub { margin-bottom: 0; overflow-wrap: anywhere; }
+.cm-audit-modal-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 22px 20px; }
 ";
 
 /// The center sub-header shared by both views: title bar with a burger at each
@@ -184,13 +354,25 @@ const SUBHEAD_HTML: &str = r#"<div class="cm-subhead">
   <button type="button" class="cm-burger" aria-label="Open chat nav panel" aria-controls="cm-right" aria-expanded="false" onclick="bbCmToggle(this,'right')">&#9776;</button>
 </div>"#;
 
-/// The right-hand "Chat Nav" secondary navigation. Every entry is a visual
-/// placeholder until its sub-page is designed — rendered inert on purpose.
-const CHAT_NAV_HTML: &str = r#"<span class="cm-nav-item">Settings<span class="cm-soon">soon</span></span>
+/// The right-hand "Chat Nav" secondary navigation. Four entries stay inert
+/// visual placeholders until their sub-pages are designed; "Chat Audit Logs" is
+/// live — a link to `audit_href`, or the active current-page marker (no href)
+/// when `audit_current` is set.
+fn chat_nav_html(audit_href: &str, audit_current: bool) -> String {
+    let audit = if audit_current {
+        r#"<span class="cm-nav-item cm-nav-current" aria-current="page">Chat Audit Logs</span>"#
+            .to_string()
+    } else {
+        format!(r#"<a class="cm-nav-item cm-nav-link" href="{audit_href}">Chat Audit Logs</a>"#)
+    };
+    format!(
+        r#"<span class="cm-nav-item">Settings<span class="cm-soon">soon</span></span>
         <span class="cm-nav-item">Moderation Lists<span class="cm-soon">soon</span></span>
         <span class="cm-nav-item">Suspensions<span class="cm-soon">soon</span></span>
-        <span class="cm-nav-item">Chat Audit Logs<span class="cm-soon">soon</span></span>
-        <span class="cm-nav-item">Mod User Settings<span class="cm-soon">soon</span></span>"#;
+        {audit}
+        <span class="cm-nav-item">Mod User Settings<span class="cm-soon">soon</span></span>"#
+    )
+}
 
 /// The session view's "Quick Access Tools" panel. Deliberately styled as the
 /// finished controls (not grayed out) so the final look can be judged — but
@@ -438,11 +620,19 @@ fn chatmod_shell(
     center: &str,
     sessions: &[ChatSession],
     active_code: Option<&str>,
+    audit_current: bool,
     role: AdminRole,
     username: &str,
 ) -> String {
     let nav = nav_html("chatmod", role, username);
     let session_cards = session_list_html(sessions, active_code);
+    // The Chat Nav "Chat Audit Logs" link remembers the session the moderator is
+    // in (via ?from=), so the audit page's X can return there.
+    let audit_href = match active_code {
+        Some(code) => format!("/admin/chatmod/audit?from={}", escape(code)),
+        None => "/admin/chatmod/audit".to_string(),
+    };
+    let chat_nav = chat_nav_html(&audit_href, audit_current);
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -562,6 +752,38 @@ window.bbCmBanAsk=function(){{
 }};
 window.bbCmBanClose=function(){{var m=document.getElementById('cm-ban-modal');if(m)m.style.display='none';}};
 document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCmBanClose();}});
+// Audit-log transcript snapshots: each Chat Audit Logs row's Transcript button
+// opens that row's own hidden overlay (index-aligned with the table). Close via
+// the overlay X, Escape, or a backdrop click. Preview only — the wiring phase
+// fetches the real snapshot on demand instead of pre-rendering one per row.
+window.bbCmAuditOpen=function(i){{var m=document.getElementById('cm-audit-back-'+i);if(m)m.style.display='flex';}};
+window.bbCmAuditCloseAll=function(){{document.querySelectorAll('.cm-audit-back').forEach(function(m){{m.style.display='none';}});}};
+document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCmAuditCloseAll();}});
+// Chat Audit Logs category dropdown: show the picked category's view, hide the
+// rest. Each view carries its own table + Advanced Filter, so switching swaps
+// both at once.
+window.bbCmAuditCat=function(sel){{document.querySelectorAll('.cm-audit-view').forEach(function(v){{v.hidden=(v.getAttribute('data-cat')!==sel.value);}});}};
+// Sortable audit columns (Timestamp, Player ID): reorder the table's rows by the
+// clicked column and flip the arrow. First click sorts ascending (reversing the
+// default newest-first / server order); clicking again toggles. Only one column
+// sorts a table at a time. Timestamps (ISO-ish) and zero-padded ids compare
+// correctly with a numeric-aware string compare.
+window.bbCmSort=function(btn){{
+  var th=btn.closest('th'), table=btn.closest('table');
+  if(!th||!table||!table.tBodies[0])return;
+  var col=th.cellIndex, tbody=table.tBodies[0];
+  var dir=btn.getAttribute('data-dir')==='asc'?'desc':'asc';
+  table.querySelectorAll('.cm-sort').forEach(function(b){{if(b!==btn){{b.removeAttribute('data-dir');}}}});
+  btn.setAttribute('data-dir',dir);
+  var rows=Array.prototype.slice.call(tbody.rows);
+  rows.sort(function(a,b){{
+    var x=(a.cells[col]?a.cells[col].textContent:'').trim();
+    var y=(b.cells[col]?b.cells[col].textContent:'').trim();
+    var r=x.localeCompare(y,undefined,{{numeric:true}});
+    return dir==='asc'?r:-r;
+  }});
+  rows.forEach(function(r){{tbody.appendChild(r);}});
+}};
 // Desktop-only resize of the sessions panel: drag writes the grid's CSS
 // variable, localStorage persists it across the landing/session page loads.
 (function(){{
@@ -591,8 +813,7 @@ document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCmBanClos
 }})();
 </script>
 </body>
-</html>"#,
-        chat_nav = CHAT_NAV_HTML,
+</html>"#
     )
 }
 
@@ -615,7 +836,7 @@ pub fn chatmod_landing_page(
   </div>
 </div>"#
     );
-    chatmod_shell(&center, sessions, None, role, username)
+    chatmod_shell(&center, sessions, None, false, role, username)
 }
 
 /// GET /admin/chatmod/session/:code — the entered-session view: transcript +
@@ -651,7 +872,557 @@ pub fn chatmod_session_page(
   {TOOLS_HTML}
 </div>"#
     );
-    chatmod_shell(&center, sessions, Some(code), role, username)
+    chatmod_shell(&center, sessions, Some(code), false, role, username)
+}
+
+/// The Body Id table cell: the single id (tap-to-copy), an em-dash for a
+/// body-less action, or a `×N bodies` disclosure listing each id (all
+/// tap-to-copy) when one entry covered several of that player's messages.
+fn audit_bodies_cell(body_ids: &[String]) -> String {
+    match body_ids {
+        [] => r#"<span class="cm-audit-none">&mdash;</span>"#.to_string(),
+        [one] => format!(
+            r#"<span class="cm-bodyid mono" data-copy="{id}" role="button" tabindex="0" title="Copy body ID">{id}</span>"#,
+            id = escape(one)
+        ),
+        many => {
+            let items = many
+                .iter()
+                .map(|id| {
+                    format!(
+                        r#"<li><span class="cm-bodyid mono" data-copy="{id}" role="button" tabindex="0" title="Copy body ID">{id}</span></li>"#,
+                        id = escape(id)
+                    )
+                })
+                .collect::<String>();
+            format!(
+                r#"<details class="cm-audit-bodies"><summary><span class="cm-audit-badge">&times;{n} bodies</span></summary><ul class="cm-audit-bodylist">{items}</ul></details>"#,
+                n = many.len()
+            )
+        }
+    }
+}
+
+/// Inline body-id descriptor for the snapshot overlay header: the single id, a
+/// `×N bodies` count with the list, or a note when the action was body-less.
+fn audit_bodies_inline(body_ids: &[String]) -> String {
+    match body_ids {
+        [] => r#"<span class="cm-audit-none">No specific body</span>"#.to_string(),
+        [one] => format!(r#"Body ID: <span class="cm-bodyid mono">{}</span>"#, escape(one)),
+        many => {
+            let ids = many
+                .iter()
+                .map(|id| format!(r#"<span class="cm-bodyid mono">{}</span>"#, escape(id)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(r#"&times;{n} bodies: {ids}"#, n = many.len())
+        }
+    }
+}
+
+/// A `Player UserName` + `Player ID` cell pair (the id tap-to-copy), shared by
+/// the tables that target a player. `id` absent ⇒ em-dash (e.g. a global
+/// Blacklist Word action with no specific sender).
+fn audit_player_cells(username: Option<&str>, id: Option<u64>) -> String {
+    let name = match username {
+        Some(u) => escape(u),
+        None => r#"<span class="cm-audit-none">&mdash;</span>"#.to_string(),
+    };
+    let id_cell = match id {
+        Some(id) => {
+            let pid = PlayerId::from_counter(id);
+            format!(
+                r#"<span class="cm-pid mono" data-copy="{pid}" role="button" tabindex="0" title="Copy player ID">{pid}</span>"#
+            )
+        }
+        None => r#"<span class="cm-audit-none">&mdash;</span>"#.to_string(),
+    };
+    format!("<td>{name}</td>\n            <td>{id_cell}</td>")
+}
+
+/// A Transcript cell: a button opening overlay `dom_id` when there's a snapshot,
+/// or a plain dash for actions with no chat context (List rows, Blacklist Word).
+fn audit_transcript_cell(dom_id: &str, has_snapshot: bool) -> String {
+    if has_snapshot {
+        format!(
+            r#"<button type="button" class="btn btn-sm" onclick="bbCmAuditOpen('{dom_id}')">Transcript</button>"#
+        )
+    } else {
+        r#"<span class="cm-audit-none">&mdash;</span>"#.to_string()
+    }
+}
+
+/// The Group cell — a distinct badge when the actor is the program
+/// (`Group = System`), so automated rows stand out in any table; plain text for
+/// the human roles (Admin / Moderator / Superadmin).
+fn audit_group_cell(group: &str) -> String {
+    if group == "System" {
+        r#"<span class="cm-audit-sys">System</span>"#.to_string()
+    } else {
+        escape(group)
+    }
+}
+
+/// **Player** category table (today's headers, unchanged): one row per
+/// (action, target player); a player's covered bodies condense into a
+/// `×N bodies` disclosure, flagged words render as red chips. A row's actor may
+/// be the program (`Group = System`, an auto-enforcement rule) — rendered
+/// identically but with the System badge.
+fn player_audit_table_html(entries: &[PlayerAuditEntry]) -> String {
+    if entries.is_empty() {
+        return r#"<p class="cm-empty">No player actions recorded yet.</p>"#.to_string();
+    }
+    let rows = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let words = if e.flagged_words.is_empty() {
+                r#"<span class="cm-audit-none">&mdash;</span>"#.to_string()
+            } else {
+                e.flagged_words
+                    .iter()
+                    .map(|w| format!(r#"<span class="cm-flag">{}</span>"#, escape(w)))
+                    .collect::<String>()
+            };
+            format!(
+                r#"<tr>
+            <td class="cm-audit-ts mono">{ts}</td>
+            <td>{mod_name}</td>
+            <td>{group}</td>
+            <td>{action}</td>
+            <td>{reason}</td>
+            {player}
+            <td>{bodies}</td>
+            <td class="cm-audit-words">{words}</td>
+            <td>{transcript}</td>
+          </tr>"#,
+                ts = escape(&e.timestamp),
+                mod_name = escape(&e.moderator_display),
+                group = audit_group_cell(&e.moderator_group),
+                action = escape(&e.action),
+                reason = escape(&e.reason),
+                player = audit_player_cells(Some(&e.target_username), Some(e.target_player_id)),
+                bodies = audit_bodies_cell(&e.body_ids),
+                transcript = audit_transcript_cell(&format!("player-{i}"), !e.snapshot.is_empty()),
+            )
+        })
+        .collect::<String>();
+    format!(
+        r#"<table class="cm-audit-table">
+        <thead>
+          <tr>
+            <th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Display Name</th><th>Group</th><th>Action</th><th>Reason</th><th>Player UserName</th><th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Player ID<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Body Id</th><th>Flagged Words</th><th>Transcript</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows}
+        </tbody>
+      </table>"#
+    )
+}
+
+/// **Word** category table: blacklist/approve actions keyed by the word, with
+/// the occurrence's sender + body when the action was an Approve.
+fn word_audit_table_html(entries: &[WordAuditEntry]) -> String {
+    if entries.is_empty() {
+        return r#"<p class="cm-empty">No word actions recorded yet.</p>"#.to_string();
+    }
+    let rows = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            format!(
+                r#"<tr>
+            <td class="cm-audit-ts mono">{ts}</td>
+            <td>{mod_name}</td>
+            <td>{group}</td>
+            <td>{action}</td>
+            <td>{reason}</td>
+            <td><span class="cm-flag">{word}</span></td>
+            {player}
+            <td>{bodies}</td>
+            <td>{transcript}</td>
+          </tr>"#,
+                ts = escape(&e.timestamp),
+                mod_name = escape(&e.moderator_display),
+                group = audit_group_cell(&e.moderator_group),
+                action = escape(&e.action),
+                reason = escape(&e.reason),
+                word = escape(&e.word),
+                player = audit_player_cells(e.target_username.as_deref(), e.target_player_id),
+                bodies = audit_bodies_cell(&e.body_ids),
+                transcript = audit_transcript_cell(&format!("word-{i}"), !e.snapshot.is_empty()),
+            )
+        })
+        .collect::<String>();
+    format!(
+        r#"<table class="cm-audit-table">
+        <thead>
+          <tr>
+            <th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Display Name</th><th>Group</th><th>Action</th><th>Reason</th><th>Word</th><th>Player UserName</th><th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Player ID<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Body Id</th><th>Transcript</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows}
+        </tbody>
+      </table>"#
+    )
+}
+
+/// **List** category table: moderation-list edits, targeting a player and
+/// naming which list. No chat snapshot.
+fn list_audit_table_html(entries: &[ListAuditEntry]) -> String {
+    if entries.is_empty() {
+        return r#"<p class="cm-empty">No list actions recorded yet.</p>"#.to_string();
+    }
+    let rows = entries
+        .iter()
+        .map(|e| {
+            format!(
+                r#"<tr>
+            <td class="cm-audit-ts mono">{ts}</td>
+            <td>{mod_name}</td>
+            <td>{group}</td>
+            <td>{action}</td>
+            <td>{reason}</td>
+            {player}
+            <td><span class="cm-audit-list">{list}</span></td>
+          </tr>"#,
+                ts = escape(&e.timestamp),
+                mod_name = escape(&e.moderator_display),
+                group = audit_group_cell(&e.moderator_group),
+                action = escape(&e.action),
+                reason = escape(&e.reason),
+                player = audit_player_cells(Some(&e.target_username), Some(e.target_player_id)),
+                list = escape(&e.list),
+            )
+        })
+        .collect::<String>();
+    format!(
+        r#"<table class="cm-audit-table">
+        <thead>
+          <tr>
+            <th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Display Name</th><th>Group</th><th>Action</th><th>Reason</th><th>Player UserName</th><th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Player ID<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>List</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows}
+        </tbody>
+      </table>"#
+    )
+}
+
+/// **System** category table: automated non-enforcement events (word flagging).
+/// Same columns as the Word table, but every row is `Group = System`, the
+/// Display Name is the automated `source`, and Reason holds the `trigger`.
+fn system_audit_table_html(entries: &[SystemAuditEntry]) -> String {
+    if entries.is_empty() {
+        return r#"<p class="cm-empty">No automated actions recorded yet.</p>"#.to_string();
+    }
+    let rows = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            format!(
+                r#"<tr>
+            <td class="cm-audit-ts mono">{ts}</td>
+            <td>{source}</td>
+            <td>{group}</td>
+            <td>{action}</td>
+            <td>{trigger}</td>
+            <td><span class="cm-flag">{word}</span></td>
+            {player}
+            <td>{bodies}</td>
+            <td>{transcript}</td>
+          </tr>"#,
+                ts = escape(&e.timestamp),
+                source = escape(&e.source),
+                group = audit_group_cell("System"),
+                action = escape(&e.action),
+                trigger = escape(&e.trigger),
+                word = escape(&e.word),
+                player = audit_player_cells(Some(&e.target_username), Some(e.target_player_id)),
+                bodies = audit_bodies_cell(&e.body_ids),
+                transcript = audit_transcript_cell(&format!("system-{i}"), !e.snapshot.is_empty()),
+            )
+        })
+        .collect::<String>();
+    format!(
+        r#"<table class="cm-audit-table">
+        <thead>
+          <tr>
+            <th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Display Name</th><th>Group</th><th>Action</th><th>Reason</th><th>Word</th><th>Player UserName</th><th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Player ID<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Body Id</th><th>Transcript</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows}
+        </tbody>
+      </table>"#
+    )
+}
+
+/// Snapshot overlays for the System table, keyed `system-{i}`.
+fn system_audit_modals_html(entries: &[SystemAuditEntry]) -> String {
+    entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| !e.snapshot.is_empty())
+        .map(|(i, e)| {
+            let subject = format!(
+                r#"Word: <span class="cm-flag">{word}</span> &middot; {u} <span class="cm-pid mono">ID {pid}</span>"#,
+                word = escape(&e.word),
+                u = escape(&e.target_username),
+                pid = PlayerId::from_counter(e.target_player_id),
+            );
+            audit_modal_html(&format!("system-{i}"), &e.action, &subject, &e.body_ids, &e.snapshot)
+        })
+        .collect()
+}
+
+/// The per-table Advanced Filter panel: a persistent group (the shared spine —
+/// carries across tables) beside a table-specific group. `actions` populates the
+/// persistent Action dropdown with that table's actions; `specific` is the
+/// table-specific fieldset body. Inert placeholders — not wired.
+///
+/// The From/To time pickers carry `lang="en-GB"` so the native control renders a
+/// 24-hour clock (matching the `… UTC` timestamps) despite the page's `en`
+/// (12-hour) locale. The eventual per-moderator setting owns 12/24h + timezone.
+fn audit_filter_panel(actions: &[&str], specific: &str) -> String {
+    let opts = actions
+        .iter()
+        .map(|a| format!("<option>{}</option>", escape(a)))
+        .collect::<String>();
+    format!(
+        r#"<div class="cm-audit-filter">
+      <p class="cm-audit-filter-title">Advanced Filter</p>
+      <div class="cm-filter-grid">
+        <fieldset class="cm-filter-group">
+          <legend>Applies to all logs</legend>
+          <label>From date<input type="date"></label>
+          <label>To date<input type="date"></label>
+          <label>From time (UTC)<input type="time" lang="en-GB"></label>
+          <label>To time (UTC)<input type="time" lang="en-GB"></label>
+          <label>Moderator<input type="text" placeholder="Display name"></label>
+          <label>Group<select><option>Any</option><option>Admin</option><option>Moderator</option><option>Superadmin</option><option>System</option></select></label>
+          <label>Action<select><option>Any</option>{opts}</select></label>
+          <label>Reason<input type="text" placeholder="Search reason"></label>
+        </fieldset>
+        <fieldset class="cm-filter-group">
+          <legend>This table</legend>
+          {specific}
+        </fieldset>
+      </div>
+      <p class="note">Preview only &mdash; filters are not wired up yet.</p>
+    </div>"#
+    )
+}
+
+/// Read-only snapshot rows for the audit overlay: the live transcript's
+/// message-card look without the select checkboxes or tappable flag toggles —
+/// a frozen record, so blacklisted words use the static red span. Bodies in
+/// `targeted` (the entry's `body_ids`) are flagged as "acted on" so the
+/// moderator sees exactly which messages the action covered.
+fn audit_snapshot_html(snapshot: &[ChatMessage], targeted: &[String]) -> String {
+    if snapshot.is_empty() {
+        return r#"<p class="cm-empty">No chat captured for this action.</p>"#.to_string();
+    }
+    snapshot
+        .iter()
+        .map(|m| {
+            let body = match &m.flagged_word {
+                Some(word) => highlight(&m.body, word),
+                None => escape(&m.body),
+            };
+            let acted = targeted.iter().any(|id| id == &m.body_id);
+            let cls = if acted { " cm-msg-targeted" } else { "" };
+            let tag = if acted {
+                r#" <span class="cm-msg-tag">acted on</span>"#
+            } else {
+                ""
+            };
+            format!(
+                r#"<div class="cm-msg{cls}">
+            <div class="cm-msg-head">
+              <span class="cm-msg-user">{user} <span class="cm-pid mono">ID {pid}</span> <span class="cm-bodyid mono">Body ID: {id}</span>{tag}</span>
+            </div>
+            <div class="cm-msg-body">{body}</div>
+          </div>"#,
+                id = escape(&m.body_id),
+                user = escape(&m.username),
+                pid = PlayerId::from_counter(m.player_id),
+            )
+        })
+        .collect()
+}
+
+/// One hidden snapshot overlay. `dom_id` (e.g. `player-0`, `word-1`) matches the
+/// row's Transcript button. `subject_line` is prebuilt (already-escaped) HTML.
+/// Reuses the shared `.modal-backdrop` (semi-transparent, page shows behind)
+/// with the wider `.cm-audit-modal` card so the transcript reads cleanly.
+fn audit_modal_html(
+    dom_id: &str,
+    action: &str,
+    subject_line: &str,
+    targeted: &[String],
+    snapshot: &[ChatMessage],
+) -> String {
+    let action_e = escape(action);
+    let snap = audit_snapshot_html(snapshot, targeted);
+    format!(
+        r#"<div id="cm-audit-back-{dom_id}" class="modal-backdrop cm-audit-back" onclick="if(event.target===this)bbCmAuditCloseAll()">
+      <div class="modal-card cm-audit-modal" role="dialog" aria-modal="true" aria-label="Chat snapshot for {action_e}">
+        <div class="cm-audit-modal-head">
+          <div>
+            <p class="section-title">Chat Snapshot &mdash; {action_e}</p>
+            <p class="section-sub">{subject_line}</p>
+          </div>
+          <button type="button" class="cm-close" aria-label="Close snapshot" onclick="bbCmAuditCloseAll()">&#10005;</button>
+        </div>
+        <div class="cm-audit-modal-scroll">
+          {snap}
+        </div>
+      </div>
+    </div>"#
+    )
+}
+
+/// Snapshot overlays for the Player table, keyed `player-{i}`.
+fn player_audit_modals_html(entries: &[PlayerAuditEntry]) -> String {
+    entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| !e.snapshot.is_empty())
+        .map(|(i, e)| {
+            let pid = PlayerId::from_counter(e.target_player_id);
+            let subject = format!(
+                r#"{tuser} <span class="cm-pid mono">ID {pid}</span> &middot; {bodies}"#,
+                tuser = escape(&e.target_username),
+                bodies = audit_bodies_inline(&e.body_ids),
+            );
+            audit_modal_html(&format!("player-{i}"), &e.action, &subject, &e.body_ids, &e.snapshot)
+        })
+        .collect()
+}
+
+/// Snapshot overlays for the Word table (Approve occurrences), keyed `word-{i}`.
+fn word_audit_modals_html(entries: &[WordAuditEntry]) -> String {
+    entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| !e.snapshot.is_empty())
+        .map(|(i, e)| {
+            let who = match (&e.target_username, e.target_player_id) {
+                (Some(u), Some(id)) => format!(
+                    r#"{u} <span class="cm-pid mono">ID {pid}</span>"#,
+                    u = escape(u),
+                    pid = PlayerId::from_counter(id),
+                ),
+                _ => r#"<span class="cm-audit-none">global</span>"#.to_string(),
+            };
+            let subject = format!(
+                r#"Word: <span class="cm-flag">{word}</span> &middot; {who}"#,
+                word = escape(&e.word),
+            );
+            audit_modal_html(&format!("word-{i}"), &e.action, &subject, &e.body_ids, &e.snapshot)
+        })
+        .collect()
+}
+
+/// Table-specific Advanced Filter fieldset bodies (inert placeholders).
+const PLAYER_FILTER_SPECIFIC: &str = r#"<label>Player<input type="text" placeholder="Username or ID"></label>
+          <label>Body ID<input type="text" placeholder="Body ID"></label>
+          <label>Flagged word<input type="text" placeholder="Word"></label>"#;
+const WORD_FILTER_SPECIFIC: &str = r#"<label>Word<input type="text" placeholder="Word"></label>
+          <label>Player<input type="text" placeholder="Username or ID (Approve)"></label>"#;
+const LIST_FILTER_SPECIFIC: &str = r#"<label>Player<input type="text" placeholder="Username or ID"></label>
+          <label>List<select><option>Any</option><option>Ban List</option><option>Suspensions</option><option>Whitelist</option></select></label>"#;
+const SYSTEM_FILTER_SPECIFIC: &str = r#"<label>Word<input type="text" placeholder="Word"></label>
+          <label>Player<input type="text" placeholder="Username or ID"></label>
+          <label>Source<input type="text" placeholder="Process (e.g. Word Filter)"></label>"#;
+
+/// GET /admin/chatmod/audit — the Chat Audit Logs view. A dropdown selects which
+/// category log renders: Player, Word, List, or System (automated) — each its own
+/// table with direct headers and its own Advanced Filter (a shared spine +
+/// table-specific fields). Player/Word-Approve/System rows carry a chat-snapshot
+/// overlay opened from the Transcript button. `close_href` is the context-aware X
+/// target — the landing page, or the session the moderator had open.
+pub fn chatmod_audit_page(
+    log: &AuditLog,
+    sessions: &[ChatSession],
+    close_href: &str,
+    role: AdminRole,
+    username: &str,
+) -> String {
+    let close = escape(close_href);
+    let player_view = format!(
+        r#"{filter}
+<div class="cm-audit-scroll">
+  {table}
+</div>"#,
+        filter = audit_filter_panel(
+            &["Warn Only", "Warn + Delete", "Suspend", "Ban"],
+            PLAYER_FILTER_SPECIFIC
+        ),
+        table = player_audit_table_html(&log.players),
+    );
+    let word_view = format!(
+        r#"{filter}
+<div class="cm-audit-scroll">
+  {table}
+</div>"#,
+        filter = audit_filter_panel(&["Blacklist Word", "Approve Word"], WORD_FILTER_SPECIFIC),
+        table = word_audit_table_html(&log.words),
+    );
+    let list_view = format!(
+        r#"{filter}
+<div class="cm-audit-scroll">
+  {table}
+</div>"#,
+        filter = audit_filter_panel(
+            &["Remove Ban", "Lift Suspension", "Whitelist Add", "Whitelist Remove"],
+            LIST_FILTER_SPECIFIC
+        ),
+        table = list_audit_table_html(&log.lists),
+    );
+    let system_view = format!(
+        r#"{filter}
+<div class="cm-audit-scroll">
+  {table}
+</div>"#,
+        filter = audit_filter_panel(&["Flag Word"], SYSTEM_FILTER_SPECIFIC),
+        table = system_audit_table_html(&log.system),
+    );
+    let modals = format!(
+        "{}{}{}",
+        player_audit_modals_html(&log.players),
+        word_audit_modals_html(&log.words),
+        system_audit_modals_html(&log.system),
+    );
+    let center = format!(
+        r#"{SUBHEAD_HTML}
+<div class="cm-session-head">
+  <div class="cm-session-headtext">
+    <p class="cm-session-title">Chat Audit Logs</p>
+    <p class="cm-session-sub">A ledger of moderation actions. Pick a log to view &mdash; each keeps its own columns and filters.</p>
+  </div>
+  <a href="{close}" class="cm-close" aria-label="Close audit logs">&#10005;</a>
+</div>
+<div class="cm-audit-select">
+  <label for="cm-audit-cat">Log</label>
+  <select id="cm-audit-cat" onchange="bbCmAuditCat(this)">
+    <option value="player">Player Actions</option>
+    <option value="word">Word Actions</option>
+    <option value="list">List Actions</option>
+    <option value="system">System (Automated)</option>
+  </select>
+</div>
+<div class="cm-audit-view" data-cat="player">{player_view}</div>
+<div class="cm-audit-view" data-cat="word" hidden>{word_view}</div>
+<div class="cm-audit-view" data-cat="list" hidden>{list_view}</div>
+<div class="cm-audit-view" data-cat="system" hidden>{system_view}</div>
+{modals}"#
+    );
+    chatmod_shell(&center, sessions, None, true, role, username)
 }
 
 #[cfg(test)]
