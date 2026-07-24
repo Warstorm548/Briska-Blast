@@ -5,6 +5,72 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.29.0] — 2026-07-24
+
+**Chat Audit Logs page (UI preview).** First of the Chat Nav sub-pages gets its
+layout — a moderation-action ledger. The endpoint, navigation, server-side
+rendering, and client-side interactions (category dropdown, sortable columns,
+snapshot overlays) are all in place; what remains unwired is **live audit data**,
+**backend filtering** (the Advanced Filter controls are inert), and **on-demand
+snapshot fetching** — so the tables render baked-in placeholder data for now. The
+right-hand "Chat Nav" "Chat Audit Logs" entry is now a live link (the other four
+stay inert placeholders); it opens in the center plane through the same
+three-column shell as the session view. On its own page it renders as the active
+nav item.
+
+### Added
+
+- **Chat Audit Logs view** (`GET /admin/chatmod/audit`): a moderation-action
+  ledger split into **category tables chosen by a dropdown** — **Player**, **Word**,
+  **List**, and **System** — each with its own direct headers (no polymorphic
+  columns) over a shared `Timestamp · Display Name · Group · Action · Reason`
+  spine. (Admin-panel "Access" actions — role/setting changes — are deliberately
+  out; they belong to their own log, not chat moderation.) Ids are click/tap-to-
+  copy and use the canonical 9-digit `PlayerId::from_counter`.
+  - **Player** — target Player UserName + Player ID + Body Id + Flagged Words
+    (red chips) + Transcript. Any tool may cover several of the player's bodies,
+    which condense into a `×N bodies` disclosure.
+  - **Word** — Blacklist / Approve keyed by the Word, with the occurrence's
+    sender + body for an Approve.
+  - **List** — moderation-list edits (Remove Ban / Lift Suspension / Whitelist),
+    targeting a player and naming the list.
+  - **System** — automated, program-initiated events (word flagging), with the
+    process as the Display Name and a distinct `System` Group badge.
+- **`System` actor group**: automated actions carry `Group = System` (a distinct
+  badge that stands out in any table) and name the process in Display Name. Auto-
+  *enforcement* on a player (auto-delete/suspend/ban) lands in the **Player** log
+  filled out like a moderator row — Group=System, Reason naming the rule that
+  fired — so the System table is reserved for non-enforcement events (flagging).
+  The persistent Group filter gains a `System` option.
+- **Per-table Advanced Filter**: each table's filter has a persistent group (the
+  shared spine — carries across tables) beside a table-specific group, giving the
+  reserved Advanced Filter area its first controls (inert placeholders for now).
+  The persistent group includes a date From/To range and a From/To **time** range
+  in **UTC** (`lang="en-GB"` forces the 24-hour clock to match the timestamps; a
+  per-moderator local-time/timezone setting is deferred).
+- **Sortable columns**: the **Timestamp** and **Player ID** headers carry a
+  flip-arrow control (triangle + underline) that reorders the table's rows
+  client-side and rotates 180° to reverse — Timestamp defaults newest-first. Only
+  these two sort for now; other columns TBD.
+- **One entry per (action, target player)** in the Player log: a bulk action
+  spanning several players splits into one row per player, and repeated actions
+  on the same player are never merged (a player can recur across a session).
+- **Transcript snapshot overlay** (Player rows + Approve-word rows): the button
+  pops a centered modal — wider/taller than the ban-confirm dialog — over a
+  semi-transparent backdrop that keeps the page visible behind it, showing the
+  entry's identity line and the frozen chat snapshot with blacklisted words red
+  and the acted-on bodies tagged (read-only). Closes via its X, Escape, or a
+  backdrop click. List rows (no chat context) show a plain dash instead.
+- **Context-aware close**: the page-level X returns to the landing view, or to
+  the session the moderator had open when they opened the audit page (carried
+  via `?from=<code>` on the Chat Nav link, resolved server-side).
+
+Wiring — real audit records (SQLite), live Advanced Filter behaviour (with the
+persistent filters carrying across tables), and on-demand snapshot fetching —
+lands in later phases.
+
+---
+
 ## [0.28.0] — 2026-07-23
 
 **Chat-Mod tab (UI preview).** New chat-moderation panel in the admin panel —

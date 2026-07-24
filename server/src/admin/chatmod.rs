@@ -15,12 +15,19 @@
 //!
 //! Audit-log contract for the wiring phase: every player-actionable tool
 //! (Warn + Delete, Warn Only, Suspend, Ban) writes an audit record containing
-//! the reason, the target's username + player id, the message body when the
-//! action targeted one, and a snapshot of the chat history as it stood when
-//! the action was taken. Records live in the SQLite moderation database and
-//! surface in the Chat Audit Logs area of the Chat Nav. Ban additionally
-//! requires an explicit confirmation dialog — a cancelled confirmation sends
-//! nothing and writes no audit record.
+//! the reason, the target's username + player id, the **set of message bodies
+//! the action covered**, and a snapshot of the chat history as it stood when
+//! the action was taken. Any tool — not just Warn + Delete — may act on zero,
+//! one, or several of the target's bodies at once (e.g. a Warn/Suspend/Ban that
+//! cites multiple messages), so the record's body list is always a `Vec`, never
+//! a single id; `AuditEntry.body_ids` already reflects this. Granularity: one
+//! record per **(action instance, target player)** — a single press hitting
+//! several players splits into one record per player (each carrying that
+//! player's covered bodies), and repeated presses on the same player are never
+//! merged (a player may recur across a session). Records live in the SQLite
+//! moderation database and surface in the Chat Audit Logs area of the Chat Nav.
+//! Ban additionally requires an explicit confirmation dialog — a cancelled
+//! confirmation sends nothing and writes no audit record.
 //!
 //! Scope contract: every player action binds to the player account, not the
 //! session it was issued from, and governs CHAT privileges (not game access):
@@ -35,14 +42,17 @@
 //! per-occurrence word approval) are scoped to their session's chat.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     response::{Html, IntoResponse, Redirect, Response},
 };
 
 use super::{require_session, templates};
 use crate::state::AppState;
-use templates::{ChatMessage, ChatSession, FlaggedBody, FlaggedSession, PreviewLine};
+use templates::{
+    AuditLog, ChatMessage, ChatSession, FlaggedBody, FlaggedSession, ListAuditEntry,
+    PlayerAuditEntry, PreviewLine, SystemAuditEntry, WordAuditEntry,
+};
 
 /// Shorthand for a clean (unflagged) preview line in the sample data.
 fn line(text: &str) -> PreviewLine {
@@ -185,6 +195,216 @@ fn sample_transcript(code: &str) -> Vec<ChatMessage> {
     }
 }
 
+/// A snapshot message, shorthand for the sample data below.
+fn snap(body_id: &str, username: &str, player_id: u64, body: &str, word: Option<&str>) -> ChatMessage {
+    ChatMessage {
+        body_id: body_id.into(),
+        username: username.into(),
+        player_id,
+        body: body.into(),
+        flagged_word: word.map(Into::into),
+    }
+}
+
+/// Placeholder audit records for the three Chat Audit Logs category tables.
+///
+/// **Player** exercises the per-(action, player) model: a multi-body Warn +
+/// Delete (mirrors `Example Imgs/ChatAuditLog.png`), a bulk Ban split across two
+/// players into same-timestamp rows, and EldenFire recurring across the session.
+/// **Word** covers a global Blacklist (no player/body) and an Approve occurrence
+/// (with sender + body + snapshot). **List** covers un-ban / lift-suspension /
+/// whitelist edits (targeted at a player, no chat snapshot).
+///
+/// Body IDs use the 12-char alphanumeric shape the server will assign once wired.
+fn sample_audit_log() -> AuditLog {
+    AuditLog {
+        players: vec![
+            // System auto-enforcement lands in the Player log too — filled like a
+            // moderator row, but Group=System and Reason names the rule that fired.
+            PlayerAuditEntry {
+                timestamp: "2026-07-24 14:50:00 UTC".into(),
+                moderator_display: "Auto-Mod".into(),
+                moderator_group: "System".into(),
+                action: "Auto-Delete".into(),
+                reason: "Rule: 3+ flagged words in 60s".into(),
+                target_username: "EldenFire".into(),
+                target_player_id: 12,
+                body_ids: vec!["Q71ZT8C3VB55".into()],
+                flagged_words: vec!["frick".into()],
+                snapshot: vec![
+                    snap("Q71ZT8C3VB55", "EldenFire", 12, "frick the mods", Some("frick")),
+                    snap("N44QW8T1RB29", "EldenFire", 12, "you all need to hit harder", None),
+                ],
+            },
+            PlayerAuditEntry {
+                timestamp: "2026-07-24 14:47:11 UTC".into(),
+                moderator_display: "Warstorm".into(),
+                moderator_group: "Admin".into(),
+                action: "Warn Only".into(),
+                reason: "Backseat modding".into(),
+                target_username: "EldenFire".into(),
+                target_player_id: 12,
+                body_ids: vec![],
+                flagged_words: vec![],
+                snapshot: vec![
+                    snap("N44QW8T1RB29", "EldenFire", 12, "you all need to hit harder", None),
+                    snap("P07LM2K9XC53", "RallyKnight", 34, "we are up two, relax", None),
+                ],
+            },
+            PlayerAuditEntry {
+                timestamp: "2026-07-24 14:32:07 UTC".into(),
+                moderator_display: "Warstorm".into(),
+                moderator_group: "Admin".into(),
+                action: "Warn + Delete".into(),
+                reason: "Repeat Offense".into(),
+                target_username: "EldenFire".into(),
+                target_player_id: 12,
+                body_ids: vec!["T09XB4N6QW22".into(), "L88KD3F1QA72".into()],
+                flagged_words: vec!["frick".into()],
+                snapshot: vec![
+                    snap("R21WQ7H4NM08", "RallyKnight", 34, "nice portal defense", None),
+                    snap("L88KD3F1QA72", "EldenFire", 12, "frick that was my ball", Some("frick")),
+                    snap("M04TC9V2HG61", "RallyKnight", 34, "easy, it is one point", None),
+                    snap("T09XB4N6QW22", "EldenFire", 12, "frick this whole match", Some("frick")),
+                ],
+            },
+            // One bulk Ban press over two players → two entries, same timestamp.
+            PlayerAuditEntry {
+                timestamp: "2026-07-24 13:58:20 UTC".into(),
+                moderator_display: "Nova".into(),
+                moderator_group: "Moderator".into(),
+                action: "Ban".into(),
+                reason: "Slur spam".into(),
+                target_username: "EldenFire".into(),
+                target_player_id: 12,
+                body_ids: vec!["Q71ZT8C3VB55".into()],
+                flagged_words: vec!["frick".into()],
+                snapshot: vec![
+                    snap("Q71ZT8C3VB55", "EldenFire", 12, "frick the mods", Some("frick")),
+                    snap("B19HN5J8WD30", "MossyOak", 3, "get rekt scrub", Some("scrub")),
+                ],
+            },
+            PlayerAuditEntry {
+                timestamp: "2026-07-24 13:58:20 UTC".into(),
+                moderator_display: "Nova".into(),
+                moderator_group: "Moderator".into(),
+                action: "Ban".into(),
+                reason: "Slur spam".into(),
+                target_username: "MossyOak".into(),
+                target_player_id: 3,
+                body_ids: vec!["B19HN5J8WD30".into(), "K82PQ4R7M2X9".into()],
+                flagged_words: vec!["scrub".into()],
+                snapshot: vec![
+                    snap("B19HN5J8WD30", "MossyOak", 3, "get rekt scrub", Some("scrub")),
+                    snap("K82PQ4R7M2X9", "MossyOak", 3, "scrub scrub scrub", Some("scrub")),
+                ],
+            },
+            PlayerAuditEntry {
+                timestamp: "2026-07-24 11:48:19 UTC".into(),
+                moderator_display: "Nova".into(),
+                moderator_group: "Moderator".into(),
+                action: "Suspend 1d".into(),
+                reason: "Off-topic flooding".into(),
+                target_username: "TinCanTam".into(),
+                target_player_id: 88,
+                body_ids: vec!["H55RD2H8PL04".into()],
+                flagged_words: vec![],
+                snapshot: vec![snap(
+                    "H55RD2H8PL04",
+                    "TinCanTam",
+                    88,
+                    "buy my stream buy my stream buy my stream",
+                    None,
+                )],
+            },
+        ],
+        words: vec![
+            WordAuditEntry {
+                timestamp: "2026-07-24 14:05:02 UTC".into(),
+                moderator_display: "Nova".into(),
+                moderator_group: "Moderator".into(),
+                action: "Blacklist Word".into(),
+                reason: "Slur".into(),
+                word: "frick".into(),
+                target_username: None,
+                target_player_id: None,
+                body_ids: vec![],
+                snapshot: vec![],
+            },
+            WordAuditEntry {
+                timestamp: "2026-07-24 12:19:44 UTC".into(),
+                moderator_display: "Warstorm".into(),
+                moderator_group: "Admin".into(),
+                action: "Approve Word".into(),
+                reason: "Team name, not the slur".into(),
+                word: "scrub".into(),
+                target_username: Some("RallyKnight".into()),
+                target_player_id: Some(34),
+                body_ids: vec!["W71MK3P8QB20".into()],
+                snapshot: vec![
+                    snap("W71MK3P8QB20", "RallyKnight", 34, "gg from the scrub squad", Some("scrub")),
+                    snap("Z04HD9V2LC88", "MossyOak", 3, "nice one", None),
+                ],
+            },
+        ],
+        lists: vec![
+            ListAuditEntry {
+                timestamp: "2026-07-24 15:10:33 UTC".into(),
+                moderator_display: "Warstorm".into(),
+                moderator_group: "Admin".into(),
+                action: "Remove Ban".into(),
+                reason: "Appeal granted".into(),
+                target_username: "MossyOak".into(),
+                target_player_id: 3,
+                list: "Ban List".into(),
+            },
+            ListAuditEntry {
+                timestamp: "2026-07-24 10:02:57 UTC".into(),
+                moderator_display: "Nova".into(),
+                moderator_group: "Moderator".into(),
+                action: "Lift Suspension".into(),
+                reason: "Time served".into(),
+                target_username: "TinCanTam".into(),
+                target_player_id: 88,
+                list: "Suspensions".into(),
+            },
+        ],
+        system: vec![
+            SystemAuditEntry {
+                timestamp: "2026-07-24 14:31:55 UTC".into(),
+                source: "Word Filter".into(),
+                action: "Flag Word".into(),
+                trigger: "Matched blacklist".into(),
+                word: "frick".into(),
+                target_username: "EldenFire".into(),
+                target_player_id: 12,
+                body_ids: vec!["T09XB4N6QW22".into()],
+                snapshot: vec![
+                    snap("R21WQ7H4NM08", "RallyKnight", 34, "nice portal defense", None),
+                    snap("T09XB4N6QW22", "EldenFire", 12, "frick this whole match", Some("frick")),
+                ],
+            },
+            SystemAuditEntry {
+                timestamp: "2026-07-24 13:57:12 UTC".into(),
+                source: "Word Filter".into(),
+                action: "Flag Word".into(),
+                trigger: "Matched blacklist".into(),
+                word: "scrub".into(),
+                target_username: "MossyOak".into(),
+                target_player_id: 3,
+                body_ids: vec!["K82PQ4R7M2X9".into()],
+                snapshot: vec![snap(
+                    "K82PQ4R7M2X9",
+                    "MossyOak",
+                    3,
+                    "scrub scrub scrub",
+                    Some("scrub"),
+                )],
+            },
+        ],
+    }
+}
+
 /// Case-insensitive lookup of a demo session; returns the canonical uppercase
 /// code so links and highlights stay consistent.
 fn find_session(code: &str) -> Option<String> {
@@ -229,6 +449,38 @@ pub async fn chatmod_session_page(
         &canon,
         &sample_transcript(&canon),
         &sample_sessions(),
+        session.role,
+        &session.username,
+    ))
+    .into_response()
+}
+
+/// Query for the audit page. `from` names the session the moderator was viewing
+/// when they opened Chat Audit Logs, so the X close can return there.
+#[derive(serde::Deserialize)]
+pub struct AuditQuery {
+    from: Option<String>,
+}
+
+/// GET /admin/chatmod/audit — the Chat Audit Logs page. The X close returns to
+/// the session named by `?from=` (when it resolves) or to the landing page.
+pub async fn chatmod_audit_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AuditQuery>,
+) -> Response {
+    let Some(session) = require_session(&headers, &state.redis).await else {
+        return Redirect::to("/admin").into_response();
+    };
+    let close_href = match query.from.as_deref().and_then(find_session) {
+        Some(canon) => format!("/admin/chatmod/session/{canon}"),
+        None => "/admin/chatmod".to_string(),
+    };
+
+    Html(templates::chatmod_audit_page(
+        &sample_audit_log(),
+        &sample_sessions(),
+        &close_href,
         session.role,
         &session.username,
     ))
@@ -345,5 +597,143 @@ mod tests {
         assert!(html.contains("Permanently remove chat privileges for"));
         assert!(html.contains("Ban User (Chat)"));
         assert!(html.contains(r#"id="cm-ban-cancel""#));
+    }
+
+    #[test]
+    fn audit_page_renders_table_and_snapshot_overlays() {
+        let html = templates::chatmod_audit_page(
+            &sample_audit_log(),
+            &sample_sessions(),
+            "/admin/chatmod",
+            crate::admin::AdminRole::Moderator,
+            "modtester",
+        );
+        assert!(html.contains("Chat Audit Logs"));
+        // A dropdown picks the category log; all four views are present.
+        assert!(html.contains(r#"<select id="cm-audit-cat""#));
+        for cat in ["player", "word", "list", "system"] {
+            assert!(
+                html.contains(&format!(r#"<div class="cm-audit-view" data-cat="{cat}""#)),
+                "missing {cat} view"
+            );
+        }
+        // Player table keeps its plain headers (Timestamp + Player ID are now
+        // sortable controls, asserted separately below).
+        for col in [
+            "Display Name",
+            "Group",
+            "Action",
+            "Reason",
+            "Player UserName",
+            "Body Id",
+            "Flagged Words",
+            "Transcript",
+        ] {
+            assert!(html.contains(&format!("<th>{col}</th>")), "missing player column {col}");
+        }
+        // Word/List tables bring their own direct headers.
+        assert!(html.contains("<th>Word</th>"));
+        assert!(html.contains("<th>List</th>"));
+        // Timestamp and Player ID headers are sortable — a flip-arrow control
+        // that reorders the rows (client-side).
+        assert!(html.contains(
+            r#"<th aria-sort="none"><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button>"#
+        ));
+        assert!(html.contains(r#"class="cm-sort" onclick="bbCmSort(this)">Player ID<"#));
+        // Each table's Advanced Filter has a shared spine group beside a
+        // table-specific one (fieldset legends).
+        assert!(html.contains("<legend>Applies to all logs</legend>"));
+        assert!(html.contains("<legend>This table</legend>"));
+        // The persistent spine carries a From/To time range (UTC) under the date
+        // pickers, forced to a 24-hour clock via lang="en-GB".
+        assert!(html.contains(r#"<label>From time (UTC)<input type="time" lang="en-GB"></label>"#));
+        assert!(html.contains(r#"<label>To time (UTC)<input type="time" lang="en-GB"></label>"#));
+        // Player rows: the mockup example — Warstorm/Admin warned EldenFire
+        // (000000012) for a repeat offense; ids are tap-to-copy.
+        assert!(html.contains("Repeat Offense"));
+        assert!(html.contains(r#"data-copy="000000012""#));
+        assert!(html.contains(r#"data-copy="T09XB4N6QW22""#));
+        assert!(html.contains(r#"<span class="cm-flag">frick</span>"#));
+        // A body-less action shows the em-dash placeholder.
+        assert!(html.contains(r#"<span class="cm-audit-none">&mdash;</span>"#));
+        // Two covered bodies condense into a ×N disclosure, not two rows.
+        assert!(html.contains(r#"<details class="cm-audit-bodies">"#));
+        assert!(html.contains("&times;2 bodies"));
+        assert!(html.contains(r#"data-copy="L88KD3F1QA72""#));
+        // Player Transcript opens that row's namespaced overlay; acted-on bodies
+        // are tagged in the frozen snapshot.
+        assert!(html.contains(r#"onclick="bbCmAuditOpen('player-0')""#));
+        assert!(html.contains(r#"id="cm-audit-back-player-0""#));
+        assert!(html.contains(r#"class="modal-card cm-audit-modal""#));
+        assert!(html.contains(r#"<span class="cm-msg-tag">acted on</span>"#));
+        // Word table: a global Blacklist (no snapshot) + an Approve occurrence
+        // (index 1) which carries its own overlay.
+        assert!(html.contains("Blacklist Word"));
+        assert!(html.contains("Approve Word"));
+        assert!(html.contains(r#"onclick="bbCmAuditOpen('word-1')""#));
+        assert!(html.contains(r#"id="cm-audit-back-word-1""#));
+        // List table: list-edit actions carry the list chip and no snapshot.
+        assert!(html.contains("Remove Ban"));
+        assert!(html.contains(r#"<span class="cm-audit-list">Ban List</span>"#));
+        // System (automated) actions carry the distinct Group=System badge.
+        assert!(html.contains(r#"<span class="cm-audit-sys">System</span>"#));
+        // Auto-enforcement on a player lands in the PLAYER log (Group=System),
+        // not the System table.
+        assert!(html.contains("Auto-Delete"));
+        assert!(html.contains("Auto-Mod"));
+        // The System table holds flag events (non-enforcement) with overlays.
+        assert!(html.contains("Flag Word"));
+        assert!(html.contains("Word Filter"));
+        assert!(html.contains(r#"onclick="bbCmAuditOpen('system-0')""#));
+        assert!(html.contains(r#"id="cm-audit-back-system-0""#));
+        // On its own page, Chat Audit Logs is the active nav item.
+        assert!(html.contains("cm-nav-current"));
+    }
+
+    #[test]
+    fn audit_splits_bulk_action_per_player_and_allows_recurrence() {
+        let html = templates::chatmod_audit_page(
+            &sample_audit_log(),
+            &sample_sessions(),
+            "/admin/chatmod",
+            crate::admin::AdminRole::Moderator,
+            "modtester",
+        );
+        // One bulk Ban press over two players → two entries sharing a timestamp,
+        // one per target player.
+        assert_eq!(
+            html.matches("2026-07-24 13:58:20 UTC").count(),
+            2,
+            "bulk ban should split into two same-timestamp rows"
+        );
+        assert!(html.contains("MossyOak"));
+        // A player recurs across the session (EldenFire is targeted by Warn Only,
+        // Warn + Delete, and Ban) — repeated actions are never merged.
+        assert!(
+            html.matches(r#"data-copy="000000012""#).count() >= 3,
+            "EldenFire should appear as the target of several distinct actions"
+        );
+    }
+
+    #[test]
+    fn audit_close_target_follows_session_context() {
+        // From the landing page there is no open session — the X returns there.
+        let landing = templates::chatmod_audit_page(
+            &sample_audit_log(),
+            &sample_sessions(),
+            "/admin/chatmod",
+            crate::admin::AdminRole::Moderator,
+            "modtester",
+        );
+        assert!(landing.contains(r#"href="/admin/chatmod" class="cm-close""#));
+        // Opened from inside a session, the X returns to that session view.
+        let from_session = templates::chatmod_audit_page(
+            &sample_audit_log(),
+            &sample_sessions(),
+            "/admin/chatmod/session/FJ5B3V",
+            crate::admin::AdminRole::Moderator,
+            "modtester",
+        );
+        assert!(from_session.contains(r#"href="/admin/chatmod/session/FJ5B3V" class="cm-close""#));
     }
 }
