@@ -8,11 +8,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [0.29.0] — 2026-07-24
 
 **Chat Audit Logs page (UI preview).** First of the Chat Nav sub-pages gets its
-layout — a moderation-action ledger. Still layout only: baked-in placeholder
-data, nothing wired. The right-hand "Chat Nav" "Chat Audit Logs" entry is now a
-live link (the other four stay inert placeholders); it opens in the center plane
-through the same three-column shell as the session view. On its own page it
-renders as the active nav item.
+layout — a moderation-action ledger. The endpoint, navigation, server-side
+rendering, and client-side interactions (category dropdown, sortable columns,
+snapshot overlays) are all in place; what remains unwired is **live audit data**,
+**backend filtering** (the Advanced Filter controls are inert), and **on-demand
+snapshot fetching** — so the tables render baked-in placeholder data for now. The
+right-hand "Chat Nav" "Chat Audit Logs" entry is now a live link (the other four
+stay inert placeholders); it opens in the center plane through the same
+three-column shell as the session view. On its own page it renders as the active
+nav item.
 
 ### Added
 

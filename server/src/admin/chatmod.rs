@@ -637,7 +637,7 @@ mod tests {
         // Timestamp and Player ID headers are sortable — a flip-arrow control
         // that reorders the rows (client-side).
         assert!(html.contains(
-            r#"<button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button>"#
+            r#"<th aria-sort="none"><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button>"#
         ));
         assert!(html.contains(r#"class="cm-sort" onclick="bbCmSort(this)">Player ID<"#));
         // Each table's Advanced Filter has a shared spine group beside a

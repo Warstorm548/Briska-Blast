@@ -773,8 +773,9 @@ window.bbCmSort=function(btn){{
   if(!th||!table||!table.tBodies[0])return;
   var col=th.cellIndex, tbody=table.tBodies[0];
   var dir=btn.getAttribute('data-dir')==='asc'?'desc':'asc';
-  table.querySelectorAll('.cm-sort').forEach(function(b){{if(b!==btn){{b.removeAttribute('data-dir');}}}});
+  table.querySelectorAll('.cm-sort').forEach(function(b){{if(b!==btn){{b.removeAttribute('data-dir');var ot=b.closest('th');if(ot)ot.setAttribute('aria-sort','none');}}}});
   btn.setAttribute('data-dir',dir);
+  th.setAttribute('aria-sort',dir==='asc'?'ascending':'descending');
   var rows=Array.prototype.slice.call(tbody.rows);
   rows.sort(function(a,b){{
     var x=(a.cells[col]?a.cells[col].textContent:'').trim();
@@ -1011,7 +1012,7 @@ fn player_audit_table_html(entries: &[PlayerAuditEntry]) -> String {
         r#"<table class="cm-audit-table">
         <thead>
           <tr>
-            <th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Display Name</th><th>Group</th><th>Action</th><th>Reason</th><th>Player UserName</th><th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Player ID<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Body Id</th><th>Flagged Words</th><th>Transcript</th>
+            <th aria-sort="none"><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Display Name</th><th>Group</th><th>Action</th><th>Reason</th><th>Player UserName</th><th aria-sort="none"><button type="button" class="cm-sort" onclick="bbCmSort(this)">Player ID<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Body Id</th><th>Flagged Words</th><th>Transcript</th>
           </tr>
         </thead>
         <tbody>
@@ -1059,7 +1060,7 @@ fn word_audit_table_html(entries: &[WordAuditEntry]) -> String {
         r#"<table class="cm-audit-table">
         <thead>
           <tr>
-            <th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Display Name</th><th>Group</th><th>Action</th><th>Reason</th><th>Word</th><th>Player UserName</th><th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Player ID<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Body Id</th><th>Transcript</th>
+            <th aria-sort="none"><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Display Name</th><th>Group</th><th>Action</th><th>Reason</th><th>Word</th><th>Player UserName</th><th aria-sort="none"><button type="button" class="cm-sort" onclick="bbCmSort(this)">Player ID<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Body Id</th><th>Transcript</th>
           </tr>
         </thead>
         <tbody>
@@ -1102,7 +1103,7 @@ fn list_audit_table_html(entries: &[ListAuditEntry]) -> String {
         r#"<table class="cm-audit-table">
         <thead>
           <tr>
-            <th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Display Name</th><th>Group</th><th>Action</th><th>Reason</th><th>Player UserName</th><th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Player ID<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>List</th>
+            <th aria-sort="none"><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Display Name</th><th>Group</th><th>Action</th><th>Reason</th><th>Player UserName</th><th aria-sort="none"><button type="button" class="cm-sort" onclick="bbCmSort(this)">Player ID<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>List</th>
           </tr>
         </thead>
         <tbody>
@@ -1151,7 +1152,7 @@ fn system_audit_table_html(entries: &[SystemAuditEntry]) -> String {
         r#"<table class="cm-audit-table">
         <thead>
           <tr>
-            <th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Display Name</th><th>Group</th><th>Action</th><th>Reason</th><th>Word</th><th>Player UserName</th><th><button type="button" class="cm-sort" onclick="bbCmSort(this)">Player ID<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Body Id</th><th>Transcript</th>
+            <th aria-sort="none"><button type="button" class="cm-sort" onclick="bbCmSort(this)">Timestamp<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Display Name</th><th>Group</th><th>Action</th><th>Reason</th><th>Word</th><th>Player UserName</th><th aria-sort="none"><button type="button" class="cm-sort" onclick="bbCmSort(this)">Player ID<span class="cm-sort-ico" aria-hidden="true">&#9662;</span></button></th><th>Body Id</th><th>Transcript</th>
           </tr>
         </thead>
         <tbody>
@@ -1340,6 +1341,16 @@ const SYSTEM_FILTER_SPECIFIC: &str = r#"<label>Word<input type="text" placeholde
           <label>Player<input type="text" placeholder="Username or ID"></label>
           <label>Source<input type="text" placeholder="Process (e.g. Word Filter)"></label>"#;
 
+/// One category view: its Advanced Filter panel above its scrollable table.
+fn audit_view_html(filter: String, table: String) -> String {
+    format!(
+        r#"{filter}
+<div class="cm-audit-scroll">
+  {table}
+</div>"#
+    )
+}
+
 /// GET /admin/chatmod/audit — the Chat Audit Logs view. A dropdown selects which
 /// category log renders: Player, Word, List, or System (automated) — each its own
 /// table with direct headers and its own Advanced Filter (a shared spine +
@@ -1354,43 +1365,27 @@ pub fn chatmod_audit_page(
     username: &str,
 ) -> String {
     let close = escape(close_href);
-    let player_view = format!(
-        r#"{filter}
-<div class="cm-audit-scroll">
-  {table}
-</div>"#,
-        filter = audit_filter_panel(
+    let player_view = audit_view_html(
+        audit_filter_panel(
             &["Warn Only", "Warn + Delete", "Suspend", "Ban"],
-            PLAYER_FILTER_SPECIFIC
+            PLAYER_FILTER_SPECIFIC,
         ),
-        table = player_audit_table_html(&log.players),
+        player_audit_table_html(&log.players),
     );
-    let word_view = format!(
-        r#"{filter}
-<div class="cm-audit-scroll">
-  {table}
-</div>"#,
-        filter = audit_filter_panel(&["Blacklist Word", "Approve Word"], WORD_FILTER_SPECIFIC),
-        table = word_audit_table_html(&log.words),
+    let word_view = audit_view_html(
+        audit_filter_panel(&["Blacklist Word", "Approve Word"], WORD_FILTER_SPECIFIC),
+        word_audit_table_html(&log.words),
     );
-    let list_view = format!(
-        r#"{filter}
-<div class="cm-audit-scroll">
-  {table}
-</div>"#,
-        filter = audit_filter_panel(
+    let list_view = audit_view_html(
+        audit_filter_panel(
             &["Remove Ban", "Lift Suspension", "Whitelist Add", "Whitelist Remove"],
-            LIST_FILTER_SPECIFIC
+            LIST_FILTER_SPECIFIC,
         ),
-        table = list_audit_table_html(&log.lists),
+        list_audit_table_html(&log.lists),
     );
-    let system_view = format!(
-        r#"{filter}
-<div class="cm-audit-scroll">
-  {table}
-</div>"#,
-        filter = audit_filter_panel(&["Flag Word"], SYSTEM_FILTER_SPECIFIC),
-        table = system_audit_table_html(&log.system),
+    let system_view = audit_view_html(
+        audit_filter_panel(&["Flag Word"], SYSTEM_FILTER_SPECIFIC),
+        system_audit_table_html(&log.system),
     );
     let modals = format!(
         "{}{}{}",
