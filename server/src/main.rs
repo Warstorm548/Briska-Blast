@@ -155,6 +155,7 @@ async fn main() {
         .route("/admin/chatmod", get(admin::chatmod::chatmod_page))
         .route("/admin/chatmod/session/:code", get(admin::chatmod::chatmod_session_page))
         .route("/admin/chatmod/audit", get(admin::chatmod::chatmod_audit_page))
+        .route("/admin/chatmod/lists", get(admin::chatmod::chatmod_lists_page))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

@@ -178,6 +178,49 @@ pub struct SystemAuditEntry {
     pub snapshot: Vec<ChatMessage>,
 }
 
+/// One blacklisted word in the **Backlisted Words** sub-tab's "Words In List"
+/// table. `active_filter` mirrors the Active Filter Toggle checkbox — a word can
+/// stay on the list yet be temporarily disabled from filtering.
+pub struct BlacklistWord {
+    pub word: String,
+    /// Reason recorded when the word was blacklisted.
+    pub reason: String,
+    /// True when the word is currently enforced by the filter.
+    pub active_filter: bool,
+}
+
+/// One row in the **Banned Users** sub-tab table: a player barred from chat.
+pub struct BannedUser {
+    pub timestamp: String,
+    pub username: String,
+    /// The player's numeric id, rendered zero-padded via
+    /// [`PlayerId::from_counter`]. Moderation surfaces only.
+    pub player_id: u64,
+    pub reason: String,
+    /// Whether a chat snapshot exists to open from the Transcript cell.
+    pub has_transcript: bool,
+}
+
+/// One row in the **Active Suspensions** sub-tab table: a temporary chat mute.
+pub struct SuspendedUser {
+    pub timestamp: String,
+    pub username: String,
+    pub player_id: u64,
+    /// Total suspension length, e.g. `1d 6h`.
+    pub suspended_for: String,
+    /// Time left before it lifts, e.g. `18h 42m`.
+    pub remaining: String,
+    pub reason: String,
+}
+
+/// The datasets behind the Moderation Lists page's sub-tabs. Whitelisted Users
+/// has no mockup yet, so it carries no data (placeholder tab).
+pub struct ModerationLists {
+    pub blacklist: Vec<BlacklistWord>,
+    pub banned: Vec<BannedUser>,
+    pub suspended: Vec<SuspendedUser>,
+}
+
 /// Page-specific styles, appended after the shared `{CSS}`. A plain const
 /// (rather than text inside `format!`) so none of the braces need doubling.
 const CHATMOD_CSS: &str = "
@@ -343,6 +386,30 @@ body.cm-resizing { cursor: col-resize; user-select: none; }
 .cm-audit-modal-head > div { flex: 1; min-width: 0; }
 .cm-audit-modal-head .section-sub { margin-bottom: 0; overflow-wrap: anywhere; }
 .cm-audit-modal-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 22px 20px; }
+/* Moderation Lists: sub-tab strip + per-tab tools grid. All cm-lists-* so they
+   can't collide with the audit/session styles that share this sheet. */
+.cm-lists-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.cm-lists-tab { font: inherit; font-size: 0.82rem; color: #8b949e; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+.cm-lists-tab:hover { border-color: #8b949e; color: #c9d1d9; }
+.cm-lists-tab:focus-visible { outline: 1px solid #388bfd; outline-offset: 1px; }
+.cm-lists-tab-active, .cm-lists-tab-active:hover { color: #fff; border-color: #e94560; background: #21262d; cursor: default; }
+/* the rounded tools panel above each list table (mirrors the mockup's oval) */
+.cm-lists-tools { background: #0d1117; border: 1px solid #30363d; border-radius: 12px; padding: 16px; margin-bottom: 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px 20px; align-items: start; }
+.cm-lists-tool { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* Lock the reason/text inputs to their own height: with align-items:start the
+   columns no longer stretch to a shared height, and flex:0 0 auto keeps a growing
+   word box from resizing the reason field above or beside it. */
+.cm-lists-tool > input { flex: 0 0 auto; }
+.cm-lists-tool-title { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #8b949e; }
+.cm-lists-tool textarea { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; padding: 8px 10px; font: inherit; font-size: 0.85rem; resize: vertical; min-height: 88px; overflow: hidden; outline: none; width: 100%; }
+.cm-lists-tool textarea:focus { border-color: #388bfd; }
+.cm-lists-note { font-size: 0.8rem; color: #8b949e; margin-bottom: 14px; }
+.cm-lists-search { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.cm-lists-search label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #8b949e; white-space: nowrap; }
+.cm-lists-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #8b949e; margin-bottom: 10px; }
+.cm-lists-hint { font-size: 0.8rem; color: #8b949e; }
+/* checkbox + delete cells in the list tables sit centered */
+.cm-lists-check { text-align: center; }
 ";
 
 /// The center sub-header shared by both views: title bar with a burger at each
@@ -354,21 +421,37 @@ const SUBHEAD_HTML: &str = r#"<div class="cm-subhead">
   <button type="button" class="cm-burger" aria-label="Open chat nav panel" aria-controls="cm-right" aria-expanded="false" onclick="bbCmToggle(this,'right')">&#9776;</button>
 </div>"#;
 
-/// The right-hand "Chat Nav" secondary navigation. Four entries stay inert
-/// visual placeholders until their sub-pages are designed; "Chat Audit Logs" is
-/// live — a link to `audit_href`, or the active current-page marker (no href)
-/// when `audit_current` is set.
-fn chat_nav_html(audit_href: &str, audit_current: bool) -> String {
-    let audit = if audit_current {
-        r#"<span class="cm-nav-item cm-nav-current" aria-current="page">Chat Audit Logs</span>"#
-            .to_string()
-    } else {
-        format!(r#"<a class="cm-nav-item cm-nav-link" href="{audit_href}">Chat Audit Logs</a>"#)
+/// Which Chat Nav sub-page is currently rendered. Drives the live-link vs
+/// current-page-marker choice for the two wired entries (Moderation Lists, Chat
+/// Audit Logs); `None` for the landing/session views, where neither is open.
+#[derive(Clone, Copy, PartialEq)]
+enum ChatNavPage {
+    None,
+    Lists,
+    Audit,
+}
+
+/// The right-hand "Chat Nav" secondary navigation. Two entries stay inert visual
+/// placeholders until their sub-pages are designed (Settings, Mod User Settings);
+/// "Moderation Lists" and "Chat Audit Logs" are live — each a link to its
+/// `?from=`-carrying href, or the active current-page marker (no href) when it is
+/// the page being rendered. The old standalone "Suspensions" entry now lives as
+/// the *Active Suspensions* sub-tab inside Moderation Lists.
+fn chat_nav_html(lists_href: &str, audit_href: &str, current: ChatNavPage) -> String {
+    // One live entry: the current-page marker when it's the open page, else a
+    // link that carries the session context forward.
+    let entry = |label: &str, href: &str, is_current: bool| {
+        if is_current {
+            format!(r#"<span class="cm-nav-item cm-nav-current" aria-current="page">{label}</span>"#)
+        } else {
+            format!(r#"<a class="cm-nav-item cm-nav-link" href="{href}">{label}</a>"#)
+        }
     };
+    let lists = entry("Moderation Lists", lists_href, current == ChatNavPage::Lists);
+    let audit = entry("Chat Audit Logs", audit_href, current == ChatNavPage::Audit);
     format!(
         r#"<span class="cm-nav-item">Settings<span class="cm-soon">soon</span></span>
-        <span class="cm-nav-item">Moderation Lists<span class="cm-soon">soon</span></span>
-        <span class="cm-nav-item">Suspensions<span class="cm-soon">soon</span></span>
+        {lists}
         {audit}
         <span class="cm-nav-item">Mod User Settings<span class="cm-soon">soon</span></span>"#
     )
@@ -620,19 +703,33 @@ fn chatmod_shell(
     center: &str,
     sessions: &[ChatSession],
     active_code: Option<&str>,
-    audit_current: bool,
+    nav_from: Option<&str>,
+    current: ChatNavPage,
     role: AdminRole,
     username: &str,
 ) -> String {
     let nav = nav_html("chatmod", role, username);
     let session_cards = session_list_html(sessions, active_code);
-    // The Chat Nav "Chat Audit Logs" link remembers the session the moderator is
-    // in (via ?from=), so the audit page's X can return there.
-    let audit_href = match active_code {
-        Some(code) => format!("/admin/chatmod/audit?from={}", escape(code)),
-        None => "/admin/chatmod/audit".to_string(),
+    // The Chat Nav "Moderation Lists" / "Chat Audit Logs" links carry the session
+    // the moderator came from (via ?from=). This is `nav_from`, kept separate from
+    // `active_code` (which only highlights the entered session's card): a sub-page
+    // isn't "in" a session, yet must still forward the context so hopping between
+    // the two sub-pages — and each one's X — returns to that session, not the
+    // landing page.
+    let (lists_href, audit_href) = match nav_from {
+        Some(code) => {
+            let c = escape(code);
+            (
+                format!("/admin/chatmod/lists?from={c}"),
+                format!("/admin/chatmod/audit?from={c}"),
+            )
+        }
+        None => (
+            "/admin/chatmod/lists".to_string(),
+            "/admin/chatmod/audit".to_string(),
+        ),
     };
-    let chat_nav = chat_nav_html(&audit_href, audit_current);
+    let chat_nav = chat_nav_html(&lists_href, &audit_href, current);
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -812,6 +909,33 @@ window.bbCmSort=function(btn){{
     apply(panel.getBoundingClientRect().width+(e.key==='ArrowRight'?16:-16));
   }});
 }})();
+// Moderation Lists sub-tabs: a horizontal tab strip toggling the four list
+// panels. Client-side only — the same show/hide idea as the audit dropdown.
+window.bbCmListsTab=function(btn){{
+  var tab=btn.getAttribute('data-tab');
+  document.querySelectorAll('.cm-lists-tab').forEach(function(b){{
+    var on=b.getAttribute('data-tab')===tab;
+    b.classList.toggle('cm-lists-tab-active',on);
+    b.setAttribute('aria-selected',on?'true':'false');
+  }});
+  document.querySelectorAll('.cm-lists-panel').forEach(function(p){{
+    p.hidden=p.getAttribute('data-tab')!==tab;
+  }});
+}};
+// Blacklist word boxes grow to fit their contents (the mockup's "flex larger in
+// height when many words are added"); manual resize still works via CSS.
+(function(){{
+  function grow(t){{t.style.height='auto';t.style.height=t.scrollHeight+'px';}}
+  document.querySelectorAll('.cm-lists-tool textarea').forEach(function(t){{
+    grow(t);t.addEventListener('input',function(){{grow(t);}});
+  }});
+}})();
+// Moderation Lists confirm dialogs (delete word / ban / un-ban): open by id,
+// close on Cancel / backdrop / Escape. Preview only — Confirm just closes; the
+// wiring phase swaps it for the real action.
+window.bbCmListsAsk=function(id){{var m=document.getElementById(id);if(m)m.style.display='flex';}};
+window.bbCmListsCloseAll=function(){{document.querySelectorAll('.cm-lists-modal').forEach(function(m){{m.style.display='none';}});}};
+document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCmListsCloseAll();}});
 </script>
 </body>
 </html>"#
@@ -837,7 +961,7 @@ pub fn chatmod_landing_page(
   </div>
 </div>"#
     );
-    chatmod_shell(&center, sessions, None, false, role, username)
+    chatmod_shell(&center, sessions, None, None, ChatNavPage::None, role, username)
 }
 
 /// GET /admin/chatmod/session/:code — the entered-session view: transcript +
@@ -873,7 +997,7 @@ pub fn chatmod_session_page(
   {TOOLS_HTML}
 </div>"#
     );
-    chatmod_shell(&center, sessions, Some(code), false, role, username)
+    chatmod_shell(&center, sessions, Some(code), Some(code), ChatNavPage::None, role, username)
 }
 
 /// The Body Id table cell: the single id (tap-to-copy), an em-dash for a
@@ -1355,16 +1479,22 @@ fn audit_view_html(filter: String, table: String) -> String {
 /// category log renders: Player, Word, List, or System (automated) — each its own
 /// table with direct headers and its own Advanced Filter (a shared spine +
 /// table-specific fields). Player/Word-Approve/System rows carry a chat-snapshot
-/// overlay opened from the Transcript button. `close_href` is the context-aware X
-/// target — the landing page, or the session the moderator had open.
+/// overlay opened from the Transcript button. `from` is the session the moderator
+/// came from (resolved from `?from=`): it drives both the context-aware X target
+/// (that session, else the landing page) and the Chat Nav links, which forward it
+/// so hopping to Moderation Lists keeps the same context.
 pub fn chatmod_audit_page(
     log: &AuditLog,
     sessions: &[ChatSession],
-    close_href: &str,
+    from: Option<&str>,
     role: AdminRole,
     username: &str,
 ) -> String {
-    let close = escape(close_href);
+    let close_href = match from {
+        Some(code) => format!("/admin/chatmod/session/{code}"),
+        None => "/admin/chatmod".to_string(),
+    };
+    let close = escape(&close_href);
     let player_view = audit_view_html(
         audit_filter_panel(
             &["Warn Only", "Warn + Delete", "Suspend", "Ban"],
@@ -1417,7 +1547,305 @@ pub fn chatmod_audit_page(
 <div class="cm-audit-view" data-cat="system" hidden>{system_view}</div>
 {modals}"#
     );
-    chatmod_shell(&center, sessions, None, true, role, username)
+    chatmod_shell(&center, sessions, None, from, ChatNavPage::Audit, role, username)
+}
+
+/// The **Backlisted Words** sub-tab: a three-column tools panel (add / remove /
+/// CSV import) over the searchable "Words In List" ledger. Delete opens the
+/// shared delete-confirm modal (reason required). Preview only — inert controls.
+fn blacklist_panel_html(words: &[BlacklistWord]) -> String {
+    let table = if words.is_empty() {
+        r#"<p class="cm-empty">No blacklisted words.</p>"#.to_string()
+    } else {
+        let rows = words
+            .iter()
+            .map(|w| {
+                let checked = if w.active_filter { " checked" } else { "" };
+                let word = escape(&w.word);
+                format!(
+                    r#"<tr>
+            <td>{word}</td>
+            <td>{reason}</td>
+            <td class="cm-lists-check"><input type="checkbox"{checked} aria-label="Active filter for {word}"></td>
+            <td class="cm-lists-check"><button type="button" class="btn-trash" title="Delete" aria-label="Delete {word}" onclick="bbCmListsAsk('cm-lists-del-modal')">&#128465;</button></td>
+          </tr>"#,
+                    reason = escape(&w.reason),
+                )
+            })
+            .collect::<String>();
+        format!(
+            r#"<table class="cm-audit-table">
+        <thead>
+          <tr><th>Words</th><th>Reason Provided</th><th>Active Filter Toggle</th><th>Delete</th></tr>
+        </thead>
+        <tbody>
+          {rows}
+        </tbody>
+      </table>"#
+        )
+    };
+    format!(
+        r#"<div class="cm-lists-tools">
+  <div class="cm-lists-tool">
+    <p class="cm-lists-tool-title">Add to Blacklist</p>
+    <input type="text" class="cm-reason" placeholder="Reason (logged)" aria-label="Reason for adding">
+    <textarea placeholder="Word or words &mdash; separate with ;" aria-label="Words to blacklist"></textarea>
+    <button type="button" class="btn btn-sm">Confirm</button>
+  </div>
+  <div class="cm-lists-tool">
+    <p class="cm-lists-tool-title">Remove From Blacklist</p>
+    <input type="text" class="cm-reason" placeholder="Reason (logged)" aria-label="Reason for removing">
+    <textarea placeholder="Word or words &mdash; separate with ;" aria-label="Words to remove"></textarea>
+    <button type="button" class="btn btn-sm">Confirm</button>
+  </div>
+  <div class="cm-lists-tool">
+    <p class="cm-lists-tool-title">Add Words From a CSV File</p>
+    <label for="cm-lists-csv">Upload</label>
+    <input type="file" id="cm-lists-csv" accept=".csv" aria-label="CSV file">
+    <button type="button" class="btn btn-sm">Confirm</button>
+  </div>
+</div>
+<p class="cm-lists-note">More than one word can be added at once &mdash; separate each with a <span class="mono">;</span> so the system counts them individually. Each word occupies its own row in the list below.</p>
+<div class="cm-lists-search">
+  <label for="cm-lists-word-search">Words In List</label>
+  <input type="text" id="cm-lists-word-search" placeholder="Search &mdash; most relevant words rise to the top">
+</div>
+<div class="cm-audit-scroll">
+  {table}
+</div>"#
+    )
+}
+
+/// The **Banned Users** sub-tab: a *To Ban* / *Banned User Tools* panel over the
+/// ban ledger. Ban and UnBan each open the shared confirm modal. Preview only.
+fn banned_panel_html(banned: &[BannedUser]) -> String {
+    let table = if banned.is_empty() {
+        r#"<p class="cm-empty">No banned users.</p>"#.to_string()
+    } else {
+        let rows = banned
+            .iter()
+            .map(|b| {
+                let pid = PlayerId::from_counter(b.player_id);
+                let transcript = if b.has_transcript {
+                    r#"<button type="button" class="btn btn-sm">Transcript</button>"#.to_string()
+                } else {
+                    r#"<span class="cm-audit-none">&mdash;</span>"#.to_string()
+                };
+                let user = escape(&b.username);
+                format!(
+                    r#"<tr>
+            <td class="cm-audit-ts mono">{ts}</td>
+            <td>{user}</td>
+            <td><span class="cm-pid mono" data-copy="{pid}" role="button" tabindex="0" title="Copy player ID">{pid}</span></td>
+            <td>{reason}</td>
+            <td>{transcript}</td>
+            <td class="cm-lists-check"><input type="checkbox" aria-label="Select {user}"></td>
+          </tr>"#,
+                    ts = escape(&b.timestamp),
+                    reason = escape(&b.reason),
+                )
+            })
+            .collect::<String>();
+        format!(
+            r#"<table class="cm-audit-table">
+        <thead>
+          <tr><th>Timestamp</th><th>Username</th><th>User ID</th><th>Reason For Ban</th><th>Transcript</th><th>CheckBox</th></tr>
+        </thead>
+        <tbody>
+          {rows}
+        </tbody>
+      </table>"#
+        )
+    };
+    format!(
+        r#"<div class="cm-lists-tools">
+  <div class="cm-lists-tool">
+    <p class="cm-lists-tool-title">To Ban</p>
+    <label for="cm-lists-ban-id">User ID</label>
+    <input type="text" id="cm-lists-ban-id" placeholder="Player ID" aria-label="User ID to ban">
+    <label for="cm-lists-ban-reason">Reason</label>
+    <input type="text" id="cm-lists-ban-reason" placeholder="Reason (logged)">
+    <label for="cm-lists-ban-words">Offensive Words</label>
+    <input type="text" id="cm-lists-ban-words" placeholder="Word or words &mdash; separate with ;">
+    <button type="button" class="btn btn-danger btn-sm" onclick="bbCmListsAsk('cm-lists-ban-modal')">Ban User</button>
+  </div>
+  <div class="cm-lists-tool">
+    <p class="cm-lists-tool-title">Banned User Tools</p>
+    <p class="cm-lists-hint">To un-ban: tick the checkbox of each user you want to reinstate, then press UnBan. You'll confirm with a required reason.</p>
+    <button type="button" class="btn btn-sm" onclick="bbCmListsAsk('cm-lists-unban-modal')">UnBan</button>
+  </div>
+</div>
+<p class="cm-lists-title">Banned Users</p>
+<div class="cm-audit-scroll">
+  {table}
+</div>"#
+    )
+}
+
+/// The **Active Suspensions** sub-tab (the old standalone "Suspensions" nav item,
+/// now folded in here): an *Extend / Clear / Suspend* tools panel over the
+/// suspension ledger. Suspend-from-this-page is flagged under construction.
+fn suspensions_panel_html(suspended: &[SuspendedUser]) -> String {
+    let table = if suspended.is_empty() {
+        r#"<p class="cm-empty">No active suspensions.</p>"#.to_string()
+    } else {
+        let rows = suspended
+            .iter()
+            .map(|s| {
+                let pid = PlayerId::from_counter(s.player_id);
+                let user = escape(&s.username);
+                format!(
+                    r#"<tr>
+            <td class="cm-audit-ts mono">{ts}</td>
+            <td>{user}</td>
+            <td><span class="cm-pid mono" data-copy="{pid}" role="button" tabindex="0" title="Copy player ID">{pid}</span></td>
+            <td>{dur}</td>
+            <td>{rem}</td>
+            <td>{reason}</td>
+            <td class="cm-lists-check"><input type="checkbox" aria-label="Select {user}"></td>
+          </tr>"#,
+                    ts = escape(&s.timestamp),
+                    dur = escape(&s.suspended_for),
+                    rem = escape(&s.remaining),
+                    reason = escape(&s.reason),
+                )
+            })
+            .collect::<String>();
+        format!(
+            r#"<table class="cm-audit-table">
+        <thead>
+          <tr><th>TimeStamp</th><th>Username</th><th>UserID</th><th>Suspended For</th><th>Remaining Time Left</th><th>Reason</th><th>CheckBox</th></tr>
+        </thead>
+        <tbody>
+          {rows}
+        </tbody>
+      </table>"#
+        )
+    };
+    format!(
+        r#"<div class="cm-lists-tools">
+  <div class="cm-lists-tool">
+    <p class="cm-lists-tool-title">Extend Current Suspension</p>
+    <div class="row">
+      <input type="text" class="cm-dur" inputmode="numeric" placeholder="Days" aria-label="Days">
+      <input type="text" class="cm-dur" inputmode="numeric" placeholder="Hours" aria-label="Hours">
+      <input type="text" class="cm-dur" inputmode="numeric" placeholder="Mins" aria-label="Minutes">
+    </div>
+    <input type="text" class="cm-reason" placeholder="Reason (logged)">
+    <button type="button" class="btn btn-sm">Extend</button>
+  </div>
+  <div class="cm-lists-tool">
+    <p class="cm-lists-tool-title">Clear Suspensions</p>
+    <input type="text" class="cm-reason" placeholder="Reason (logged)">
+    <button type="button" class="btn btn-sm">Clear</button>
+  </div>
+  <div class="cm-lists-tool">
+    <p class="cm-lists-tool-title">Suspend User</p>
+    <input type="text" class="cm-reason" placeholder="Reason (logged)">
+    <button type="button" class="btn btn-sm">Suspend</button>
+    <p class="note">Suspending a user from this page is under construction.</p>
+  </div>
+</div>
+<p class="cm-lists-title">Suspended Users</p>
+<div class="cm-audit-scroll">
+  {table}
+</div>"#
+    )
+}
+
+/// The **Whitelisted Users** sub-tab — no mockup yet, so a placeholder panel.
+fn whitelist_panel_html() -> String {
+    r#"<div class="cm-lists-tools">
+  <div class="cm-lists-tool">
+    <p class="cm-lists-tool-title">Whitelisted Users</p>
+    <p class="cm-lists-hint">Under construction &mdash; this list's layout lands in a later pass.</p>
+  </div>
+</div>
+<p class="cm-empty">No whitelist design yet.</p>"#
+        .to_string()
+}
+
+/// The three inert confirm dialogs the Moderation Lists tools open (delete word,
+/// ban, un-ban). Reuse the shared `.modal-backdrop`/`.modal-card`; each `Confirm`
+/// just closes for now (the wiring phase swaps in the real action).
+const LISTS_MODALS_HTML: &str = r#"<div id="cm-lists-del-modal" class="modal-backdrop cm-lists-modal" onclick="if(event.target===this)bbCmListsCloseAll()">
+  <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="cm-lists-del-title" aria-describedby="cm-lists-del-desc">
+    <p class="section-title" id="cm-lists-del-title">Remove Word From Blacklist</p>
+    <p class="section-sub" id="cm-lists-del-desc">Removing a word requires a reason. It stops being filtered going forward.</p>
+    <input type="text" class="cm-reason" placeholder="Reason (logged)" aria-label="Removal reason">
+    <div class="modal-actions">
+      <button type="button" class="btn btn-sm" onclick="bbCmListsCloseAll()">Cancel</button>
+      <button type="button" class="btn btn-danger btn-sm" onclick="bbCmListsCloseAll()">Confirm</button>
+    </div>
+  </div>
+</div>
+<div id="cm-lists-ban-modal" class="modal-backdrop cm-lists-modal" onclick="if(event.target===this)bbCmListsCloseAll()">
+  <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="cm-lists-ban-title" aria-describedby="cm-lists-ban-desc">
+    <p class="section-title" id="cm-lists-ban-title">Confirm Chat Ban</p>
+    <p class="section-sub" id="cm-lists-ban-desc">Permanently remove this user's chat privileges? The player keeps playing; reversible only by un-banning here.</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-sm" onclick="bbCmListsCloseAll()">Cancel</button>
+      <button type="button" class="btn btn-danger btn-sm" onclick="bbCmListsCloseAll()">Confirm Chat Ban</button>
+    </div>
+  </div>
+</div>
+<div id="cm-lists-unban-modal" class="modal-backdrop cm-lists-modal" onclick="if(event.target===this)bbCmListsCloseAll()">
+  <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="cm-lists-unban-title" aria-describedby="cm-lists-unban-desc">
+    <p class="section-title" id="cm-lists-unban-title">UnBan Selected Users</p>
+    <p class="section-sub" id="cm-lists-unban-desc">Reinstates chat privileges for the ticked users. A reason is required.</p>
+    <input type="text" class="cm-reason" placeholder="Reason (logged)" aria-label="Un-ban reason">
+    <div class="modal-actions">
+      <button type="button" class="btn btn-sm" onclick="bbCmListsCloseAll()">Cancel</button>
+      <button type="button" class="btn btn-sm" onclick="bbCmListsCloseAll()">Confirm</button>
+    </div>
+  </div>
+</div>"#;
+
+/// GET /admin/chatmod/lists — the Moderation Lists view. A tab strip selects one
+/// of four sub-tabs (Backlisted Words, Banned Users, Active Suspensions,
+/// Whitelisted Users), each rendered as a tools panel over a list table; the tab
+/// toggle is client-side (`bbCmListsTab`). `from` is the session the moderator
+/// came from (resolved from `?from=`): it drives both the context-aware X target
+/// (that session, else the landing page) and the Chat Nav links, which forward it
+/// so hopping to Chat Audit Logs keeps the same context.
+pub fn chatmod_lists_page(
+    lists: &ModerationLists,
+    sessions: &[ChatSession],
+    from: Option<&str>,
+    role: AdminRole,
+    username: &str,
+) -> String {
+    let close_href = match from {
+        Some(code) => format!("/admin/chatmod/session/{code}"),
+        None => "/admin/chatmod".to_string(),
+    };
+    let close = escape(&close_href);
+    let blacklist = blacklist_panel_html(&lists.blacklist);
+    let banned = banned_panel_html(&lists.banned);
+    let suspensions = suspensions_panel_html(&lists.suspended);
+    let whitelist = whitelist_panel_html();
+    let center = format!(
+        r#"{SUBHEAD_HTML}
+<div class="cm-session-head">
+  <div class="cm-session-headtext">
+    <p class="cm-session-title">Moderation Lists</p>
+    <p class="cm-session-sub">Blacklisted words, banned users, active suspensions, and the whitelist &mdash; pick a list to manage.</p>
+  </div>
+  <a href="{close}" class="cm-close" aria-label="Close moderation lists">&#10005;</a>
+</div>
+<div class="cm-lists-tabs" role="tablist" aria-label="Moderation lists">
+  <button type="button" class="cm-lists-tab cm-lists-tab-active" role="tab" aria-selected="true" data-tab="blacklist" onclick="bbCmListsTab(this)">Backlisted Words</button>
+  <button type="button" class="cm-lists-tab" role="tab" aria-selected="false" data-tab="banned" onclick="bbCmListsTab(this)">Banned Users</button>
+  <button type="button" class="cm-lists-tab" role="tab" aria-selected="false" data-tab="suspensions" onclick="bbCmListsTab(this)">Active Suspensions</button>
+  <button type="button" class="cm-lists-tab" role="tab" aria-selected="false" data-tab="whitelist" onclick="bbCmListsTab(this)">Whitelisted Users</button>
+</div>
+<div class="cm-lists-panel" role="tabpanel" data-tab="blacklist">{blacklist}</div>
+<div class="cm-lists-panel" role="tabpanel" data-tab="banned" hidden>{banned}</div>
+<div class="cm-lists-panel" role="tabpanel" data-tab="suspensions" hidden>{suspensions}</div>
+<div class="cm-lists-panel" role="tabpanel" data-tab="whitelist" hidden>{whitelist}</div>
+{LISTS_MODALS_HTML}"#
+    );
+    chatmod_shell(&center, sessions, None, from, ChatNavPage::Lists, role, username)
 }
 
 #[cfg(test)]
