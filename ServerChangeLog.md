@@ -5,6 +5,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.30.0] — 2026-07-25
+
+**Moderation Lists page (UI preview).** The second Chat Nav sub-page gets its
+layout, built on the same center-plane + `?from=` pattern the Chat Audit Logs
+page established. The right-hand "Chat Nav" "Moderation Lists" entry is now a live
+link (Settings and Mod User Settings stay inert placeholders); it opens in the
+center plane through the shared three-column shell, and its **X** returns the
+moderator to wherever they were — the entered session/chat window or the
+flagged-messages landing — via the same `?from=<session>` mechanism as the audit
+page. On its own page it renders as the active nav item. As with the audit page,
+this is layout only: controls are styled as final but **inert** (placeholder
+data, no handlers, confirm modals that just close) — no moderation logic, no
+persistence, no real deletes/bans/suspends.
+
+### Added
+
+- **Moderation Lists view** (`GET /admin/chatmod/lists`): a four sub-tab page
+  (client-side tab strip, Backlisted Words selected by default), each a tools
+  panel over a list table.
+  - **Backlisted Words** — Add / Remove (reason + `;`-separated auto-growing word
+    box) / CSV-import tools, over a searchable "Words In List" ledger
+    (**Words · Reason Provided · Active Filter Toggle · Delete**); the trash
+    control opens an inert delete-confirm dialog (reason required).
+  - **Banned Users** — *To Ban* / *Banned User Tools (UnBan)* over the ban ledger
+    (**Timestamp · Username · User ID · Reason For Ban · Transcript · CheckBox**);
+    Ban and UnBan each open an inert confirm dialog. Ids are click/tap-to-copy and
+    use the canonical 9-digit `PlayerId::from_counter`.
+  - **Active Suspensions** — Extend / Clear / Suspend tools over the suspension
+    ledger (**TimeStamp · Username · UserID · Suspended For · Remaining Time Left ·
+    Reason · CheckBox**); Suspend-from-this-page is flagged under construction.
+  - **Whitelisted Users** — placeholder tab (no mockup yet).
+- Moderation Lists action reasons are **logging-only** (placeholder "Reason
+  (logged)") — unlike the session-view Warn/Suspend/Ban tools, they are never sent
+  to the player.
+
+### Changed
+
+- **Chat Nav** — the standalone **Suspensions** entry folds into Moderation Lists
+  as the *Active Suspensions* sub-tab (it is effectively another list), and
+  "Moderation Lists" becomes a live, `?from=`-aware link. The shell's current-page
+  marker generalized from a single audit bool to a small `ChatNavPage` enum so
+  both wired sub-pages share the link/marker + session-context logic — the
+  intended template for the remaining Chat Nav pages.
+
 ## [0.29.0] — 2026-07-24
 
 **Chat Audit Logs page (UI preview).** First of the Chat Nav sub-pages gets its

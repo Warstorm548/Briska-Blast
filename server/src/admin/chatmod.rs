@@ -50,8 +50,9 @@ use axum::{
 use super::{require_session, templates};
 use crate::state::AppState;
 use templates::{
-    AuditLog, ChatMessage, ChatSession, FlaggedBody, FlaggedSession, ListAuditEntry,
-    PlayerAuditEntry, PreviewLine, SystemAuditEntry, WordAuditEntry,
+    AuditLog, BannedUser, BlacklistWord, ChatMessage, ChatSession, FlaggedBody, FlaggedSession,
+    ListAuditEntry, ModerationLists, PlayerAuditEntry, PreviewLine, SuspendedUser,
+    SystemAuditEntry, WordAuditEntry,
 };
 
 /// Shorthand for a clean (unflagged) preview line in the sample data.
@@ -405,6 +406,55 @@ fn sample_audit_log() -> AuditLog {
     }
 }
 
+/// Placeholder Moderation Lists data for the three wired sub-tabs (Whitelisted
+/// Users has no mockup yet). Reuses the demo players/words from the audit sample
+/// so every table reads coherently against the rest of the panel.
+fn sample_moderation_lists() -> ModerationLists {
+    ModerationLists {
+        blacklist: vec![
+            BlacklistWord {
+                word: "frick".into(),
+                reason: "Slur".into(),
+                active_filter: true,
+            },
+            BlacklistWord {
+                word: "scrub".into(),
+                reason: "Harassment".into(),
+                active_filter: true,
+            },
+            BlacklistWord {
+                word: "chicken".into(),
+                reason: "Context-dependent — under review".into(),
+                active_filter: false,
+            },
+        ],
+        banned: vec![
+            BannedUser {
+                timestamp: "2026-07-24 13:58:20 UTC".into(),
+                username: "EldenFire".into(),
+                player_id: 12,
+                reason: "Slur spam".into(),
+                has_transcript: true,
+            },
+            BannedUser {
+                timestamp: "2026-07-24 13:58:20 UTC".into(),
+                username: "MossyOak".into(),
+                player_id: 3,
+                reason: "Slur spam".into(),
+                has_transcript: true,
+            },
+        ],
+        suspended: vec![SuspendedUser {
+            timestamp: "2026-07-24 11:48:19 UTC".into(),
+            username: "TinCanTam".into(),
+            player_id: 88,
+            suspended_for: "1d".into(),
+            remaining: "18h 42m".into(),
+            reason: "Off-topic flooding".into(),
+        }],
+    }
+}
+
 /// Case-insensitive lookup of a demo session; returns the canonical uppercase
 /// code so links and highlights stay consistent.
 fn find_session(code: &str) -> Option<String> {
@@ -455,10 +505,11 @@ pub async fn chatmod_session_page(
     .into_response()
 }
 
-/// Query for the audit page. `from` names the session the moderator was viewing
-/// when they opened Chat Audit Logs, so the X close can return there.
+/// Shared query for the Chat Nav sub-pages. `from` names the session the
+/// moderator was viewing when they opened a sub-page (Moderation Lists / Chat
+/// Audit Logs), so the X close can return there instead of the landing page.
 #[derive(serde::Deserialize)]
-pub struct AuditQuery {
+pub struct FromQuery {
     from: Option<String>,
 }
 
@@ -467,7 +518,7 @@ pub struct AuditQuery {
 pub async fn chatmod_audit_page(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<AuditQuery>,
+    Query(query): Query<FromQuery>,
 ) -> Response {
     let Some(session) = require_session(&headers, &state.redis).await else {
         return Redirect::to("/admin").into_response();
@@ -479,6 +530,32 @@ pub async fn chatmod_audit_page(
 
     Html(templates::chatmod_audit_page(
         &sample_audit_log(),
+        &sample_sessions(),
+        &close_href,
+        session.role,
+        &session.username,
+    ))
+    .into_response()
+}
+
+/// GET /admin/chatmod/lists — the Moderation Lists page. The X close returns to
+/// the session named by `?from=` (when it resolves) or to the landing page,
+/// mirroring the Chat Audit Logs page's remember-where-you-were behavior.
+pub async fn chatmod_lists_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<FromQuery>,
+) -> Response {
+    let Some(session) = require_session(&headers, &state.redis).await else {
+        return Redirect::to("/admin").into_response();
+    };
+    let close_href = match query.from.as_deref().and_then(find_session) {
+        Some(canon) => format!("/admin/chatmod/session/{canon}"),
+        None => "/admin/chatmod".to_string(),
+    };
+
+    Html(templates::chatmod_lists_page(
+        &sample_moderation_lists(),
         &sample_sessions(),
         &close_href,
         session.role,
@@ -528,6 +605,11 @@ mod tests {
         assert!(html.contains("Moderation Lists"));
         assert!(!html.contains("Banned List"));
         assert!(!html.contains("Player Whitelist"));
+        // Moderation Lists is now a live Chat Nav link (not a "soon" placeholder),
+        // carrying the same X-return behavior as Chat Audit Logs. The standalone
+        // "Suspensions" nav entry folded into it as the Active Suspensions sub-tab.
+        assert!(html.contains(r#"class="cm-nav-item cm-nav-link" href="/admin/chatmod/lists">Moderation Lists</a>"#));
+        assert!(!html.contains(r#"Suspensions<span class="cm-soon">"#));
     }
 
     #[test]
@@ -729,6 +811,83 @@ mod tests {
         // Opened from inside a session, the X returns to that session view.
         let from_session = templates::chatmod_audit_page(
             &sample_audit_log(),
+            &sample_sessions(),
+            "/admin/chatmod/session/FJ5B3V",
+            crate::admin::AdminRole::Moderator,
+            "modtester",
+        );
+        assert!(from_session.contains(r#"href="/admin/chatmod/session/FJ5B3V" class="cm-close""#));
+    }
+
+    #[test]
+    fn lists_page_renders_subtabs_and_tables() {
+        let html = templates::chatmod_lists_page(
+            &sample_moderation_lists(),
+            &sample_sessions(),
+            "/admin/chatmod",
+            crate::admin::AdminRole::Moderator,
+            "modtester",
+        );
+        assert!(html.contains("Moderation Lists"));
+        // Four sub-tabs, one panel each; Backlisted Words is selected by default.
+        for (tab, label) in [
+            ("blacklist", "Backlisted Words"),
+            ("banned", "Banned Users"),
+            ("suspensions", "Active Suspensions"),
+            ("whitelist", "Whitelisted Users"),
+        ] {
+            assert!(html.contains(&format!(r#"data-tab="{tab}""#)), "missing {tab} tab/panel");
+            assert!(html.contains(label), "missing {label} label");
+        }
+        assert!(html.contains(
+            r#"class="cm-lists-tab cm-lists-tab-active" role="tab" aria-selected="true" data-tab="blacklist""#
+        ));
+        // Backlisted Words: the three tools + the ledger's four columns.
+        assert!(html.contains("Add to Blacklist"));
+        assert!(html.contains("Remove From Blacklist"));
+        assert!(html.contains("Add Words From a CSV File"));
+        for col in ["Words", "Reason Provided", "Active Filter Toggle", "Delete"] {
+            assert!(html.contains(&format!("<th>{col}</th>")), "missing blacklist column {col}");
+        }
+        // The trash button opens the inert delete-confirm modal (reason required).
+        assert!(html.contains(r#"onclick="bbCmListsAsk('cm-lists-del-modal')""#));
+        assert!(html.contains(r#"id="cm-lists-del-modal""#));
+        // Banned Users columns + the ban/unban confirm modals.
+        for col in ["Timestamp", "Username", "User ID", "Reason For Ban", "Transcript", "CheckBox"] {
+            assert!(html.contains(&format!("<th>{col}</th>")), "missing banned column {col}");
+        }
+        assert!(html.contains(r#"onclick="bbCmListsAsk('cm-lists-ban-modal')""#));
+        assert!(html.contains(r#"onclick="bbCmListsAsk('cm-lists-unban-modal')""#));
+        // Banned rows show the canonical zero-padded player id, tap-to-copy.
+        assert!(html.contains(r#"data-copy="000000012""#));
+        // Active Suspensions columns + the three duration fields.
+        for col in ["TimeStamp", "Suspended For", "Remaining Time Left"] {
+            assert!(html.contains(&format!("<th>{col}</th>")), "missing suspension column {col}");
+        }
+        for ph in ["Days", "Hours", "Mins"] {
+            assert!(html.contains(&format!(
+                r#"class="cm-dur" inputmode="numeric" placeholder="{ph}""#
+            )));
+        }
+        assert!(html.contains("Suspending a user from this page is under construction."));
+        // On its own page, Moderation Lists is the active Chat Nav item.
+        assert!(html.contains(r#"cm-nav-current" aria-current="page">Moderation Lists</span>"#));
+    }
+
+    #[test]
+    fn lists_close_target_follows_session_context() {
+        // From the landing there is no open session — the X returns there.
+        let landing = templates::chatmod_lists_page(
+            &sample_moderation_lists(),
+            &sample_sessions(),
+            "/admin/chatmod",
+            crate::admin::AdminRole::Moderator,
+            "modtester",
+        );
+        assert!(landing.contains(r#"href="/admin/chatmod" class="cm-close""#));
+        // Opened from inside a session, the X returns to that session view.
+        let from_session = templates::chatmod_lists_page(
+            &sample_moderation_lists(),
             &sample_sessions(),
             "/admin/chatmod/session/FJ5B3V",
             crate::admin::AdminRole::Moderator,
