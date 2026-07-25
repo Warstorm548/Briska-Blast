@@ -523,15 +523,12 @@ pub async fn chatmod_audit_page(
     let Some(session) = require_session(&headers, &state.redis).await else {
         return Redirect::to("/admin").into_response();
     };
-    let close_href = match query.from.as_deref().and_then(find_session) {
-        Some(canon) => format!("/admin/chatmod/session/{canon}"),
-        None => "/admin/chatmod".to_string(),
-    };
+    let from = query.from.as_deref().and_then(find_session);
 
     Html(templates::chatmod_audit_page(
         &sample_audit_log(),
         &sample_sessions(),
-        &close_href,
+        from.as_deref(),
         session.role,
         &session.username,
     ))
@@ -549,15 +546,12 @@ pub async fn chatmod_lists_page(
     let Some(session) = require_session(&headers, &state.redis).await else {
         return Redirect::to("/admin").into_response();
     };
-    let close_href = match query.from.as_deref().and_then(find_session) {
-        Some(canon) => format!("/admin/chatmod/session/{canon}"),
-        None => "/admin/chatmod".to_string(),
-    };
+    let from = query.from.as_deref().and_then(find_session);
 
     Html(templates::chatmod_lists_page(
         &sample_moderation_lists(),
         &sample_sessions(),
-        &close_href,
+        from.as_deref(),
         session.role,
         &session.username,
     ))
@@ -686,7 +680,7 @@ mod tests {
         let html = templates::chatmod_audit_page(
             &sample_audit_log(),
             &sample_sessions(),
-            "/admin/chatmod",
+            None,
             crate::admin::AdminRole::Moderator,
             "modtester",
         );
@@ -777,7 +771,7 @@ mod tests {
         let html = templates::chatmod_audit_page(
             &sample_audit_log(),
             &sample_sessions(),
-            "/admin/chatmod",
+            None,
             crate::admin::AdminRole::Moderator,
             "modtester",
         );
@@ -803,7 +797,7 @@ mod tests {
         let landing = templates::chatmod_audit_page(
             &sample_audit_log(),
             &sample_sessions(),
-            "/admin/chatmod",
+            None,
             crate::admin::AdminRole::Moderator,
             "modtester",
         );
@@ -812,11 +806,15 @@ mod tests {
         let from_session = templates::chatmod_audit_page(
             &sample_audit_log(),
             &sample_sessions(),
-            "/admin/chatmod/session/FJ5B3V",
+            Some("FJ5B3V"),
             crate::admin::AdminRole::Moderator,
             "modtester",
         );
         assert!(from_session.contains(r#"href="/admin/chatmod/session/FJ5B3V" class="cm-close""#));
+        // ...and the Moderation Lists nav link forwards the same session context,
+        // so hopping between the two sub-pages doesn't drop it (regression: the
+        // nav hrefs were built from the always-None active_code, not ?from=).
+        assert!(from_session.contains(r#"href="/admin/chatmod/lists?from=FJ5B3V""#));
     }
 
     #[test]
@@ -824,7 +822,7 @@ mod tests {
         let html = templates::chatmod_lists_page(
             &sample_moderation_lists(),
             &sample_sessions(),
-            "/admin/chatmod",
+            None,
             crate::admin::AdminRole::Moderator,
             "modtester",
         );
@@ -880,7 +878,7 @@ mod tests {
         let landing = templates::chatmod_lists_page(
             &sample_moderation_lists(),
             &sample_sessions(),
-            "/admin/chatmod",
+            None,
             crate::admin::AdminRole::Moderator,
             "modtester",
         );
@@ -889,10 +887,12 @@ mod tests {
         let from_session = templates::chatmod_lists_page(
             &sample_moderation_lists(),
             &sample_sessions(),
-            "/admin/chatmod/session/FJ5B3V",
+            Some("FJ5B3V"),
             crate::admin::AdminRole::Moderator,
             "modtester",
         );
         assert!(from_session.contains(r#"href="/admin/chatmod/session/FJ5B3V" class="cm-close""#));
+        // ...and the Chat Audit Logs nav link forwards the same session context.
+        assert!(from_session.contains(r#"href="/admin/chatmod/audit?from=FJ5B3V""#));
     }
 }

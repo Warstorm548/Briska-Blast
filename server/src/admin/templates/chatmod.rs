@@ -703,16 +703,20 @@ fn chatmod_shell(
     center: &str,
     sessions: &[ChatSession],
     active_code: Option<&str>,
+    nav_from: Option<&str>,
     current: ChatNavPage,
     role: AdminRole,
     username: &str,
 ) -> String {
     let nav = nav_html("chatmod", role, username);
     let session_cards = session_list_html(sessions, active_code);
-    // The Chat Nav "Moderation Lists" / "Chat Audit Logs" links remember the
-    // session the moderator is in (via ?from=), so each sub-page's X can return
-    // to it instead of the landing page.
-    let (lists_href, audit_href) = match active_code {
+    // The Chat Nav "Moderation Lists" / "Chat Audit Logs" links carry the session
+    // the moderator came from (via ?from=). This is `nav_from`, kept separate from
+    // `active_code` (which only highlights the entered session's card): a sub-page
+    // isn't "in" a session, yet must still forward the context so hopping between
+    // the two sub-pages — and each one's X — returns to that session, not the
+    // landing page.
+    let (lists_href, audit_href) = match nav_from {
         Some(code) => {
             let c = escape(code);
             (
@@ -957,7 +961,7 @@ pub fn chatmod_landing_page(
   </div>
 </div>"#
     );
-    chatmod_shell(&center, sessions, None, ChatNavPage::None, role, username)
+    chatmod_shell(&center, sessions, None, None, ChatNavPage::None, role, username)
 }
 
 /// GET /admin/chatmod/session/:code — the entered-session view: transcript +
@@ -993,7 +997,7 @@ pub fn chatmod_session_page(
   {TOOLS_HTML}
 </div>"#
     );
-    chatmod_shell(&center, sessions, Some(code), ChatNavPage::None, role, username)
+    chatmod_shell(&center, sessions, Some(code), Some(code), ChatNavPage::None, role, username)
 }
 
 /// The Body Id table cell: the single id (tap-to-copy), an em-dash for a
@@ -1475,16 +1479,22 @@ fn audit_view_html(filter: String, table: String) -> String {
 /// category log renders: Player, Word, List, or System (automated) — each its own
 /// table with direct headers and its own Advanced Filter (a shared spine +
 /// table-specific fields). Player/Word-Approve/System rows carry a chat-snapshot
-/// overlay opened from the Transcript button. `close_href` is the context-aware X
-/// target — the landing page, or the session the moderator had open.
+/// overlay opened from the Transcript button. `from` is the session the moderator
+/// came from (resolved from `?from=`): it drives both the context-aware X target
+/// (that session, else the landing page) and the Chat Nav links, which forward it
+/// so hopping to Moderation Lists keeps the same context.
 pub fn chatmod_audit_page(
     log: &AuditLog,
     sessions: &[ChatSession],
-    close_href: &str,
+    from: Option<&str>,
     role: AdminRole,
     username: &str,
 ) -> String {
-    let close = escape(close_href);
+    let close_href = match from {
+        Some(code) => format!("/admin/chatmod/session/{code}"),
+        None => "/admin/chatmod".to_string(),
+    };
+    let close = escape(&close_href);
     let player_view = audit_view_html(
         audit_filter_panel(
             &["Warn Only", "Warn + Delete", "Suspend", "Ban"],
@@ -1537,7 +1547,7 @@ pub fn chatmod_audit_page(
 <div class="cm-audit-view" data-cat="system" hidden>{system_view}</div>
 {modals}"#
     );
-    chatmod_shell(&center, sessions, None, ChatNavPage::Audit, role, username)
+    chatmod_shell(&center, sessions, None, from, ChatNavPage::Audit, role, username)
 }
 
 /// The **Backlisted Words** sub-tab: a three-column tools panel (add / remove /
@@ -1794,16 +1804,22 @@ const LISTS_MODALS_HTML: &str = r#"<div id="cm-lists-del-modal" class="modal-bac
 /// GET /admin/chatmod/lists — the Moderation Lists view. A tab strip selects one
 /// of four sub-tabs (Backlisted Words, Banned Users, Active Suspensions,
 /// Whitelisted Users), each rendered as a tools panel over a list table; the tab
-/// toggle is client-side (`bbCmListsTab`). `close_href` is the context-aware X
-/// target — the landing page, or the session the moderator had open (`?from=`).
+/// toggle is client-side (`bbCmListsTab`). `from` is the session the moderator
+/// came from (resolved from `?from=`): it drives both the context-aware X target
+/// (that session, else the landing page) and the Chat Nav links, which forward it
+/// so hopping to Chat Audit Logs keeps the same context.
 pub fn chatmod_lists_page(
     lists: &ModerationLists,
     sessions: &[ChatSession],
-    close_href: &str,
+    from: Option<&str>,
     role: AdminRole,
     username: &str,
 ) -> String {
-    let close = escape(close_href);
+    let close_href = match from {
+        Some(code) => format!("/admin/chatmod/session/{code}"),
+        None => "/admin/chatmod".to_string(),
+    };
+    let close = escape(&close_href);
     let blacklist = blacklist_panel_html(&lists.blacklist);
     let banned = banned_panel_html(&lists.banned);
     let suspensions = suspensions_panel_html(&lists.suspended);
@@ -1829,7 +1845,7 @@ pub fn chatmod_lists_page(
 <div class="cm-lists-panel" role="tabpanel" data-tab="whitelist" hidden>{whitelist}</div>
 {LISTS_MODALS_HTML}"#
     );
-    chatmod_shell(&center, sessions, None, ChatNavPage::Lists, role, username)
+    chatmod_shell(&center, sessions, None, from, ChatNavPage::Lists, role, username)
 }
 
 #[cfg(test)]
