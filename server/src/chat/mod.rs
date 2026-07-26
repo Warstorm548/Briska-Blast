@@ -45,8 +45,91 @@ pub mod blacklist;
 pub mod ids;
 pub mod transcript;
 
+use crate::signaling::protocol::{ChatKind, ServerMsg};
 use crate::state::AppState;
 use transcript::{MessageKind, StoredMessage};
+
+/// A moderator speaking into a live session.
+pub struct ModeratorMessage<'a> {
+    /// The name players will see — either the moderator's Pocket ID display name
+    /// or the generic anonymous label.
+    pub display_name: &'a str,
+    /// The moderator's real display name. Recorded regardless of `anonymous`.
+    pub moderator: &'a str,
+    /// The moderator's Pocket ID subject — stable across a display-name change,
+    /// which is why the record keeps both.
+    pub moderator_sub: &'a str,
+    pub anonymous: bool,
+    pub text: &'a str,
+}
+
+/// Post a moderator message into a live session's chat.
+///
+/// Two things are deliberately asymmetric here:
+///
+/// 1. **The broadcast may be anonymous; the record never is.** The transcript
+///    stores the acting moderator's real name and subject alongside the
+///    `anonymous` flag, so an anonymous intervention is still attributable.
+///    Only `display_name` reaches players.
+/// 2. **Moderator text is not run through the word filter.** A moderator
+///    quoting a slur in order to moderate it must not have their own message
+///    censored, and they are trusted staff by definition.
+///
+/// Appending marks the transcript retained (see [`transcript::append`]), so a
+/// deliberate intervention in a player-facing channel stays on the record even
+/// if the session would otherwise have been discarded.
+///
+/// Broadcasting works from an admin handler because both routers share one
+/// `AppState`, and therefore one `SignalHub`.
+pub async fn speak_as_moderator(state: &AppState, code: &str, msg: ModeratorMessage<'_>) {
+    match state.redis.get().await {
+        Ok(mut conn) => match ids::next_body_id(&mut conn).await {
+            Ok(body_id) => {
+                let stored = StoredMessage {
+                    body_id,
+                    kind: MessageKind::Moderator,
+                    // A moderator has no player account.
+                    player_id: String::new(),
+                    username: msg.display_name.to_string(),
+                    text: msg.text.to_string(),
+                    flagged_words: Vec::new(),
+                    mod_user: msg.moderator.to_string(),
+                    mod_sub: msg.moderator_sub.to_string(),
+                    mod_anonymous: msg.anonymous,
+                    at_ms: chrono::Utc::now().timestamp_millis(),
+                };
+                if let Err(e) = transcript::append(&mut conn, code, &stored).await {
+                    tracing::warn!("chat: moderator line not recorded for {}: {}", code, e);
+                }
+            }
+            Err(e) => tracing::warn!("chat: no body id for the moderator line: {}", e),
+        },
+        Err(e) => tracing::warn!("chat: moderator line not recorded, no redis: {}", e),
+    }
+
+    // Send it either way. A recording failure must not stop a moderator being
+    // heard — the same "never silence the channel" rule the player path follows.
+    state
+        .signal_hub
+        .broadcast(
+            code,
+            ServerMsg::ChatMessage {
+                from: String::new(),
+                username: msg.display_name.to_string(),
+                text: msg.text.to_string(),
+                kind: ChatKind::Moderator,
+            },
+            None,
+        )
+        .await;
+
+    tracing::info!(
+        session = %code,
+        moderator = %msg.moderator,
+        anonymous = msg.anonymous,
+        "chat: moderator spoke into session"
+    );
+}
 
 /// Record an accepted player chat line and resolve the sender's display name.
 ///

@@ -524,7 +524,7 @@ const TOOLS_HTML: &str = r#"<div class="cm-panel cm-tools">
       </div>
       <div class="cm-tool-group">
         <p class="cm-tool-group-title">Moderator Chat Settings</p>
-        <label class="cm-check"><input type="checkbox"> Appear As Your Display Name</label>
+        <label class="cm-check"><input type="checkbox" id="cm-show-name"> Appear As Your Display Name</label>
       </div>
       <p class="note">Preview only &mdash; tools are not wired up yet.</p>
       </div>
@@ -723,6 +723,22 @@ fn transcript_html(transcript: &[ChatMessage]) -> String {
         .collect()
 }
 
+/// The left panel's card list, for the live-refresh endpoint. Renders exactly
+/// what the full page puts inside `#cm-sessions`, so a poll can swap it in.
+pub fn chatmod_sessions_fragment(sessions: &[ChatSession], active_code: Option<&str>) -> String {
+    session_list_html(sessions, active_code)
+}
+
+/// The landing page's flagged cards, for the live-refresh endpoint.
+pub fn chatmod_flagged_fragment(flagged: &[FlaggedSession]) -> String {
+    flagged_list_html(flagged)
+}
+
+/// A session's transcript rows, for the live-refresh endpoint.
+pub fn chatmod_transcript_fragment(transcript: &[ChatMessage]) -> String {
+    transcript_html(transcript)
+}
+
 /// The full-width three-column document both views share: nav, left sessions
 /// panel, injected `center`, right Chat Nav panel, and the drawer-toggle
 /// script. Braces in the inline JS are doubled for `format!`.
@@ -757,6 +773,12 @@ fn chatmod_shell(
         ),
     };
     let chat_nav = chat_nav_html(&lists_href, &audit_href, current);
+    // The live-refresh poller reads this to decide what to ask for: inside a
+    // session it wants that transcript, elsewhere just the landing panels.
+    let body_attrs = match active_code {
+        Some(code) => format!(r#" data-cm-code="{}""#, escape(code)),
+        None => String::new(),
+    };
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -766,14 +788,14 @@ fn chatmod_shell(
   <title>Briska Blast — Admin Chat-Mod</title>
   <style>{CSS}{CHATMOD_CSS}</style>
 </head>
-<body>
+<body{body_attrs}>
 <div class="cm-page">
   <div class="cm-card">
     {nav}
     <div class="cm-layout">
       <aside class="cm-panel cm-left" id="cm-left">
         <p class="cm-panel-title">Active Game Sessions</p>
-        <div class="cm-panel-scroll">
+        <div class="cm-panel-scroll" id="cm-sessions">
         {session_cards}
         </div>
         <button type="button" class="cm-resize" id="cm-resize" aria-label="Resize sessions panel (drag, arrow keys, double-click resets)"></button>
@@ -963,6 +985,98 @@ window.bbCmListsTab=function(btn){{
 window.bbCmListsAsk=function(id){{var m=document.getElementById(id);if(m)m.style.display='flex';}};
 window.bbCmListsCloseAll=function(){{document.querySelectorAll('.cm-lists-modal').forEach(function(m){{m.style.display='none';}});}};
 document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCmListsCloseAll();}});
+// Deleting a blacklisted word: the trash icon names the word in the confirm
+// dialog, and only Confirm submits. Cancel, Escape or a backdrop click send
+// nothing and write no audit record.
+window.bbCmListsDelete=function(word){{
+  var w=document.getElementById('cm-lists-del-word');
+  var label=document.getElementById('cm-lists-del-who');
+  var why=document.getElementById('cm-lists-del-why');
+  if(w)w.value=word;
+  if(label)label.textContent=word;
+  if(why)why.value='';
+  bbCmListsAsk('cm-lists-del-modal');
+}};
+window.bbCmListsDeleteConfirm=function(){{
+  var f=document.getElementById('cm-lists-del-form');
+  var why=document.getElementById('cm-lists-del-why');
+  var r=document.getElementById('cm-lists-del-reason');
+  if(!f)return;
+  if(r&&why)r.value=why.value;
+  f.submit();
+}};
+// Live refresh. Same contract as the Logs tab: a redirected response or a
+// 401/403 means the admin session lapsed, so bounce to the login page rather
+// than silently polling a dead session. Inside a session the transcript refreshes
+// every 2s; the landing panels are calmer at 5s.
+//
+// Note this deliberately does NOT touch /admin/keepalive — the idle logout is
+// activity-driven, and a background poll must not masquerade as activity.
+window.bbCmPollNow=function(){{}};
+(function(){{
+  var code=document.body.getAttribute('data-cm-code');
+  var url=code?('/admin/chatmod/session/'+encodeURIComponent(code)+'/data'):'/admin/chatmod/data';
+  function apply(id,html){{if(html===undefined||html===null)return;var el=document.getElementById(id);if(el)el.innerHTML=html;}}
+  function load(){{
+    fetch(url,{{headers:{{'Accept':'application/json'}}}}).then(function(r){{
+      if(r.redirected){{window.location.href=r.url;return null;}}
+      if(r.status===401||r.status===403){{window.location.href='/admin';return null;}}
+      return r.ok?r.json():null;
+    }}).then(function(d){{
+      if(!d)return;
+      apply('cm-sessions',d.sessions);
+      apply('cm-flagged',d.flagged);
+      var chat=document.getElementById('cm-chat');
+      if(chat&&d.transcript!==undefined&&d.transcript!==null){{
+        // Only follow the tail if the moderator was already reading it. Yanking
+        // them to the bottom while they scroll back through history is the
+        // single most annoying thing a live chat view can do.
+        var atBottom=(chat.scrollHeight-chat.scrollTop-chat.clientHeight)<40;
+        chat.innerHTML=d.transcript;
+        if(atBottom)chat.scrollTop=chat.scrollHeight;
+      }}
+    }}).catch(function(){{}});
+  }}
+  window.bbCmPollNow=load;
+  setInterval(load,code?2000:5000);
+}})();
+// Moderator chat. Enter and the Send button run the same path, so desktop and
+// the mobile drawer layout behave identically. Posting via fetch (rather than a
+// form navigation) keeps scroll position and the poll timer alive.
+//
+// The checkbox is "Appear As Your Display Name", so UNCHECKED is anonymous —
+// and that is the default. The choice is remembered per browser, because a
+// moderator who deliberately posts anonymously should not have a fresh page
+// load quietly reveal their name on the next message.
+(function(){{
+  var KEY='bb_cm_show_name', c=document.getElementById('cm-show-name');
+  if(!c)return;
+  try{{c.checked=localStorage.getItem(KEY)==='1';}}catch(e){{}}
+  c.addEventListener('change',function(){{try{{localStorage.setItem(KEY,c.checked?'1':'0');}}catch(e){{}}}});
+}})();
+window.bbCmSay=function(){{
+  var input=document.getElementById('cm-chatbar-input');
+  var code=document.body.getAttribute('data-cm-code');
+  if(!input||!code)return;
+  var text=input.value.trim();
+  if(!text)return;
+  var show=document.getElementById('cm-show-name');
+  var body=new URLSearchParams();
+  body.set('text',text);
+  body.set('show_name',(show&&show.checked)?'1':'0');
+  // Clear optimistically: the line is echoed back by the next poll, the same
+  // way the game client renders only what the server broadcast.
+  input.value='';
+  fetch('/admin/chatmod/session/'+encodeURIComponent(code)+'/say',{{
+    method:'POST',
+    headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
+    body:body.toString()
+  }}).then(function(r){{
+    if(r.redirected){{window.location.href=r.url;return;}}
+    if(r.status===401||r.status===403){{window.location.href='/admin';return;}}
+    bbCmPollNow();
+  }}).catch(function(){{}});
+}};
 </script>
 </body>
 </html>"#
@@ -983,7 +1097,7 @@ pub fn chatmod_landing_page(
 <div class="cm-flag-wrap">
   <p class="cm-flag-title">Flagged Messages</p>
   <p class="cm-flag-sub">Messages flagged by the system for containing blacklisted words. Click one to enter that session.</p>
-  <div class="cm-flag-scroll">
+  <div class="cm-flag-scroll" id="cm-flagged">
   {flag_cards}
   </div>
 </div>"#
@@ -1013,12 +1127,12 @@ pub fn chatmod_session_page(
 </div>
 <div class="cm-session-body">
   <div class="cm-chat">
-    <div class="cm-chat-scroll">
+    <div class="cm-chat-scroll" id="cm-chat">
       {messages}
     </div>
     <div class="cm-chatbar">
-      <input type="text" placeholder="Moderator chat bar">
-      <button type="button" class="btn btn-primary btn-sm">Send</button>
+      <input type="text" id="cm-chatbar-input" placeholder="Moderator chat bar" maxlength="500" autocomplete="off" onkeydown="if(event.key==='Enter'){{event.preventDefault();bbCmSay();}}">
+      <button type="button" class="btn btn-primary btn-sm" onclick="bbCmSay()">Send</button>
     </div>
   </div>
   {TOOLS_HTML}
@@ -1589,9 +1703,19 @@ pub fn chatmod_audit_page(
 }
 
 /// The **Backlisted Words** sub-tab: a three-column tools panel (add / remove /
-/// CSV import) over the searchable "Words In List" ledger. Delete opens the
-/// shared delete-confirm modal (reason required). Preview only — inert controls.
-fn blacklist_panel_html(words: &[BlacklistWord]) -> String {
+/// CSV import) over the searchable "Words In List" ledger.
+///
+/// Add, Remove and the Active Filter toggle post for real. Delete routes through
+/// the shared confirm modal, which collects the (logged-only) reason before
+/// submitting. CSV import is still inert.
+///
+/// `from` threads the session a moderator came from through every post, so the
+/// redirect lands back where they were rather than on the bare lists page.
+fn blacklist_panel_html(words: &[BlacklistWord], from: Option<&str>) -> String {
+    let from_field = match from {
+        Some(code) => format!(r#"<input type="hidden" name="from" value="{}">"#, escape(code)),
+        None => String::new(),
+    };
     let table = if words.is_empty() {
         r#"<p class="cm-empty">No blacklisted words.</p>"#.to_string()
     } else {
@@ -1599,13 +1723,16 @@ fn blacklist_panel_html(words: &[BlacklistWord]) -> String {
             .iter()
             .map(|w| {
                 let checked = if w.active_filter { " checked" } else { "" };
+                // The toggle posts the value it is moving TO, so a stale page
+                // can't flip a word the opposite way from what the moderator saw.
+                let next = if w.active_filter { "0" } else { "1" };
                 let word = escape(&w.word);
                 format!(
                     r#"<tr>
             <td>{word}</td>
             <td>{reason}</td>
-            <td class="cm-lists-check"><input type="checkbox"{checked} aria-label="Active filter for {word}"></td>
-            <td class="cm-lists-check"><button type="button" class="btn-trash" title="Delete" aria-label="Delete {word}" onclick="bbCmListsAsk('cm-lists-del-modal')">&#128465;</button></td>
+            <td class="cm-lists-check"><form method="post" action="/admin/chatmod/lists/blacklist/toggle" class="cm-inline-form">{from_field}<input type="hidden" name="words" value="{word}"><input type="hidden" name="active" value="{next}"><input type="checkbox"{checked} aria-label="Active filter for {word}" onchange="this.form.submit()"></form></td>
+            <td class="cm-lists-check"><button type="button" class="btn-trash" title="Delete" aria-label="Delete {word}" onclick="bbCmListsDelete('{word}')">&#128465;</button></td>
           </tr>"#,
                     reason = escape(&w.reason),
                 )
@@ -1624,25 +1751,33 @@ fn blacklist_panel_html(words: &[BlacklistWord]) -> String {
     };
     format!(
         r#"<div class="cm-lists-tools">
-  <div class="cm-lists-tool">
+  <form class="cm-lists-tool" method="post" action="/admin/chatmod/lists/blacklist/add">
+    {from_field}
     <p class="cm-lists-tool-title">Add to Blacklist</p>
-    <input type="text" class="cm-reason" placeholder="Reason (logged)" aria-label="Reason for adding">
-    <textarea placeholder="Word or words &mdash; separate with ;" aria-label="Words to blacklist"></textarea>
-    <button type="button" class="btn btn-sm">Confirm</button>
-  </div>
-  <div class="cm-lists-tool">
+    <input type="text" class="cm-reason" name="reason" placeholder="Reason (logged)" aria-label="Reason for adding">
+    <textarea name="words" placeholder="Word or words &mdash; separate with ;" aria-label="Words to blacklist"></textarea>
+    <button type="submit" class="btn btn-sm">Confirm</button>
+  </form>
+  <form class="cm-lists-tool" method="post" action="/admin/chatmod/lists/blacklist/remove">
+    {from_field}
     <p class="cm-lists-tool-title">Remove From Blacklist</p>
-    <input type="text" class="cm-reason" placeholder="Reason (logged)" aria-label="Reason for removing">
-    <textarea placeholder="Word or words &mdash; separate with ;" aria-label="Words to remove"></textarea>
-    <button type="button" class="btn btn-sm">Confirm</button>
-  </div>
+    <input type="text" class="cm-reason" name="reason" placeholder="Reason (logged)" aria-label="Reason for removing">
+    <textarea name="words" placeholder="Word or words &mdash; separate with ;" aria-label="Words to remove"></textarea>
+    <button type="submit" class="btn btn-sm">Confirm</button>
+  </form>
   <div class="cm-lists-tool">
     <p class="cm-lists-tool-title">Add Words From a CSV File</p>
     <label for="cm-lists-csv">Upload</label>
     <input type="file" id="cm-lists-csv" accept=".csv" aria-label="CSV file">
     <button type="button" class="btn btn-sm">Confirm</button>
+    <p class="note">CSV import is not wired yet &mdash; paste words above for now.</p>
   </div>
 </div>
+<form method="post" action="/admin/chatmod/lists/blacklist/remove" id="cm-lists-del-form" hidden>
+  {from_field}
+  <input type="hidden" name="words" id="cm-lists-del-word">
+  <input type="hidden" name="reason" id="cm-lists-del-reason">
+</form>
 <p class="cm-lists-note">More than one word can be added at once &mdash; separate each with a <span class="mono">;</span> so the system counts them individually. Each word occupies its own row in the list below.</p>
 <div class="cm-lists-search">
   <label for="cm-lists-word-search">Words In List</label>
@@ -1810,10 +1945,11 @@ const LISTS_MODALS_HTML: &str = r#"<div id="cm-lists-del-modal" class="modal-bac
   <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="cm-lists-del-title" aria-describedby="cm-lists-del-desc">
     <p class="section-title" id="cm-lists-del-title">Remove Word From Blacklist</p>
     <p class="section-sub" id="cm-lists-del-desc">Removing a word requires a reason. It stops being filtered going forward.</p>
-    <input type="text" class="cm-reason" placeholder="Reason (logged)" aria-label="Removal reason">
+    <p class="section-sub">Word: <span class="mono" id="cm-lists-del-who"></span></p>
+    <input type="text" class="cm-reason" id="cm-lists-del-why" placeholder="Reason (logged)" aria-label="Removal reason">
     <div class="modal-actions">
       <button type="button" class="btn btn-sm" onclick="bbCmListsCloseAll()">Cancel</button>
-      <button type="button" class="btn btn-danger btn-sm" onclick="bbCmListsCloseAll()">Confirm</button>
+      <button type="button" class="btn btn-danger btn-sm" onclick="bbCmListsDeleteConfirm()">Confirm</button>
     </div>
   </div>
 </div>
@@ -1850,6 +1986,7 @@ pub fn chatmod_lists_page(
     lists: &ModerationLists,
     sessions: &[ChatSession],
     from: Option<&str>,
+    notice: Option<(bool, &str)>,
     role: AdminRole,
     username: &str,
 ) -> String {
@@ -1858,7 +1995,13 @@ pub fn chatmod_lists_page(
         None => "/admin/chatmod".to_string(),
     };
     let close = escape(&close_href);
-    let blacklist = blacklist_panel_html(&lists.blacklist);
+    // Same `?ok=` / `?err=` banner shape the Users and Dashboard tabs use.
+    let notice_html = match notice {
+        Some((true, text)) => format!(r#"<div class="msg-ok">&#10003; {}</div>"#, escape(text)),
+        Some((false, text)) => format!(r#"<div class="msg-err">&#10007; {}</div>"#, escape(text)),
+        None => String::new(),
+    };
+    let blacklist = blacklist_panel_html(&lists.blacklist, from);
     let banned = banned_panel_html(&lists.banned);
     let suspensions = suspensions_panel_html(&lists.suspended);
     let whitelist = whitelist_panel_html();
@@ -1871,6 +2014,7 @@ pub fn chatmod_lists_page(
   </div>
   <a href="{close}" class="cm-close" aria-label="Close moderation lists">&#10005;</a>
 </div>
+{notice_html}
 <div class="cm-lists-tabs" role="tablist" aria-label="Moderation lists">
   <button type="button" class="cm-lists-tab cm-lists-tab-active" role="tab" aria-selected="true" data-tab="blacklist" onclick="bbCmListsTab(this)">Backlisted Words</button>
   <button type="button" class="cm-lists-tab" role="tab" aria-selected="false" data-tab="banned" onclick="bbCmListsTab(this)">Banned Users</button>

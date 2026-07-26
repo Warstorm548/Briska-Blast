@@ -88,6 +88,11 @@ pub struct AdminSession {
     pub token: String,
     pub role: AdminRole,
     pub username: String,
+    /// The Pocket ID subject — a stable identifier that survives a display-name
+    /// change upstream. Audit records store it beside the name so history can't
+    /// be silently re-attributed by someone renaming themselves in Pocket ID.
+    /// Empty for the break-glass password login, which has no OIDC identity.
+    pub sub: String,
 }
 
 impl AdminSession {
@@ -137,6 +142,7 @@ pub async fn require_session(headers: &HeaderMap, redis: &Pool) -> Option<AdminS
         token,
         role: record.role,
         username: record.user,
+        sub: record.sub,
     })
 }
 

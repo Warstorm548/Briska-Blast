@@ -54,13 +54,23 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
+    Form, Json,
 };
 
 use super::{chatmod_data, require_session, templates};
-use crate::chat::transcript;
+use crate::chat::{audit, blacklist, transcript};
 use crate::state::AppState;
+
+/// Upper bound on a moderator message, matching the player-side `MAX_CHAT_LEN`
+/// in `signaling::ws::frame` — the same channel, so the same bound.
+const MAX_CHAT_LEN: usize = 500;
+
+/// The display name a moderator posts under when the "Appear As Your Display
+/// Name" toggle is off. Generic on purpose: players learn that a moderator is
+/// present without learning which one.
+const ANONYMOUS_MODERATOR_NAME: &str = "Mod";
 
 
 /// GET /admin/chatmod — the Chat-Mod landing page (flagged-message overview).
@@ -114,6 +124,22 @@ pub async fn chatmod_session_page(
 #[derive(serde::Deserialize)]
 pub struct FromQuery {
     from: Option<String>,
+    /// Success / failure notice set by an action's redirect, rendered as the
+    /// same banner the Users and Dashboard tabs use.
+    #[serde(default)]
+    ok: Option<String>,
+    #[serde(default)]
+    err: Option<String>,
+}
+
+impl FromQuery {
+    /// `(is_success, message)`, preferring an error when both somehow appear.
+    fn notice(&self) -> Option<(bool, &str)> {
+        if let Some(e) = self.err.as_deref() {
+            return Some((false, e));
+        }
+        self.ok.as_deref().map(|m| (true, m))
+    }
 }
 
 /// GET /admin/chatmod/audit — the Chat Audit Logs page. The X close returns to
@@ -161,10 +187,336 @@ pub async fn chatmod_lists_page(
         &chatmod_data::moderation_lists(&state).await,
         &chatmod_data::live_sessions(&state).await,
         from.as_deref(),
+        query.notice(),
         session.role,
         &session.username,
     ))
     .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Live refresh
+//
+// Both endpoints return HTML fragments the page swaps into place, rather than
+// JSON the browser re-renders — the server already owns this markup and its
+// escaping, and duplicating either in JavaScript is how the two drift apart.
+// The polling contract (redirect / 401 / 403 → back to the login page) matches
+// the Logs tab.
+// ---------------------------------------------------------------------------
+
+/// GET /admin/chatmod/data — the landing page's two panels.
+pub async fn chatmod_data_fragment(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if require_session(&headers, &state.redis).await.is_none() {
+        return Redirect::to("/admin").into_response();
+    }
+    Json(serde_json::json!({
+        "sessions": templates::chatmod_sessions_fragment(
+            &chatmod_data::live_sessions(&state).await,
+            None,
+        ),
+        "flagged": templates::chatmod_flagged_fragment(
+            &chatmod_data::flagged_overview(&state).await,
+        ),
+    }))
+    .into_response()
+}
+
+/// GET /admin/chatmod/session/:code/data — the entered session's transcript,
+/// plus the left panel so other sessions' previews and red dots stay current
+/// while a moderator is inside one.
+pub async fn chatmod_session_data(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(code): Path<String>,
+) -> Response {
+    if require_session(&headers, &state.redis).await.is_none() {
+        return Redirect::to("/admin").into_response();
+    }
+    let Some(canon) = chatmod_data::resolve_live_session(&state, &code).await else {
+        // The session ended under the moderator. Send them back to the landing
+        // page rather than leaving them polling a transcript that is now gone.
+        return Redirect::to("/admin/chatmod").into_response();
+    };
+    Json(serde_json::json!({
+        "sessions": templates::chatmod_sessions_fragment(
+            &chatmod_data::live_sessions(&state).await,
+            Some(&canon),
+        ),
+        "transcript": templates::chatmod_transcript_fragment(
+            &chatmod_data::transcript_view(&state, &canon).await,
+        ),
+    }))
+    .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Moderator chat
+// ---------------------------------------------------------------------------
+
+/// Form body for a moderator message. `show_name` mirrors the "Appear As Your
+/// Display Name" checkbox — absent or `0` means post as the generic `Mod`.
+#[derive(serde::Deserialize)]
+pub struct SayForm {
+    text: String,
+    #[serde(default)]
+    show_name: String,
+}
+
+/// POST /admin/chatmod/session/:code/say — speak into a live session's chat.
+///
+/// The broadcast may be anonymous; **the record never is**. The transcript
+/// always stores the acting moderator's display name and Pocket ID subject
+/// alongside an `anonymous` flag, so an anonymous intervention is still
+/// attributable. A moderator message also retains the session's transcript
+/// permanently — a deliberate intervention in a player-facing channel stays on
+/// the record.
+pub async fn chatmod_say(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(code): Path<String>,
+    Form(form): Form<SayForm>,
+) -> Response {
+    let Some(session) = require_session(&headers, &state.redis).await else {
+        return Redirect::to("/admin").into_response();
+    };
+    let Some(canon) = chatmod_data::resolve_live_session(&state, &code).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    // Same trim/bound as a player message (`signaling::ws::frame`), so a
+    // moderator cannot post an empty line or an oversized one either.
+    let text = form.text.trim();
+    if text.is_empty() {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    let text: String = text.chars().take(MAX_CHAT_LEN).collect();
+
+    let show_name = form.show_name == "1";
+    let display = if show_name {
+        session.username.clone()
+    } else {
+        ANONYMOUS_MODERATOR_NAME.to_string()
+    };
+
+    crate::chat::speak_as_moderator(
+        &state,
+        &canon,
+        crate::chat::ModeratorMessage {
+            display_name: &display,
+            moderator: &session.username,
+            moderator_sub: &session.sub,
+            anonymous: !show_name,
+            text: &text,
+        },
+    )
+    .await;
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Blacklist
+// ---------------------------------------------------------------------------
+
+/// Form body shared by the blacklist tools. `words` is `;`-separated, matching
+/// the separator convention the panel uses everywhere. `from` carries the
+/// session context so the redirect lands back where the moderator was.
+#[derive(serde::Deserialize)]
+pub struct BlacklistForm {
+    #[serde(default)]
+    words: String,
+    #[serde(default)]
+    reason: String,
+    #[serde(default)]
+    active: String,
+    #[serde(default)]
+    from: Option<String>,
+}
+
+/// Split a `;`-separated field into non-empty, trimmed entries.
+fn split_words(raw: &str) -> Vec<String> {
+    raw.split(';')
+        .map(str::trim)
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Where a lists action returns to, preserving `?from=` and appending a notice.
+fn lists_redirect(from: Option<&str>, key: &str, msg: &str) -> Response {
+    let encoded = urlencoding::encode(msg).into_owned();
+    let target = match from {
+        Some(code) => format!("/admin/chatmod/lists?from={code}&{key}={encoded}"),
+        None => format!("/admin/chatmod/lists?{key}={encoded}"),
+    };
+    Redirect::to(&target).into_response()
+}
+
+/// POST /admin/chatmod/lists/blacklist/add
+pub async fn blacklist_add(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<BlacklistForm>,
+) -> Response {
+    let Some(session) = require_session(&headers, &state.redis).await else {
+        return Redirect::to("/admin").into_response();
+    };
+    let from = match form.from.as_deref() {
+        Some(code) => chatmod_data::resolve_live_session(&state, code).await,
+        None => None,
+    };
+
+    let words = split_words(&form.words);
+    if words.is_empty() {
+        return lists_redirect(from.as_deref(), "err", "Enter at least one word.");
+    }
+
+    let Ok(mut conn) = state.redis.get().await else {
+        return lists_redirect(from.as_deref(), "err", "Storage unavailable.");
+    };
+    let added = match blacklist::add(&mut conn, &words, &form.reason, &session.username).await {
+        Ok(added) => added,
+        Err(e) => {
+            tracing::warn!("chatmod: blacklist add failed: {}", e);
+            return lists_redirect(from.as_deref(), "err", "Could not add those words.");
+        }
+    };
+
+    // One record per word: the audit log answers "who blacklisted this word and
+    // why", which a single record naming several words could not.
+    for word in &added {
+        let record = audit::AuditRecord::by_moderator(
+            &session.username,
+            &session.sub,
+            session.role,
+            "Blacklist Word",
+            &form.reason,
+        )
+        .with_words(vec![word.clone()]);
+        if let Err(e) = audit::write(&mut conn, audit::AuditCategory::Word, &record).await {
+            tracing::warn!("chatmod: blacklist audit write failed: {}", e);
+        }
+    }
+    drop(conn);
+    blacklist::invalidate(&state).await;
+
+    let msg = match added.len() {
+        0 => "Those words were already on the list.".to_string(),
+        1 => "Added 1 word.".to_string(),
+        n => format!("Added {n} words."),
+    };
+    lists_redirect(from.as_deref(), "ok", &msg)
+}
+
+/// POST /admin/chatmod/lists/blacklist/remove
+pub async fn blacklist_remove(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<BlacklistForm>,
+) -> Response {
+    let Some(session) = require_session(&headers, &state.redis).await else {
+        return Redirect::to("/admin").into_response();
+    };
+    let from = match form.from.as_deref() {
+        Some(code) => chatmod_data::resolve_live_session(&state, code).await,
+        None => None,
+    };
+
+    let words = split_words(&form.words);
+    if words.is_empty() {
+        return lists_redirect(from.as_deref(), "err", "Enter at least one word.");
+    }
+
+    let Ok(mut conn) = state.redis.get().await else {
+        return lists_redirect(from.as_deref(), "err", "Storage unavailable.");
+    };
+    let removed = match blacklist::remove(&mut conn, &words).await {
+        Ok(removed) => removed,
+        Err(e) => {
+            tracing::warn!("chatmod: blacklist remove failed: {}", e);
+            return lists_redirect(from.as_deref(), "err", "Could not remove those words.");
+        }
+    };
+
+    for word in &removed {
+        let record = audit::AuditRecord::by_moderator(
+            &session.username,
+            &session.sub,
+            session.role,
+            "Remove Blacklist Word",
+            &form.reason,
+        )
+        .with_words(vec![word.clone()]);
+        if let Err(e) = audit::write(&mut conn, audit::AuditCategory::Word, &record).await {
+            tracing::warn!("chatmod: blacklist audit write failed: {}", e);
+        }
+    }
+    drop(conn);
+    blacklist::invalidate(&state).await;
+
+    let msg = match removed.len() {
+        0 => "None of those words were on the list.".to_string(),
+        1 => "Removed 1 word.".to_string(),
+        n => format!("Removed {n} words."),
+    };
+    lists_redirect(from.as_deref(), "ok", &msg)
+}
+
+/// POST /admin/chatmod/lists/blacklist/toggle — flip a word's Active Filter.
+///
+/// A disabled word stays on the list, and stays in the audit history, but stops
+/// matching. That is deliberately different from removing it.
+pub async fn blacklist_toggle(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<BlacklistForm>,
+) -> Response {
+    let Some(session) = require_session(&headers, &state.redis).await else {
+        return Redirect::to("/admin").into_response();
+    };
+    let from = match form.from.as_deref() {
+        Some(code) => chatmod_data::resolve_live_session(&state, code).await,
+        None => None,
+    };
+
+    let Some(word) = split_words(&form.words).into_iter().next() else {
+        return lists_redirect(from.as_deref(), "err", "No word given.");
+    };
+    let active = form.active == "1";
+
+    let Ok(mut conn) = state.redis.get().await else {
+        return lists_redirect(from.as_deref(), "err", "Storage unavailable.");
+    };
+    match blacklist::set_active(&mut conn, &word, active).await {
+        Ok(true) => {}
+        Ok(false) => return lists_redirect(from.as_deref(), "err", "That word is not on the list."),
+        Err(e) => {
+            tracing::warn!("chatmod: blacklist toggle failed: {}", e);
+            return lists_redirect(from.as_deref(), "err", "Could not update that word.");
+        }
+    }
+
+    let action = if active { "Enable Word Filter" } else { "Disable Word Filter" };
+    let record = audit::AuditRecord::by_moderator(
+        &session.username,
+        &session.sub,
+        session.role,
+        action,
+        &form.reason,
+    )
+    .with_words(vec![word.clone()]);
+    if let Err(e) = audit::write(&mut conn, audit::AuditCategory::Word, &record).await {
+        tracing::warn!("chatmod: blacklist audit write failed: {}", e);
+    }
+    drop(conn);
+    blacklist::invalidate(&state).await;
+
+    let msg = if active {
+        format!("Filter enabled for \"{word}\".")
+    } else {
+        format!("Filter disabled for \"{word}\".")
+    };
+    lists_redirect(from.as_deref(), "ok", &msg)
 }
 
 #[cfg(test)]
@@ -595,6 +947,102 @@ mod tests {
         }
     }
 
+    #[test]
+    fn words_split_on_semicolons_and_drop_blanks() {
+        assert_eq!(split_words("frick;scrub"), vec!["frick", "scrub"]);
+        // The panel tells moderators to separate with `;`, and people add spaces.
+        assert_eq!(split_words(" frick ; scrub "), vec!["frick", "scrub"]);
+        assert_eq!(split_words("frick;;scrub;"), vec!["frick", "scrub"]);
+        assert_eq!(split_words(""), Vec::<String>::new());
+        assert_eq!(split_words("  ;  ; "), Vec::<String>::new());
+        // A single word needs no separator.
+        assert_eq!(split_words("frick"), vec!["frick"]);
+    }
+
+    #[test]
+    fn session_page_wires_the_moderator_chat_bar() {
+        let html = templates::chatmod_session_page(
+            "FJ5B3V",
+            &sample_transcript("FJ5B3V"),
+            &sample_sessions(),
+            crate::admin::AdminRole::Moderator,
+            "modtester",
+        );
+        // Enter and the Send button run the same path, so desktop and the mobile
+        // drawer layout behave identically.
+        assert!(html.contains(r#"onkeydown="if(event.key==='Enter'){event.preventDefault();bbCmSay();}""#));
+        assert!(html.contains(r#"onclick="bbCmSay()""#));
+        assert!(html.contains(r#"id="cm-chatbar-input""#));
+        // Bounded the same way a player message is.
+        assert!(html.contains(r#"maxlength="500""#));
+        // The anonymity toggle is addressable and defaults to unchecked, i.e.
+        // anonymous — a moderator must opt in to showing their name.
+        assert!(html.contains(r#"<input type="checkbox" id="cm-show-name"> Appear As Your Display Name"#));
+        // The poller learns which session it is in from the body attribute.
+        assert!(html.contains(r#"<body data-cm-code="FJ5B3V">"#));
+        // Refresh targets exist for the panels the poll swaps.
+        assert!(html.contains(r#"id="cm-chat""#));
+        assert!(html.contains(r#"id="cm-sessions""#));
+    }
+
+    #[test]
+    fn landing_page_polls_without_a_session_context() {
+        let html = templates::chatmod_landing_page(
+            &sample_sessions(),
+            &sample_flagged(),
+            crate::admin::AdminRole::Moderator,
+            "modtester",
+        );
+        // No session entered, so no code — the poller falls back to the landing
+        // endpoint rather than asking for a transcript that doesn't exist.
+        assert!(html.contains("<body>"));
+        // (the attribute name still appears in the poller's script — what matters
+        // is that the body tag carries no value for it)
+        assert!(!html.contains("<body data-cm-code"));
+        assert!(html.contains(r#"id="cm-flagged""#));
+    }
+
+    #[test]
+    fn moderator_line_renders_without_a_player_id() {
+        let transcript = vec![
+            ChatMessage {
+                body_id: "a00000000001".into(),
+                username: "Warstorm".into(),
+                player_id: Some(7),
+                body: "nice shot".into(),
+                flagged_word: None,
+                is_moderator: false,
+            },
+            ChatMessage {
+                body_id: "a00000000002".into(),
+                username: "Mod".into(),
+                player_id: None,
+                body: "keep it civil".into(),
+                flagged_word: None,
+                is_moderator: true,
+            },
+        ];
+        let html = templates::chatmod_session_page(
+            "FJ5B3V",
+            &transcript,
+            &sample_sessions(),
+            crate::admin::AdminRole::Moderator,
+            "modtester",
+        );
+        // The moderator's line is tagged and carries no player id...
+        assert!(html.contains(r#"<span class="cm-msg-mod">MOD</span> Mod "#));
+        // ...and no select checkbox, because the player tools act on player
+        // accounts and a moderator is not one.
+        assert_eq!(
+            html.matches(r#"aria-label="Select message"#).count(),
+            1,
+            "only the player line should be selectable"
+        );
+        // The player's line still shows theirs.
+        assert!(html.contains(r#"data-copy="000000007""#));
+        assert!(!html.contains("ID 000000000"), "a moderator must never render a zero id");
+    }
+
     // Session resolution now hits Redis, so the half that can be unit-tested is
     // the shape guard — see `chatmod_data::canonical_code` for the rest of this
     // coverage. What matters at this layer is that an unresolvable code sends the
@@ -604,6 +1052,7 @@ mod tests {
         let html = templates::chatmod_lists_page(
             &sample_moderation_lists(),
             &sample_sessions(),
+            None,
             None,
             crate::admin::AdminRole::Moderator,
             "modtester",
@@ -863,6 +1312,7 @@ mod tests {
             &sample_moderation_lists(),
             &sample_sessions(),
             None,
+            None,
             crate::admin::AdminRole::Moderator,
             "modtester",
         );
@@ -887,9 +1337,30 @@ mod tests {
         for col in ["Words", "Reason Provided", "Active Filter Toggle", "Delete"] {
             assert!(html.contains(&format!("<th>{col}</th>")), "missing blacklist column {col}");
         }
-        // The trash button opens the inert delete-confirm modal (reason required).
-        assert!(html.contains(r#"onclick="bbCmListsAsk('cm-lists-del-modal')""#));
+        // The trash button names the word in the confirm dialog, so a moderator
+        // sees exactly what they are about to remove; only Confirm submits.
+        assert!(html.contains(r#"onclick="bbCmListsDelete('frick')""#));
         assert!(html.contains(r#"id="cm-lists-del-modal""#));
+        assert!(html.contains(r#"onclick="bbCmListsDeleteConfirm()""#));
+        // Add / Remove are real posts, not inert buttons.
+        assert!(html.contains(r#"action="/admin/chatmod/lists/blacklist/add""#));
+        assert!(html.contains(r#"action="/admin/chatmod/lists/blacklist/remove""#));
+        assert!(html.contains(r#"<textarea name="words""#));
+        assert!(html.contains(r#"name="reason" placeholder="Reason (logged)""#));
+        // The Active Filter toggle posts the value it moves TO, so a stale page
+        // can't flip a word the opposite way from what the moderator saw. In the
+        // fixture "chicken" is inactive and the other two are active.
+        assert!(html.contains(r#"action="/admin/chatmod/lists/blacklist/toggle""#));
+        assert_eq!(
+            html.matches(r#"<input type="hidden" name="active" value="0">"#).count(),
+            2,
+            "the two active words should offer to turn OFF"
+        );
+        assert_eq!(
+            html.matches(r#"<input type="hidden" name="active" value="1">"#).count(),
+            1,
+            "the inactive word should offer to turn ON"
+        );
         // Banned Users columns + the ban/unban confirm modals.
         for col in ["Timestamp", "Username", "User ID", "Reason For Ban", "Transcript", "CheckBox"] {
             assert!(html.contains(&format!("<th>{col}</th>")), "missing banned column {col}");
@@ -919,6 +1390,7 @@ mod tests {
             &sample_moderation_lists(),
             &sample_sessions(),
             None,
+            None,
             crate::admin::AdminRole::Moderator,
             "modtester",
         );
@@ -928,6 +1400,7 @@ mod tests {
             &sample_moderation_lists(),
             &sample_sessions(),
             Some("FJ5B3V"),
+            None,
             crate::admin::AdminRole::Moderator,
             "modtester",
         );

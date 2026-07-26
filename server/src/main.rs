@@ -152,11 +152,31 @@ async fn main() {
         .route("/admin/logs", get(admin::logs::logs_page))
         .route("/admin/logs/data", get(admin::logs::logs_data))
         .route("/admin/logs/download", get(admin::logs::logs_download))
-        // Chat-Mod tab (UI-layout preview — placeholder data until wired).
+        // Chat-Mod tab. Pages, then the live-refresh data endpoints the pages
+        // poll, then the actions. All gate on any authenticated role
+        // (Moderator and up) — the panel is a moderator's whole job.
         .route("/admin/chatmod", get(admin::chatmod::chatmod_page))
         .route("/admin/chatmod/session/:code", get(admin::chatmod::chatmod_session_page))
         .route("/admin/chatmod/audit", get(admin::chatmod::chatmod_audit_page))
         .route("/admin/chatmod/lists", get(admin::chatmod::chatmod_lists_page))
+        .route("/admin/chatmod/data", get(admin::chatmod::chatmod_data_fragment))
+        .route(
+            "/admin/chatmod/session/:code/data",
+            get(admin::chatmod::chatmod_session_data),
+        )
+        .route("/admin/chatmod/session/:code/say", post(admin::chatmod::chatmod_say))
+        .route(
+            "/admin/chatmod/lists/blacklist/add",
+            post(admin::chatmod::blacklist_add),
+        )
+        .route(
+            "/admin/chatmod/lists/blacklist/remove",
+            post(admin::chatmod::blacklist_remove),
+        )
+        .route(
+            "/admin/chatmod/lists/blacklist/toggle",
+            post(admin::chatmod::blacklist_toggle),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
