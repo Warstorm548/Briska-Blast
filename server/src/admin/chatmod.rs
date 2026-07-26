@@ -374,17 +374,20 @@ pub async fn blacklist_add(
     let Ok(mut conn) = state.redis.get().await else {
         return lists_redirect(from.as_deref(), "err", "Storage unavailable.");
     };
-    let added = match blacklist::add(&mut conn, &words, &form.reason, &session.username).await {
-        Ok(added) => added,
+    let outcome = match blacklist::add(&mut conn, &words, &form.reason, &session.username).await {
+        Ok(outcome) => outcome,
         Err(e) => {
             tracing::warn!("chatmod: blacklist add failed: {}", e);
             return lists_redirect(from.as_deref(), "err", "Could not add those words.");
         }
     };
+    let added = &outcome.added;
 
     // One record per word: the audit log answers "who blacklisted this word and
-    // why", which a single record naming several words could not.
-    for word in &added {
+    // why", which a single record naming several words could not. Duplicates
+    // write nothing — the original add is already on the record, and a second
+    // entry would imply the list changed when it did not.
+    for word in added {
         let record = audit::AuditRecord::by_moderator(
             &session.username,
             &session.sub,
@@ -400,12 +403,31 @@ pub async fn blacklist_add(
     drop(conn);
     blacklist::invalidate(&state).await;
 
-    let msg = match added.len() {
-        0 => "Those words were already on the list.".to_string(),
-        1 => "Added 1 word.".to_string(),
-        n => format!("Added {n} words."),
-    };
-    lists_redirect(from.as_deref(), "ok", &msg)
+    let msg = add_summary(added, &outcome.duplicates);
+    // All-duplicate is not a success — nothing changed, and saying "Added 0
+    // words" in a green banner reads as though it worked.
+    let key = if added.is_empty() { "err" } else { "ok" };
+    lists_redirect(from.as_deref(), key, &msg)
+}
+
+/// Human summary of an add, naming the words that were already listed rather
+/// than just reporting a smaller count than the moderator submitted.
+fn add_summary(added: &[String], duplicates: &[String]) -> String {
+    let plural = |n: usize| if n == 1 { "word" } else { "words" };
+    match (added.len(), duplicates.len()) {
+        (0, 0) => "Nothing to add.".to_string(),
+        (0, d) => format!(
+            "No new words — {} already listed: {}.",
+            if d == 1 { "it is" } else { "they are" },
+            duplicates.join(", ")
+        ),
+        (a, 0) => format!("Added {a} {}.", plural(a)),
+        (a, d) => format!(
+            "Added {a} {}. {d} already listed: {}.",
+            plural(a),
+            duplicates.join(", ")
+        ),
+    }
 }
 
 /// POST /admin/chatmod/lists/blacklist/remove
@@ -639,6 +661,7 @@ mod tests {
                     body: "that portal save tho".into(),
                     flagged_word: None,
                     is_moderator: false,
+                    posted_as: None,
                 },
                 ChatMessage {
                     body_id: "W34V67898701".into(),
@@ -647,6 +670,7 @@ mod tests {
                     body: "frick you all".into(),
                     flagged_word: Some("frick".into()),
                     is_moderator: false,
+                    posted_as: None,
                 },
                 ChatMessage {
                     body_id: "J55RD2H8PL04".into(),
@@ -655,6 +679,7 @@ mod tests {
                     body: "chill, it is one point".into(),
                     flagged_word: None,
                     is_moderator: false,
+                    posted_as: None,
                 },
                 ChatMessage {
                     body_id: "Q71ZT8C3VB55".into(),
@@ -663,6 +688,7 @@ mod tests {
                     body: "no frick this whole game".into(),
                     flagged_word: Some("frick".into()),
                     is_moderator: false,
+                    posted_as: None,
                 },
             ]
         } else {
@@ -674,6 +700,7 @@ mod tests {
                     body: "good game so far".into(),
                     flagged_word: None,
                     is_moderator: false,
+                    posted_as: None,
                 },
                 ChatMessage {
                     body_id: "G78HJ9K1L2M3".into(),
@@ -682,6 +709,7 @@ mod tests {
                     body: "watch the corner barrier".into(),
                     flagged_word: None,
                     is_moderator: false,
+                    posted_as: None,
                 },
             ]
         }
@@ -696,6 +724,7 @@ mod tests {
             body: body.into(),
             flagged_word: word.map(Into::into),
             is_moderator: false,
+            posted_as: None,
         }
     }
 
@@ -980,6 +1009,37 @@ mod tests {
     }
 
     #[test]
+    fn add_summary_names_the_words_that_were_already_listed() {
+        let w = |s: &str| vec![s.to_string()];
+
+        assert_eq!(add_summary(&w("frick"), &[]), "Added 1 word.");
+        assert_eq!(
+            add_summary(&["frick".into(), "scrub".into()], &[]),
+            "Added 2 words."
+        );
+        // The case this exists for: a partial add used to just report a smaller
+        // count, leaving the moderator to work out which word didn't take.
+        assert_eq!(
+            add_summary(&["frick".into(), "scrub".into()], &w("chicken")),
+            "Added 2 words. 1 already listed: chicken."
+        );
+        assert_eq!(
+            add_summary(&w("frick"), &["chicken".into(), "scrub".into()]),
+            "Added 1 word. 2 already listed: chicken, scrub."
+        );
+        // Nothing changed — the banner must not read as a success.
+        assert_eq!(
+            add_summary(&[], &w("chicken")),
+            "No new words — it is already listed: chicken."
+        );
+        assert_eq!(
+            add_summary(&[], &["chicken".into(), "scrub".into()]),
+            "No new words — they are already listed: chicken, scrub."
+        );
+        assert_eq!(add_summary(&[], &[]), "Nothing to add.");
+    }
+
+    #[test]
     fn words_split_on_semicolons_and_drop_blanks() {
         assert_eq!(split_words("frick;scrub"), vec!["frick", "scrub"]);
         // The panel tells moderators to separate with `;`, and people add spaces.
@@ -1044,14 +1104,16 @@ mod tests {
                 body: "nice shot".into(),
                 flagged_word: None,
                 is_moderator: false,
+                posted_as: None,
             },
             ChatMessage {
                 body_id: "a00000000002".into(),
-                username: "Mod".into(),
+                username: "jeanluc".into(),
                 player_id: None,
                 body: "keep it civil".into(),
                 flagged_word: None,
                 is_moderator: true,
+                posted_as: Some("Mod".into()),
             },
         ];
         let html = templates::chatmod_session_page(
@@ -1061,8 +1123,12 @@ mod tests {
             crate::admin::AdminRole::Moderator,
             "modtester",
         );
-        // The moderator's line is tagged and carries no player id...
-        assert!(html.contains(r#"<span class="cm-msg-mod">MOD</span> Mod "#));
+        // The moderator's line is tagged, names the real moderator, and discloses
+        // that players saw a generic label — so colleagues in the same session can
+        // tell two anonymous moderators apart.
+        assert!(html.contains(
+            r#"<span class="cm-msg-mod">MOD</span> jeanluc <span class="cm-msg-as">as &ldquo;Mod&rdquo;</span>"#
+        ));
         // ...and no select checkbox, because the player tools act on player
         // accounts and a moderator is not one.
         assert_eq!(

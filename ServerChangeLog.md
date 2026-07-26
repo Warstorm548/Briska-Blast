@@ -64,10 +64,30 @@ Pocket ID subject beside an `anonymous` flag. A moderator message also retains
 the transcript permanently. Moderator text is deliberately not filtered — a
 moderator quoting a slur to moderate it must not be censored.
 
+**Several moderators can work one session.** There is no join or presence step —
+posting is stateless, so any number of moderators can assist at once, each with
+their own anonymity setting. Body ids come from an atomic counter and appends are
+atomic, so simultaneous posts cannot collide and every viewer sees one ordering.
+
+The panel names the **real** moderator on every line, with an `as "Mod"` note when
+the post was anonymous to players. Anonymity is directed at players, not at the
+moderation team: two colleagues both posting as `Mod` would otherwise be
+indistinguishable from each other and from a later reviewer, which is not what the
+toggle is for.
+
 **Blacklist + audit.** Add, Remove and the Active Filter toggle post for real,
 each writing a Word-category audit record with the moderator, their subject, and
 the reason. One record per word, since "who blacklisted this and why" cannot be
 answered by a record naming several. A word that fires writes a System record.
+
+Duplicate entries are impossible by construction: the storage key is the
+normalized word, so `Frick`, `frick` and `  FRICK  ` are one entry, and an
+existing word is never overwritten — the first add already wrote an audit record
+naming its author and reason, and rewriting the entry would leave the list
+disagreeing with the log. A partial add now names what it skipped ("Added 2
+words. 1 already listed: chicken.") instead of silently reporting a smaller count
+than was submitted, and an all-duplicate submission reports as a failure rather
+than a green "added 0".
 Records carry the Pocket ID subject alongside the display name so history cannot
 be re-attributed by a rename upstream; `AdminSession` gained `sub`, which Redis
 already stored and the struct merely dropped.

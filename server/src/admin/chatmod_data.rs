@@ -58,16 +58,43 @@ fn numeric_player_id(msg: &StoredMessage) -> Option<u64> {
     msg.player_id.parse::<u64>().ok()
 }
 
+/// How a moderator line is attributed on the moderation surface.
+///
+/// Returns `(name_to_show, posted_as)`. The panel always names the **real**
+/// moderator; `posted_as` records what players saw when the post was anonymous.
+/// Anonymity is directed at players, not at the moderation team — with several
+/// moderators working one session, two anonymous lines both reading `Mod` would
+/// leave colleagues (and later reviewers) unable to tell who said what, and the
+/// identity is on every record anyway.
+///
+/// Falls back to the broadcast name if `mod_user` is somehow empty, so a line
+/// never renders anonymous-looking by accident.
+fn moderator_attribution(msg: &StoredMessage) -> (String, Option<String>) {
+    let real = if msg.mod_user.is_empty() {
+        msg.username.clone()
+    } else {
+        msg.mod_user.clone()
+    };
+    let posted_as = (msg.mod_anonymous && real != msg.username).then(|| msg.username.clone());
+    (real, posted_as)
+}
+
 fn to_view(msg: &StoredMessage) -> ChatMessage {
+    let (username, posted_as) = if msg.kind == MessageKind::Moderator {
+        moderator_attribution(msg)
+    } else {
+        (display_name(msg), None)
+    };
     ChatMessage {
         body_id: msg.body_id.clone(),
-        username: display_name(msg),
+        username,
         player_id: numeric_player_id(msg),
         // The transcript keeps the uncensored original — that is the whole point
         // of capturing it. Players received the masked form.
         body: msg.text.clone(),
         flagged_word: msg.flagged_words.first().cloned(),
         is_moderator: msg.kind == MessageKind::Moderator,
+        posted_as,
     }
 }
 
@@ -393,10 +420,69 @@ mod tests {
     #[test]
     fn moderator_line_has_no_player_id() {
         // A moderator has no player account; surfacing a zero id would assert one.
-        let view = to_view(&line(MessageKind::Moderator, "Mod", "", "keep it civil"));
+        let mut msg = line(MessageKind::Moderator, "Mod", "", "keep it civil");
+        msg.mod_user = "jeanluc".into();
+        let view = to_view(&msg);
         assert_eq!(view.player_id, None);
         assert!(view.is_moderator);
+    }
+
+    #[test]
+    fn anonymous_moderator_is_named_on_the_moderation_surface() {
+        // Anonymity points at players, not at the moderation team. Two moderators
+        // both posting as "Mod" must still be distinguishable here, or nobody can
+        // tell who said what in a session several of them are working.
+        let mut msg = line(MessageKind::Moderator, "Mod", "", "keep it civil");
+        msg.mod_user = "jeanluc".into();
+        msg.mod_anonymous = true;
+        let view = to_view(&msg);
+        assert_eq!(view.username, "jeanluc", "the panel names the real moderator");
+        assert_eq!(
+            view.posted_as.as_deref(),
+            Some("Mod"),
+            "and records how it appeared to players"
+        );
+    }
+
+    #[test]
+    fn two_anonymous_moderators_are_distinguishable() {
+        let mut first = line(MessageKind::Moderator, "Mod", "", "keep it civil");
+        first.mod_user = "jeanluc".into();
+        first.mod_anonymous = true;
+        let mut second = line(MessageKind::Moderator, "Mod", "", "last warning");
+        second.mod_user = "alice".into();
+        second.mod_anonymous = true;
+
+        let a = to_view(&first);
+        let b = to_view(&second);
+        assert_ne!(a.username, b.username, "both would otherwise read as 'Mod'");
+        assert_eq!(a.posted_as, b.posted_as, "players saw the same label for both");
+    }
+
+    #[test]
+    fn named_moderator_carries_no_posted_as_suffix() {
+        let mut msg = line(MessageKind::Moderator, "jeanluc", "", "keep it civil");
+        msg.mod_user = "jeanluc".into();
+        msg.mod_anonymous = false;
+        let view = to_view(&msg);
+        assert_eq!(view.username, "jeanluc");
+        assert_eq!(view.posted_as, None, "nothing to disclose — they used their name");
+    }
+
+    #[test]
+    fn moderator_line_without_a_recorded_identity_falls_back() {
+        // Defensive: a record written before the identity was captured, or one
+        // whose write partially failed, must not render as an unattributed blank.
+        let msg = line(MessageKind::Moderator, "Mod", "", "keep it civil");
+        let view = to_view(&msg);
         assert_eq!(view.username, "Mod");
+        assert_eq!(view.posted_as, None);
+    }
+
+    #[test]
+    fn player_lines_never_carry_an_attribution_suffix() {
+        let view = to_view(&line(MessageKind::Player, "Warstorm", "000000007", "hi"));
+        assert_eq!(view.posted_as, None);
     }
 
     #[test]

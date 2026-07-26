@@ -177,19 +177,42 @@ pub async fn invalidate(state: &AppState) {
     state.chat_blacklist.write().await.loaded_at = None;
 }
 
-/// Add words to the blacklist. Returns the words that were newly added (already
-/// present ones are left untouched so their original reason and author survive).
+/// What an [`add`] call actually did, split so the caller can report the
+/// difference rather than silently swallowing it.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct AddOutcome {
+    /// Words that were newly written.
+    pub added: Vec<String>,
+    /// Words already on the list, left untouched.
+    pub duplicates: Vec<String>,
+}
+
+/// Add words to the blacklist.
+///
+/// Duplicates are impossible by construction: the field key is the normalized
+/// word, so `Frick`, `frick` and `  FRICK  ` are one entry, and `HSETNX` means an
+/// existing word is never overwritten. That matters beyond tidiness — the first
+/// add already wrote an audit record naming its author and reason, and silently
+/// rewriting the entry would leave the list disagreeing with the log.
+///
+/// Already-present words come back in [`AddOutcome::duplicates`] so the caller can
+/// say which ones were skipped instead of just reporting a smaller count.
 pub async fn add(
     conn: &mut deadpool_redis::Connection,
     words: &[String],
     reason: &str,
     added_by: &str,
-) -> RedisResult<Vec<String>> {
+) -> RedisResult<AddOutcome> {
     let now = chrono::Utc::now().timestamp_millis();
-    let mut added = Vec::new();
+    let mut out = AddOutcome::default();
     for raw in words {
         let key = normalize(raw);
         if key.is_empty() {
+            continue;
+        }
+        // A word repeated within one submission is a duplicate of itself; report
+        // it once rather than counting it twice.
+        if out.added.contains(&key) || out.duplicates.contains(&key) {
             continue;
         }
         let entry = BlacklistEntry {
@@ -200,14 +223,14 @@ pub async fn add(
             added_at_ms: now,
         };
         let json = serde_json::to_string(&entry).unwrap_or_default();
-        // HSETNX: re-adding an existing word must not silently rewrite who added
-        // it or why, which the audit log would then disagree with.
         let inserted: bool = conn.hset_nx(BLACKLIST_KEY, &key, json).await?;
         if inserted {
-            added.push(key);
+            out.added.push(key);
+        } else {
+            out.duplicates.push(key);
         }
     }
-    Ok(added)
+    Ok(out)
 }
 
 /// Remove words. Returns those that were actually on the list.
@@ -448,6 +471,28 @@ mod tests {
         let body = "héllo 🎮 frick 🎮 wörld";
         let masked = mask(body, &find_matches(body, &list));
         assert_eq!(masked, "héllo 🎮 ##### 🎮 wörld");
+    }
+
+    #[test]
+    fn normalization_makes_case_variants_the_same_entry() {
+        // The whole duplicate guarantee rests on this: the hash field key is the
+        // normalized word, so these can never occupy separate rows.
+        for variant in ["Frick", "FRICK", "  frick  ", "fRiCk"] {
+            assert_eq!(normalize(variant), "frick", "variant: {variant:?}");
+        }
+    }
+
+    #[test]
+    fn add_outcome_separates_new_words_from_duplicates() {
+        // The struct itself is the contract the handler reports from; the Redis
+        // round-trip is covered by the end-to-end checks, not here.
+        let outcome = AddOutcome {
+            added: vec!["frick".into()],
+            duplicates: vec!["chicken".into()],
+        };
+        assert_eq!(outcome.added.len(), 1);
+        assert_eq!(outcome.duplicates, vec!["chicken"]);
+        assert_eq!(AddOutcome::default(), AddOutcome { added: vec![], duplicates: vec![] });
     }
 
     #[test]

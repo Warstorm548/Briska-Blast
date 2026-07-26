@@ -72,6 +72,14 @@ pub struct ChatMessage {
     /// True when a moderator spoke into the session rather than a player. Drives
     /// the `MOD` tag so their line is never mistaken for a player's.
     pub is_moderator: bool,
+    /// For a moderator line posted anonymously: the name **players** saw, i.e.
+    /// the generic `Mod`. `None` when they posted under their own name.
+    ///
+    /// `username` always holds the real moderator either way. Anonymity is
+    /// directed at players, never at the moderation team — with several
+    /// moderators working one session, "who said this" has to stay answerable
+    /// from the transcript, and it is recorded on every line regardless.
+    pub posted_as: Option<String>,
 }
 
 /// The Chat Audit Logs are split into category tables (chosen by a dropdown),
@@ -386,6 +394,7 @@ body.cm-resizing { cursor: col-resize; user-select: none; }
 .cm-msg-targeted { border-left: 3px solid #d29922; }
 .cm-msg-tag { display: inline-block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1px; color: #d29922; border: 1px solid #d29922; border-radius: 10px; padding: 0 6px; }
 .cm-msg-mod { display: inline-block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1px; color: #58a6ff; border: 1px solid #58a6ff; border-radius: 10px; padding: 0 6px; margin-right: 4px; }
+.cm-msg-as { color: #8b949e; font-size: 0.72rem; font-style: italic; }
 /* transcript snapshot overlay: wider/taller than the shared 380px modal card so
    the chat reads cleanly; the shared semi-transparent backdrop keeps the page
    visible behind it */
@@ -675,6 +684,22 @@ fn flagged_list_html(flagged: &[FlaggedSession]) -> String {
         .collect()
 }
 
+/// The " (as “Mod”)" suffix on an anonymously-posted moderator line.
+///
+/// The transcript names the real moderator; this records how the line appeared
+/// to players. With several moderators in one session, two anonymous posts would
+/// otherwise be indistinguishable from each other on the moderation surface too,
+/// which is not what the anonymity toggle is for.
+fn posted_as_html(m: &ChatMessage) -> String {
+    match &m.posted_as {
+        Some(shown) => format!(
+            r#" <span class="cm-msg-as">as &ldquo;{}&rdquo;</span>"#,
+            escape(shown)
+        ),
+        None => String::new(),
+    }
+}
+
 /// The session view's transcript rows: body identifier + username header (with
 /// a select checkbox for the tools panel) above the message text.
 fn transcript_html(transcript: &[ChatMessage]) -> String {
@@ -712,12 +737,13 @@ fn transcript_html(transcript: &[ChatMessage]) -> String {
             format!(
                 r#"<div class="cm-msg">
             <div class="cm-msg-head">
-              <span class="cm-msg-user">{mod_tag}{user} {pid_chip}<span class="cm-bodyid mono" data-copy="{id}" role="button" tabindex="0" title="Copy body ID">Body ID: {id}</span></span>
+              <span class="cm-msg-user">{mod_tag}{user}{posted_as} {pid_chip}<span class="cm-bodyid mono" data-copy="{id}" role="button" tabindex="0" title="Copy body ID">Body ID: {id}</span></span>
               {select}
             </div>
             <div class="cm-msg-body">{body}</div>
           </div>"#,
                 user = escape(&m.username),
+                posted_as = posted_as_html(m),
             )
         })
         .collect()
@@ -1525,12 +1551,13 @@ fn audit_snapshot_html(snapshot: &[ChatMessage], targeted: &[String]) -> String 
             format!(
                 r#"<div class="cm-msg{cls}">
             <div class="cm-msg-head">
-              <span class="cm-msg-user">{mod_tag}{user} {pid_chip}<span class="cm-bodyid mono">Body ID: {id}</span>{tag}</span>
+              <span class="cm-msg-user">{mod_tag}{user}{posted_as} {pid_chip}<span class="cm-bodyid mono">Body ID: {id}</span>{tag}</span>
             </div>
             <div class="cm-msg-body">{body}</div>
           </div>"#,
                 id = escape(&m.body_id),
                 user = escape(&m.username),
+                posted_as = posted_as_html(m),
             )
         })
         .collect()
