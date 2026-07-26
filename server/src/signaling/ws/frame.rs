@@ -6,8 +6,8 @@
 use chrono::Utc;
 
 use crate::{
-    api::fetch_usernames,
-    signaling::protocol::{ClientMsg, ServerMsg},
+    chat::blacklist,
+    signaling::protocol::{ChatKind, ClientMsg, ServerMsg},
     signaling::ReadyOutcome,
     state::AppState,
 };
@@ -154,19 +154,28 @@ pub(super) async fn handle_client_frame(
             }
             let text: String = text.chars().take(MAX_CHAT_LEN).collect();
 
-            // Resolve the sender's display name fresh from Redis so a mid-session
-            // rename is reflected; a miss or Redis error degrades to empty (the
-            // client then shows `Player <id>`), never dropping the message.
-            let username = match state.redis.get().await {
-                Ok(mut conn) => {
-                    let ids = [from_player.to_string()];
-                    fetch_usernames(&mut conn, &ids)
-                        .await
-                        .remove(from_player)
-                        .unwrap_or_default()
-                }
-                Err(_) => String::new(),
-            };
+            // Censor before broadcast, not after: players are sent the masked
+            // form, so the raw word never leaves the server and no client-side
+            // support is needed. The uncensored original goes to the moderation
+            // transcript only. Matching reads a cached word list, so this still
+            // works during a Redis outage.
+            let words = blacklist::active_words(state).await;
+            let matches = blacklist::find_matches(&text, &words);
+            let flagged_words = blacklist::matched_words(&matches);
+            let broadcast_text = blacklist::mask(&text, &matches);
+
+            // Capture assigns the body id, stores the line, and resolves the
+            // display name. It degrades to an empty name (client shows
+            // `Player <id>`) rather than dropping the message — moderation
+            // failing must never silence chat.
+            let username = crate::chat::capture_player_message(
+                state,
+                code,
+                from_player,
+                &text,
+                flagged_words,
+            )
+            .await;
 
             // Broadcast to everyone including the sender so all clients render an
             // identical, server-ordered transcript (same rationale as ScoreUpdate).
@@ -177,7 +186,8 @@ pub(super) async fn handle_client_frame(
                     ServerMsg::ChatMessage {
                         from: from_player.to_string(),
                         username,
-                        text,
+                        text: broadcast_text,
+                        kind: ChatKind::Player,
                     },
                     None,
                 )

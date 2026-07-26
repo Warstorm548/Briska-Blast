@@ -62,7 +62,7 @@ const FIRST_EPOCH: char = 'a';
 const TAIL_LEN: usize = 11;
 
 /// Total id width. Every moderation surface renders exactly this many chars.
-pub const BODY_ID_LEN: usize = TAIL_LEN + 1;
+const BODY_ID_LEN: usize = TAIL_LEN + 1;
 
 const COUNTER_KEY: &str = "chat:body:counter";
 const EPOCH_KEY: &str = "chat:body:epoch";
@@ -108,7 +108,11 @@ fn encode_tail(n: i64) -> String {
 
 /// Compose an id from an epoch character and a counter value.
 fn format_body_id(epoch: char, counter: i64) -> String {
-    format!("{epoch}{}", encode_tail(counter))
+    let id = format!("{epoch}{}", encode_tail(counter));
+    // Every moderation surface renders a fixed-width id, and audit records match
+    // bodies by string equality — a short id would silently fail to match.
+    debug_assert_eq!(id.len(), BODY_ID_LEN, "body id must be exactly {BODY_ID_LEN} chars");
+    id
 }
 
 /// The epoch that follows `current`, or `None` when the last one (`Z`) is in use.
@@ -183,17 +187,6 @@ async fn advance_epoch(conn: &mut deadpool_redis::Connection, observed: char) {
     }
 }
 
-/// Whether a string has the shape this module issues. Used to reject junk from
-/// query strings and form posts before it reaches a lookup.
-pub fn is_body_id(s: &str) -> bool {
-    // Byte-wise: `char as u8` would truncate a multi-byte char into a spurious
-    // ASCII match, and `str::len` counts bytes anyway.
-    let b = s.as_bytes();
-    b.len() == BODY_ID_LEN
-        && EPOCH_ALPHABET.contains(&b[0])
-        && b[1..].iter().all(u8::is_ascii_alphanumeric)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,7 +243,10 @@ mod tests {
         let id = format_body_id('a', 271_828);
         assert_eq!(id.len(), BODY_ID_LEN);
         assert!(id.starts_with('a'));
-        assert!(is_body_id(&id), "{id}");
+        assert!(
+            id.chars().skip(1).all(|c| c.is_ascii_alphanumeric()),
+            "tail must stay alphanumeric: {id}"
+        );
     }
 
     #[test]
@@ -285,17 +281,6 @@ mod tests {
         assert_eq!(parse_epoch(Some("Q".into())), 'Q');
         // Only the first character is significant.
         assert_eq!(parse_epoch(Some("bcd".into())), 'b');
-    }
-
-    #[test]
-    fn is_body_id_rejects_malformed_input() {
-        assert!(is_body_id("a00000004Kx9"));
-        assert!(!is_body_id(""));
-        assert!(!is_body_id("a0000004Kx9"), "11 chars — too short");
-        assert!(!is_body_id("a000000004Kx9"), "13 chars — too long");
-        assert!(!is_body_id("000000000001"), "epoch must be a letter");
-        assert!(!is_body_id("a00000000-01"), "tail must be alphanumeric");
-        assert!(!is_body_id("é0000004Kx9"), "multi-byte epoch must not sneak through");
     }
 
     #[test]

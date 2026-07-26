@@ -36,8 +36,6 @@
 //! `chat:live:*` pointer whose session key is gone gets the normal teardown. It
 //! runs on the Chat-Mod landing page, which already enumerates sessions.
 
-use std::collections::HashMap;
-
 use deadpool_redis::redis::{AsyncCommands, RedisResult};
 use serde::{Deserialize, Serialize};
 
@@ -69,17 +67,12 @@ const FLAGGED_KEY: &str = "chat:flagged";
 const ARCHIVES_KEY: &str = "chat:archives";
 
 /// Who produced a line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageKind {
+    #[default]
     Player,
     Moderator,
-}
-
-impl Default for MessageKind {
-    fn default() -> Self {
-        Self::Player
-    }
 }
 
 /// One captured chat line.
@@ -353,35 +346,6 @@ pub async fn sweep_orphans(state: &AppState) -> usize {
         on_session_end(state, code).await;
     }
     orphans.len()
-}
-
-/// Archived instances, newest first, as `(sid, meta)`.
-pub async fn archives(
-    conn: &mut deadpool_redis::Connection,
-    limit: isize,
-) -> RedisResult<Vec<TranscriptMeta>> {
-    let sids: Vec<String> = conn.zrevrange(ARCHIVES_KEY, 0, limit - 1).await?;
-    let mut out = Vec::with_capacity(sids.len());
-    for sid in sids {
-        if let Ok(Some(m)) = meta(conn, &sid).await {
-            out.push(m);
-        }
-    }
-    Ok(out)
-}
-
-/// Map live session codes to their instance ids in one pass.
-pub async fn live_sids(
-    conn: &mut deadpool_redis::Connection,
-    codes: &[String],
-) -> HashMap<String, String> {
-    let mut out = HashMap::new();
-    for code in codes {
-        if let Ok(Some(sid)) = live_sid(conn, code).await {
-            out.insert(code.clone(), sid);
-        }
-    }
-    out
 }
 
 #[cfg(test)]

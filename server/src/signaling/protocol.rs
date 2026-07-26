@@ -88,6 +88,21 @@ pub enum ClientMsg {
     ClientReady,
 }
 
+/// Who produced a `ChatMessage`. Serializes to a bare `"player"` / `"moderator"`
+/// string so the field reads naturally on the wire and stays cheap to extend.
+///
+/// Kept deliberately coarse: the client needs only enough to style the line, not
+/// the moderator's role or identity. Which moderator actually spoke — including
+/// behind an anonymous `Mod` label — is recorded server-side in the transcript,
+/// never broadcast.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatKind {
+    #[default]
+    Player,
+    Moderator,
+}
+
 /// Server → client signaling frames. JSON-tagged on `type`. Cloneable
 /// because broadcasts fan one message out to multiple senders.
 #[derive(Debug, Clone, Serialize)]
@@ -220,10 +235,24 @@ pub enum ServerMsg {
     /// is on file — the client falls back to `Player <id>`). Sent to everyone
     /// including the sender so all clients render an identical, server-ordered
     /// transcript (same rationale as `ScoreUpdate`).
+    ///
+    /// `text` is what players should see, which is **not** always what was typed:
+    /// blacklisted words are masked here, before broadcast, so the raw word never
+    /// leaves the server. The uncensored original is kept only in the moderation
+    /// transcript. Censoring therefore needs no client change at all.
+    ///
+    /// `kind` distinguishes a player line from a moderator speaking into the
+    /// session (see `admin::chatmod`). Moderator lines carry an empty `from` — a
+    /// moderator has no player id — and `username` is either their Pocket ID
+    /// display name or the generic `Mod`, depending on the anonymity toggle they
+    /// chose. Clients predating this field ignore it and render the line as an
+    /// ordinary chat message, which is a correct (if unstyled) degradation, so
+    /// this addition does not require a `min_game_version` bump.
     ChatMessage {
         from: String,
         username: String,
         text: String,
+        kind: ChatKind,
     },
     /// The ready barrier resolved: every seated player reported `ClientReady`
     /// (or the server's grace valve fired) and the session is now `Active`.
@@ -256,6 +285,42 @@ pub enum ServerMsg {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A player line must keep the exact three fields older clients read, with
+    /// `kind` added alongside them. Adding a field is safe precisely because the
+    /// C# dispatcher pulls named properties rather than deserializing a struct.
+    #[test]
+    fn chat_message_serializes_with_kind() {
+        let msg = ServerMsg::ChatMessage {
+            from: "000000007".into(),
+            username: "Warstorm".into(),
+            text: "nice shot".into(),
+            kind: ChatKind::Player,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"chat_message","from":"000000007","username":"Warstorm","text":"nice shot","kind":"player"}"#
+        );
+    }
+
+    /// A moderator line carries an empty `from` — a moderator has no player id —
+    /// and the display name players actually see, which for an anonymous post is
+    /// the generic `Mod`. The real identity behind it is never on the wire.
+    #[test]
+    fn moderator_chat_message_serializes_without_a_player_id() {
+        let msg = ServerMsg::ChatMessage {
+            from: String::new(),
+            username: "Mod".into(),
+            text: "keep it civil".into(),
+            kind: ChatKind::Moderator,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"chat_message","from":"","username":"Mod","text":"keep it civil","kind":"moderator"}"#
+        );
+    }
 
     /// StartSignaling must carry the minted ICE list on the wire: STUN entries
     /// without credential keys (the client treats key presence as

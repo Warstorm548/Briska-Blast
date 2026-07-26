@@ -61,10 +61,17 @@ pub struct ChatMessage {
     /// Rendered in the canonical zero-padded form via
     /// [`PlayerId::from_counter`] (9-digit minimum). Moderation surfaces
     /// only — never rendered game-side.
-    pub player_id: u64,
+    ///
+    /// `None` for a moderator line: a moderator speaks through this panel and has
+    /// no player account, so there is no id to show and no player to act against.
+    /// Rendering a zero-padded `000000000` would assert a player that isn't there.
+    pub player_id: Option<u64>,
     pub body: String,
     /// Present when the body contains a blacklisted word to highlight.
     pub flagged_word: Option<String>,
+    /// True when a moderator spoke into the session rather than a player. Drives
+    /// the `MOD` tag so their line is never mistaken for a player's.
+    pub is_moderator: bool,
 }
 
 /// The Chat Audit Logs are split into category tables (chosen by a dropdown),
@@ -378,6 +385,7 @@ body.cm-resizing { cursor: col-resize; user-select: none; }
 /* snapshot: mark the message bodies this action actually covered */
 .cm-msg-targeted { border-left: 3px solid #d29922; }
 .cm-msg-tag { display: inline-block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1px; color: #d29922; border: 1px solid #d29922; border-radius: 10px; padding: 0 6px; }
+.cm-msg-mod { display: inline-block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1px; color: #58a6ff; border: 1px solid #58a6ff; border-radius: 10px; padding: 0 6px; margin-right: 4px; }
 /* transcript snapshot overlay: wider/taller than the shared 380px modal card so
    the chat reads cleanly; the shared semi-transparent backdrop keeps the page
    visible behind it */
@@ -680,17 +688,36 @@ fn transcript_html(transcript: &[ChatMessage]) -> String {
                 Some(word) => highlight_toggle(&m.body, word),
                 None => escape(&m.body),
             };
+            let id = escape(&m.body_id);
+            // A moderator line carries no player id and no select checkbox —
+            // the player tools act on player accounts, and a moderator is not
+            // one. The MOD tag keeps it from reading as a player's message.
+            let (pid_chip, select) = match m.player_id {
+                Some(pid) => {
+                    let pid = PlayerId::from_counter(pid);
+                    (
+                        format!(
+                            r#"<span class="cm-pid mono" data-copy="{pid}" role="button" tabindex="0" title="Copy player ID">ID {pid}</span> "#
+                        ),
+                        format!(r#"<input type="checkbox" data-pid="{pid}" aria-label="Select message {id}">"#),
+                    )
+                }
+                None => (String::new(), String::new()),
+            };
+            let mod_tag = if m.is_moderator {
+                r#"<span class="cm-msg-mod">MOD</span> "#
+            } else {
+                ""
+            };
             format!(
                 r#"<div class="cm-msg">
             <div class="cm-msg-head">
-              <span class="cm-msg-user">{user} <span class="cm-pid mono" data-copy="{pid}" role="button" tabindex="0" title="Copy player ID">ID {pid}</span> <span class="cm-bodyid mono" data-copy="{id}" role="button" tabindex="0" title="Copy body ID">Body ID: {id}</span></span>
-              <input type="checkbox" data-pid="{pid}" aria-label="Select message {id}">
+              <span class="cm-msg-user">{mod_tag}{user} {pid_chip}<span class="cm-bodyid mono" data-copy="{id}" role="button" tabindex="0" title="Copy body ID">Body ID: {id}</span></span>
+              {select}
             </div>
             <div class="cm-msg-body">{body}</div>
           </div>"#,
-                id = escape(&m.body_id),
                 user = escape(&m.username),
-                pid = PlayerId::from_counter(m.player_id),
             )
         })
         .collect()
@@ -1365,16 +1392,27 @@ fn audit_snapshot_html(snapshot: &[ChatMessage], targeted: &[String]) -> String 
             } else {
                 ""
             };
+            let pid_chip = match m.player_id {
+                Some(pid) => format!(
+                    r#"<span class="cm-pid mono">ID {}</span> "#,
+                    PlayerId::from_counter(pid)
+                ),
+                None => String::new(),
+            };
+            let mod_tag = if m.is_moderator {
+                r#"<span class="cm-msg-mod">MOD</span> "#
+            } else {
+                ""
+            };
             format!(
                 r#"<div class="cm-msg{cls}">
             <div class="cm-msg-head">
-              <span class="cm-msg-user">{user} <span class="cm-pid mono">ID {pid}</span> <span class="cm-bodyid mono">Body ID: {id}</span>{tag}</span>
+              <span class="cm-msg-user">{mod_tag}{user} {pid_chip}<span class="cm-bodyid mono">Body ID: {id}</span>{tag}</span>
             </div>
             <div class="cm-msg-body">{body}</div>
           </div>"#,
                 id = escape(&m.body_id),
                 user = escape(&m.username),
-                pid = PlayerId::from_counter(m.player_id),
             )
         })
         .collect()
