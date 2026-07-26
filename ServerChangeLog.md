@@ -5,6 +5,96 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.31.0] — 2026-07-26
+
+**Chat-Mod wired to live chat.** The panel stops serving placeholder data: every
+message now flows through capture, gets an identifier, is matched against the
+blacklist, and lands in a transcript a moderator can watch live. Moderators can
+speak into a session, and the Blacklisted Words tab does real work.
+
+Storage is **Redis, not SQLite** — the SQLite moderation database named in the
+0.28.0 design notes is shelved. No key added here carries a TTL; `session:{CODE}`
+remains the only key in the deployment that expires.
+
+**Body identifiers.** Every accepted message is assigned a 12-character id: one
+epoch character (`a`..`z` then `A`..`Z`) plus an 11-character base62 tail from an
+atomic `INCR`. Uniqueness needs no locking and costs one integer for the whole
+deployment. Ids are never reused, and never embed a player id — player numbers
+*are* recycled through `player:freelist`, so an embedded one would eventually
+collide a deleted player's records with their replacement's. The player
+association is a field on the record instead.
+
+The tail holds 62^11 (5.2e19) against an i64 ceiling of 9.2e18, so every counter
+value a machine can reach still fits in 11 characters — which is why crossing an
+epoch boundary needs no lock and no retry. Capacity is 52 × 9.2e18 ≈ 4.8e20.
+`chat:body:counter` and `chat:body:epoch` must never be flushed.
+
+**Censoring, with no client change.** A blacklisted word is masked *before* the
+broadcast, so players receive `##### you all` and the raw word never leaves the
+server. The transcript keeps the original for the panel to highlight. Matching is
+case-insensitive and whole-word (`classic` never trips on `ass`), and is
+ASCII-case-insensitive on purpose: Unicode lowercasing can change a string's byte
+length, which would slide the offsets masking depends on.
+
+**Retention.** A transcript is captured from a session's first message so a
+moderator has something live to watch, and so a later trigger keeps the *whole*
+conversation rather than only the part after it fired. It survives teardown only
+when something makes it evidence — a blacklisted word fired, or a moderator acted
+or spoke. Otherwise it is deleted outright and is unrecoverable. Nothing here is
+trimmed or expired; removal will be a manual admin action, not yet built.
+
+Transcripts are keyed by an instance id drawn from the body-id sequence, **not by
+session code**: codes are only checked for uniqueness against *live* sessions, so
+a retained transcript stored under its code would eventually be shadowed by an
+unrelated session that drew the same one.
+
+Snapshots are pinned, not copied. An audit record stores the transcript instance
+plus a cut index and the bodies it covered; rendering replays the transcript up to
+that cut. A session with 40 flagged messages therefore stores the conversation
+once rather than 40 times. This is sound only because transcripts are append-only
+— a future Delete Body must write a tombstone rather than removing the entry.
+
+**Moderator chat.** A moderator speaks into a live session from the panel; Enter
+and the Send button run the same path, so desktop and the mobile drawer layout
+behave identically. "Appear As Your Display Name" is off by default — anonymous,
+as the generic `Mod` — and is remembered per browser, so a fresh page load cannot
+quietly reveal a name the moderator chose to withhold. Only the *broadcast* is
+anonymous: the transcript always records the acting moderator's display name and
+Pocket ID subject beside an `anonymous` flag. A moderator message also retains
+the transcript permanently. Moderator text is deliberately not filtered — a
+moderator quoting a slur to moderate it must not be censored.
+
+**Blacklist + audit.** Add, Remove and the Active Filter toggle post for real,
+each writing a Word-category audit record with the moderator, their subject, and
+the reason. One record per word, since "who blacklisted this and why" cannot be
+answered by a record naming several. A word that fires writes a System record.
+Records carry the Pocket ID subject alongside the display name so history cannot
+be re-attributed by a rename upstream; `AdminSession` gained `sub`, which Redis
+already stored and the struct merely dropped.
+
+**Live refresh.** Transcripts poll at 2s inside a session, landing panels at 5s,
+returning HTML fragments the page swaps in. The poll follows the tail only when
+the moderator was already reading it, so scrolling back through history is not
+yanked away, and it deliberately does not touch `/admin/keepalive` — the idle
+logout is activity-driven and a background poll must not pose as activity.
+
+**Teardown.** The four paths that broadcast `SessionEnded` now funnel through one
+`announce_session_end`, so the retention decision has a single home. Because no
+chat key expires, a session dying by passive TTL expiry runs no code at all; an
+orphan sweep on the landing page reconciles those.
+
+**Not wired:** the player tools (Warn, Warn + Delete, Suspend, Ban), Approve Word,
+the Banned/Suspended lists, audit filters, CSV import, browsing retained
+transcripts from ended sessions (their evidence surfaces through the audit log),
+and manual deletion of retained records.
+
+> **Deploy:** no `min_game_version` change required. The `kind` field added to
+> `chat_message` is ignored by older clients, which render a moderator line as an
+> ordinary chat message — unstyled, but correct. Bump to **0.29.0** only when you
+> want the `[MOD]` styling guaranteed.
+
+---
+
 ## [0.30.0] — 2026-07-25
 
 **Moderation Lists page (UI preview).** The second Chat Nav sub-page gets its

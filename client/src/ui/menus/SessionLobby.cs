@@ -13,6 +13,10 @@ namespace BriskaBlast.UI.Menus;
 /// </summary>
 public partial class SessionLobby : Control
 {
+    // Moderator chat lines are tinted so staff never read as another player.
+    // The panel's own MOD badge uses the same blue (#58a6ff).
+    private static readonly Color ModeratorChatColor = new("58a6ff");
+
     private HBoxContainer[] _slots = null!;
     private Label _status = null!;
 
@@ -115,12 +119,22 @@ public partial class SessionLobby : Control
     // A chat line broadcast by the server (ours or a peer's). Keep the roster's
     // name map in step with what chat reports, then label via the same
     // DisplayNameFor fallback (Player <id>) the rest of the lobby uses.
-    private void OnChatMessage(string from, string username, string text)
+    //
+    // A moderator line is the exception: it carries no sender id, so it must not
+    // go through the roster at all — feeding it an empty id would register a
+    // phantom roster entry and then label the line from it.
+    private void OnChatMessage(Net.ChatLine line)
     {
+        if (line.IsModerator)
+        {
+            AppendModeratorLine(line.Username, line.Text);
+            return;
+        }
+
         var ctx = SessionContext.Instance;
-        if (!string.IsNullOrEmpty(username))
-            ctx.SetUsername(from, username);
-        AppendChatLine(ctx.DisplayNameFor(from), text);
+        if (!string.IsNullOrEmpty(line.Username))
+            ctx.SetUsername(line.From, line.Username);
+        AppendChatLine(ctx.DisplayNameFor(line.From), line.Text);
     }
 
     // Append one "<name>: <text>" line. Uses AddText (not AppendText) for the
@@ -133,6 +147,23 @@ public partial class SessionLobby : Control
         log.AddText(name);
         log.Pop();
         log.AddText($": {text}\n");
+    }
+
+    // A moderator speaking into the session: "[MOD] <name>: <text>", tinted so it
+    // reads as staff rather than another player. Same rule as AppendChatLine —
+    // the colour and bold are pushed by us via the API, never interpolated as
+    // BBCode into a string, so the moderator's name and text still cannot inject
+    // tags. The name here is whatever the moderator chose to appear as; the
+    // client is deliberately not told who is behind an anonymous "Mod".
+    private void AppendModeratorLine(string name, string text)
+    {
+        var log = GetNode<RichTextLabel>("%ChatLog");
+        log.PushColor(ModeratorChatColor);
+        log.PushBold();
+        log.AddText($"[MOD] {name}");
+        log.Pop();
+        log.AddText($": {text}\n");
+        log.Pop();
     }
 
     // ---- buttons ----
