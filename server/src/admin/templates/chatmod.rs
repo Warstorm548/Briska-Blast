@@ -988,6 +988,10 @@ document.addEventListener('keydown',function(e){{if(e.key==='Escape')bbCmListsCl
 // Deleting a blacklisted word: the trash icon names the word in the confirm
 // dialog, and only Confirm submits. Cancel, Escape or a backdrop click send
 // nothing and write no audit record.
+//
+// The word arrives via a data attribute rather than an inline call argument:
+// `escape` does not escape single quotes, so a word like "don't" would otherwise
+// terminate the JS string literal.
 window.bbCmListsDelete=function(word){{
   var w=document.getElementById('cm-lists-del-word');
   var label=document.getElementById('cm-lists-del-who');
@@ -1732,7 +1736,7 @@ fn blacklist_panel_html(words: &[BlacklistWord], from: Option<&str>) -> String {
             <td>{word}</td>
             <td>{reason}</td>
             <td class="cm-lists-check"><form method="post" action="/admin/chatmod/lists/blacklist/toggle" class="cm-inline-form">{from_field}<input type="hidden" name="words" value="{word}"><input type="hidden" name="active" value="{next}"><input type="checkbox"{checked} aria-label="Active filter for {word}" onchange="this.form.submit()"></form></td>
-            <td class="cm-lists-check"><button type="button" class="btn-trash" title="Delete" aria-label="Delete {word}" onclick="bbCmListsDelete('{word}')">&#128465;</button></td>
+            <td class="cm-lists-check"><button type="button" class="btn-trash" title="Delete" aria-label="Delete {word}" data-word="{word}" onclick="bbCmListsDelete(this.getAttribute('data-word'))">&#128465;</button></td>
           </tr>"#,
                     reason = escape(&w.reason),
                 )

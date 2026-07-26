@@ -948,6 +948,38 @@ mod tests {
     }
 
     #[test]
+    fn a_word_containing_a_quote_does_not_break_the_delete_control() {
+        // Regression: the delete button used to interpolate the word straight
+        // into an inline JS call. `escape` does not touch single quotes, so
+        // "don't" terminated the string literal and broke the whole control.
+        let lists = ModerationLists {
+            blacklist: vec![BlacklistWord {
+                word: "don't".into(),
+                reason: "Apostrophe check".into(),
+                active_filter: true,
+            }],
+            banned: vec![],
+            suspended: vec![],
+        };
+        let html = templates::chatmod_lists_page(
+            &lists,
+            &sample_sessions(),
+            None,
+            None,
+            crate::admin::AdminRole::Moderator,
+            "modtester",
+        );
+        assert!(
+            html.contains(r#"data-word="don't" onclick="bbCmListsDelete(this.getAttribute('data-word'))""#),
+            "the word must travel in an attribute, not an inline JS argument"
+        );
+        assert!(
+            !html.contains("bbCmListsDelete('don't')"),
+            "must never emit an unterminated JS string literal"
+        );
+    }
+
+    #[test]
     fn words_split_on_semicolons_and_drop_blanks() {
         assert_eq!(split_words("frick;scrub"), vec!["frick", "scrub"]);
         // The panel tells moderators to separate with `;`, and people add spaces.
@@ -1338,8 +1370,11 @@ mod tests {
             assert!(html.contains(&format!("<th>{col}</th>")), "missing blacklist column {col}");
         }
         // The trash button names the word in the confirm dialog, so a moderator
-        // sees exactly what they are about to remove; only Confirm submits.
-        assert!(html.contains(r#"onclick="bbCmListsDelete('frick')""#));
+        // sees exactly what they are about to remove; only Confirm submits. The
+        // word travels in a data attribute, not an inline JS argument, because
+        // `escape` leaves single quotes alone — a word like "don't" would
+        // otherwise terminate the string literal.
+        assert!(html.contains(r#"data-word="frick" onclick="bbCmListsDelete(this.getAttribute('data-word'))""#));
         assert!(html.contains(r#"id="cm-lists-del-modal""#));
         assert!(html.contains(r#"onclick="bbCmListsDeleteConfirm()""#));
         // Add / Remove are real posts, not inert buttons.
