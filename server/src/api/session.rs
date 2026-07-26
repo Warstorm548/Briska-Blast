@@ -103,6 +103,14 @@ pub async fn close_session(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    // The fifth and only non-broadcasting end path (the other four funnel through
+    // `session_ops::announce_session_end`). Chat still has to be told, or a host
+    // closing their session from the API would strand its transcript until the
+    // orphan sweep caught it. Release the pooled connection first — the teardown
+    // takes its own.
+    drop(conn);
+    crate::chat::transcript::on_session_end(&state, &code).await;
+
     tracing::info!("player {} closed session {}", body.player_id, code);
 
     Ok(StatusCode::NO_CONTENT)

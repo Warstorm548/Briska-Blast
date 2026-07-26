@@ -2,7 +2,7 @@ use std::{net::IpAddr, num::NonZeroU32, sync::Arc, time::Duration};
 
 use deadpool_redis::Pool;
 use governor::{clock::DefaultClock, state::keyed::DefaultKeyedStateStore, Quota, RateLimiter};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, RwLock};
 
 use crate::config::Config;
 use crate::signaling::SignalHub;
@@ -66,6 +66,11 @@ pub struct AppState {
     /// Lives on AppState so handlers (/start, /ws/session/:code) receive
     /// it transparently via the same State<AppState> they already take.
     pub signal_hub: Arc<SignalHub>,
+    /// Cached chat-word blacklist. Matching runs on every accepted chat message,
+    /// so the list is held in memory rather than re-read from Redis per message;
+    /// the admin add/remove/toggle handlers call `chat::blacklist::invalidate`,
+    /// and a short TTL converges anyway if the hash is edited out of band.
+    pub chat_blacklist: Arc<RwLock<crate::chat::blacklist::BlacklistCache>>,
     /// HMAC key for pseudonymizing client IPs before they reach any log or the
     /// admin Logs tab (see `redact.rs`). Derived once at boot from
     /// `Config::ip_hash_pepper`, or a random 32 bytes when that's unset — so a
@@ -101,6 +106,7 @@ impl AppState {
             update_tx,
             update_apply_lock: Arc::new(Mutex::new(())),
             signal_hub: Arc::new(SignalHub::default()),
+            chat_blacklist: Arc::new(RwLock::new(Default::default())),
             ip_hash_key,
         }
     }

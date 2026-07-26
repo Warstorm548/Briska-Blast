@@ -9,6 +9,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.29.0] — 2026-07-26
+
+**Moderator chat lines.** A moderator can now speak into a session from the admin
+Chat-Mod panel (server 0.31.0). Their line renders distinctly in the lobby chat —
+`[MOD] <name>: <text>` in blue — so staff never read as another player.
+
+The name shown is whatever the moderator chose to appear as: either their real
+display name or a generic `Mod`. The client is deliberately not told which, and
+never learns who is behind an anonymous post; that attribution lives server-side
+in the moderation record.
+
+Styling goes through `PushColor`/`AddText`/`Pop`, never `AppendText`, preserving
+the existing guarantee that server- and user-supplied strings are never parsed as
+BBCode and so cannot inject tags.
+
+A moderator line carries no sender id, so it bypasses the roster entirely —
+feeding an empty id to `SessionContext` would have registered a phantom entry and
+then labelled the line from it.
+
+`SignalingClient.ChatMessage` now carries a `ChatLine` record rather than three
+positional strings; chat had grown a sender kind and would have kept growing.
+
+**Censoring needs nothing here.** Blacklisted words arrive already masked — the
+server censors before broadcasting, so the raw word never reaches a client and
+there is nothing to filter client-side.
+
+Chat still has no in-match subscriber; moderator lines appear in the lobby only.
+
+> **Deploy:** no `min_game_version` change required — this release only adds
+> styling. Older clients receive a moderator line and render it as an ordinary
+> chat message, which is correct if unstyled. Bump `min_game_version` to
+> **0.29.0** only if you want the `[MOD]` treatment guaranteed for everyone.
+
+---
+
 ## [0.28.1] — 2026-07-19
 
 Diagnostic instrumentation for a TURN-relay-only ball-handoff bug: on the relayed

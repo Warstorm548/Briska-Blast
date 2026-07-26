@@ -8,6 +8,30 @@ using BriskaBlast.Core;
 namespace BriskaBlast.Net;
 
 /// <summary>
+/// One chat line as broadcast by the server.
+///
+/// A record rather than more event arguments: chat has grown a sender kind and
+/// will likely grow more, and four positional strings at a call site stop being
+/// readable.
+/// </summary>
+/// <param name="From">Server-attested sender id. <em>Empty for a moderator
+/// line</em> — a moderator speaks through the admin panel and has no player
+/// account, so this must not be fed to a roster lookup.</param>
+/// <param name="Username">The display name to render. For a moderator this is
+/// either their real name or the generic <c>Mod</c>, depending on the anonymity
+/// toggle they chose; the client is not told which, by design.</param>
+/// <param name="Text">The message body. Blacklisted words arrive already masked
+/// — the server censors before broadcast, so the raw word never reaches a
+/// client and there is nothing to filter here.</param>
+/// <param name="IsModerator">True when a moderator spoke into the session
+/// rather than a player. Drives the distinct styling.</param>
+public readonly record struct ChatLine(
+    string From,
+    string Username,
+    string Text,
+    bool IsModerator);
+
+/// <summary>
 /// One player's signaling connection for one session. A <see cref="Node"/>
 /// so it can poll the <see cref="WebSocketPeer"/> every frame in
 /// <see cref="_Process"/> — which means all events below fire on Godot's
@@ -77,12 +101,11 @@ public partial class SignalingClient : Node
     /// <summary>The pause ended (rejoiner meshed, dropped again, or the server's
     /// valve fired). Carries countdownSecs — run a countdown, then unfreeze.</summary>
     public event Action<int>? MatchResumed;
-    /// <summary>A lobby chat message arrived. Carries (from, username, text):
-    /// <c>from</c> is the server-attested sender id and <c>username</c> their
-    /// display name (empty when none — fall back to <c>Player &lt;id&gt;</c>). The
-    /// server broadcasts to everyone including the sender, so this also fires for
-    /// this client's own messages — render them all the same way.</summary>
-    public event Action<string, string, string>? ChatMessage; // (from, username, text)
+    /// <summary>A lobby chat message arrived. The server broadcasts to everyone
+    /// including the sender, so this also fires for this client's own messages —
+    /// render player lines all the same way. See <see cref="ChatLine"/> for the
+    /// moderator case, which carries no sender id.</summary>
+    public event Action<ChatLine>? ChatMessage;
     /// <summary>Socket closed for good (deliberate close, an auth-level
     /// rejection, or the reconnect window expired). Carries the close code
     /// (4xxx app codes from the server, or transport codes like 1006) and the
@@ -478,7 +501,13 @@ public partial class SignalingClient : Node
                     GameOver?.Invoke(Str(root, "winner_player_id"), ReadIntMap(root, "scores"));
                     break;
                 case "chat_message":
-                    ChatMessage?.Invoke(Str(root, "from"), Str(root, "username"), Str(root, "text"));
+                    // `kind` is absent on servers predating moderator chat; Str
+                    // returns "" there, which reads as an ordinary player line.
+                    ChatMessage?.Invoke(new ChatLine(
+                        Str(root, "from"),
+                        Str(root, "username"),
+                        Str(root, "text"),
+                        Str(root, "kind") == "moderator"));
                     break;
                 case "match_started":
                     MatchStarted?.Invoke();

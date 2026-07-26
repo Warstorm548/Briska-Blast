@@ -25,9 +25,18 @@ Work intentionally deferred until after the initial production deployment of the
 ### Chat Audit Logs — statistics from the current filter selection
 
 - **What**: On the Chat Audit Logs page (Chat-Mod tab), surface summary statistics computed over the **currently filtered** rows — e.g. counts per action / per moderator / per group (including `System`), flags over the selected time range — recomputing as the Advanced Filter and category dropdown change.
-- **Why deferred**: The audit page is still in its UI-layout phase (baked-in placeholder data, filters inert). Stats only make sense once the filters and real audit records (SQLite) are wired, so they reflect live counts rather than static samples.
-- **Trigger to start**: After the audit log is wired to real data and the Advanced Filter is functional — the stats hang off the same filtered query.
+- **Why deferred**: Real records now exist (server 0.31.0, Redis `chat:audit:*`), but the Advanced Filter is still inert. Stats only make sense once filtering works, so they reflect a selection rather than the whole log.
+- **Trigger to start**: After the Advanced Filter is functional — the stats hang off the same filtered query.
 - **Related**: `server/src/admin/templates/chatmod.rs` (the category audit tables + `audit_filter_panel`); overlaps with the durable audit-event stream noted under the Admin Logs tab entry.
+
+### Chat-Mod follow-ups from the live-chat wiring (server 0.31.0)
+
+- **Audit-record growth is unbounded, by design.** Records carry no TTL and are never trimmed — retention is deliberate, and removal is meant to be a manual admin action that does not exist yet. Records are small (~300 bytes), so this is not urgent, but there is no ceiling. **Trigger**: the first deployment where `LLEN chat:audit:*` gets uncomfortable, or before stable. Needs the manual-deletion UI, and a decision on whether an age-out policy is acceptable given "no TTL, ever" was an explicit call.
+- **Retained transcripts from ended sessions are not browsable.** They are kept permanently and surface only through the audit log's pinned snapshots. A moderator cannot open "the chat from session FJ5B3V that ended an hour ago" directly. **Note the trap**: session codes are recycled, so any archive browser must address transcripts by their instance id (`chat:archives`, `chat:meta:{sid}`), never by code.
+- **Delete Body must tombstone, not delete.** Audit snapshots are pinned as a transcript instance plus a cut index and replayed on render. Removing a line from a transcript would silently rewrite every earlier snapshot that spans it. **Related**: `server/src/chat/audit.rs`, `server/src/chat/transcript.rs`.
+- **No CSRF tokens on the Chat-Mod POST routes**, matching the existing Users/Dashboard forms — the whole admin panel shares this gap rather than Chat-Mod introducing one. Worth closing panel-wide rather than per-tab.
+- **The orphan sweep runs on a page load.** Transcripts from sessions that expired passively are reconciled when a moderator opens the landing page. If nobody opens it, they linger. **Trigger**: if that proves to leak, move the sweep to a periodic task rather than a request path.
+- **Not wired**: player tools (Warn / Warn + Delete / Suspend / Ban), Approve Word, Banned + Suspended lists, blacklist CSV import.
 
 ### Pocket ID admin SSO
 

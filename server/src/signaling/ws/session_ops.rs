@@ -153,6 +153,30 @@ return cjson.encode({result = 'activated'})
     }
 }
 
+/// The shared tail of every path that ends a session: tear down its chat, then
+/// tell the room.
+///
+/// The four end paths (win, host-lost-while-waiting, host-lost-mid-match,
+/// last-player-left) each delete the session key their own way — some via
+/// status-checked Lua — but they all finish here. Routing the chat teardown
+/// through this one place keeps the retention decision in a single home instead
+/// of four copies that could drift apart; `chat::transcript::on_session_end`
+/// then decides whether the transcript is evidence or is discarded.
+///
+/// Ordering matters: chat is torn down *before* the broadcast, so a moderator
+/// watching the panel never sees a session linger after its players were told it
+/// was over.
+///
+/// The fifth end path, `api::session::close_session`, is a plain REST DELETE that
+/// deliberately does not broadcast, so it calls the chat teardown directly.
+pub(super) async fn announce_session_end(state: &AppState, code: &str, reason: &'static str) {
+    crate::chat::transcript::on_session_end(state, code).await;
+    state
+        .signal_hub
+        .broadcast(code, ServerMsg::SessionEnded { reason }, None)
+        .await;
+}
+
 /// The single, shared "this session is over" teardown: delete the session from
 /// Redis (idempotent) and broadcast `SessionEnded { reason }` to the room. The
 /// win path calls this with `reason = "game_over"` right after its `GameOver` UI
@@ -173,10 +197,7 @@ pub(super) async fn end_session(state: &AppState, code: &str, reason: &'static s
         }
         Err(e) => tracing::warn!("ws: end_session could not reach Redis for {}: {}", code, e),
     }
-    state
-        .signal_hub
-        .broadcast(code, ServerMsg::SessionEnded { reason }, None)
-        .await;
+    announce_session_end(state, code, reason).await;
     tracing::info!("ws: session {} ended ({})", code, reason);
 }
 
@@ -241,14 +262,7 @@ return cjson.encode({result = 'deleted'})
         // Advanced past Waiting (likely a concurrent /start): the match is live.
         EndOutcome::NotWaiting => Ok(HostDisconnectStage::Active),
         EndOutcome::Deleted => {
-            state
-                .signal_hub
-                .broadcast(
-                    code,
-                    ServerMsg::SessionEnded { reason: "host_disconnect" },
-                    None,
-                )
-                .await;
+            announce_session_end(state, code, "host_disconnect").await;
             tracing::info!("ws: session {} ended (host disconnected during waiting)", code);
             Ok(HostDisconnectStage::EndedWaiting)
         }
@@ -372,10 +386,7 @@ end
             tracing::info!("ws: session {} promoted {} to host after host loss", code, new_host);
         }
         PromoteOutcome::Ended => {
-            state
-                .signal_hub
-                .broadcast(code, ServerMsg::SessionEnded { reason: "host_disconnect" }, None)
-                .await;
+            announce_session_end(state, code, "host_disconnect").await;
             tracing::info!("ws: session {} ended after host loss (too few players remain)", code);
         }
         // Already handled by another path (concurrent promotion, the session
@@ -472,10 +483,7 @@ return cjson.encode({result = 'removed'})
             tracing::info!("ws: removed joiner {} from session {}", player_id, code);
         }
         RemoveOutcome::Ended => {
-            state
-                .signal_hub
-                .broadcast(code, ServerMsg::SessionEnded { reason: "last_player_left" }, None)
-                .await;
+            announce_session_end(state, code, "last_player_left").await;
             tracing::info!("ws: session {} ended (last peer left, host alone)", code);
         }
         RemoveOutcome::NotFound | RemoveOutcome::NotJoiner => {}
