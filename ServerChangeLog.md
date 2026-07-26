@@ -5,6 +5,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.31.1] — 2026-07-26
+
+**Chat-Mod split into module trees.** Structural only — no behavior, route,
+rendered output, protocol, or storage change. Nothing to do on deploy, and
+`min_game_version` stays where it is.
+
+The two Chat-Mod files were the only ones in the repository over 1000 lines:
+`admin/templates/chatmod.rs` at 2119 and `admin/chatmod.rs` at 1516. Both are now
+directory modules, one file per concern.
+
+`admin::templates::chatmod` becomes `model` (view models), `style` / `script`
+(the page's CSS and JS), `chrome` (sub-header, Chat Nav, Quick Access Tools),
+`shell` (the three-column document), `panels` + `highlight` (the scrolling lists
+and word highlighting), and one module per view — `pages`, `audit/`, `lists/`.
+The page script moves out of the shell's `format!` into a plain const, so its
+braces are no longer doubled — the same reason `CHATMOD_CSS` was already a const.
+
+`admin::chatmod` becomes `pages`, `fragments`, `say`, and `blacklist`, with the
+~975-line test module split into a `tests/` subtree grouped to match and the
+shared sample data in `tests/fixtures.rs`.
+
+Every handler keeps its `admin::chatmod::*` path, so the router is untouched, and
+`templates` re-exports exactly what it did before. The only visibility changes are
+private → `pub(super)` for helpers that now sit across a module boundary. Largest
+file in `server/` is back to `signaling/mod.rs` at 876 lines.
+
+Verified by rendering all four Chat-Mod pages (two roles × session context ×
+notice states) plus the three live-refresh fragments before and after the split
+and diffing the HTML: 27/27 byte-for-byte identical.
+
 ## [0.31.0] — 2026-07-26
 
 **Chat-Mod wired to live chat.** The panel stops serving placeholder data: every
