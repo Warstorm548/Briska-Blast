@@ -60,12 +60,11 @@ use axum::{
 };
 
 use super::{chatmod_data, require_session, templates};
-use crate::chat::{audit, blacklist, transcript};
+// `MAX_CHAT_LEN` is shared with the player path, not redefined: a moderator's
+// message reaches the same channel, and two copies of the bound would let one
+// drift and quietly disagree about what a message may contain.
+use crate::chat::{audit, blacklist, transcript, MAX_CHAT_LEN};
 use crate::state::AppState;
-
-/// Upper bound on a moderator message, matching the player-side `MAX_CHAT_LEN`
-/// in `signaling::ws::frame` — the same channel, so the same bound.
-const MAX_CHAT_LEN: usize = 500;
 
 /// The display name a moderator posts under when the "Appear As Your Display
 /// Name" toggle is off. Generic on purpose: players learn that a moderator is
@@ -85,9 +84,10 @@ pub async fn chatmod_page(State(state): State<AppState>, headers: HeaderMap) -> 
     // sweep rides along on a pass we were making anyway.
     transcript::sweep_orphans(&state).await;
 
+    let (sessions, flagged) = chatmod_data::landing_view(&state).await;
     Html(templates::chatmod_landing_page(
-        &chatmod_data::live_sessions(&state).await,
-        &chatmod_data::flagged_overview(&state).await,
+        &sessions,
+        &flagged,
         session.role,
         &session.username,
     ))
@@ -108,10 +108,11 @@ pub async fn chatmod_session_page(
         return Redirect::to("/admin/chatmod").into_response();
     };
 
+    let (sessions, transcript) = chatmod_data::session_view(&state, &canon).await;
     Html(templates::chatmod_session_page(
         &canon,
-        &chatmod_data::transcript_view(&state, &canon).await,
-        &chatmod_data::live_sessions(&state).await,
+        &transcript,
+        &sessions,
         session.role,
         &session.username,
     ))
@@ -209,14 +210,10 @@ pub async fn chatmod_data_fragment(State(state): State<AppState>, headers: Heade
     if require_session(&headers, &state.redis).await.is_none() {
         return Redirect::to("/admin").into_response();
     }
+    let (sessions, flagged) = chatmod_data::landing_view(&state).await;
     Json(serde_json::json!({
-        "sessions": templates::chatmod_sessions_fragment(
-            &chatmod_data::live_sessions(&state).await,
-            None,
-        ),
-        "flagged": templates::chatmod_flagged_fragment(
-            &chatmod_data::flagged_overview(&state).await,
-        ),
+        "sessions": templates::chatmod_sessions_fragment(&sessions, None),
+        "flagged": templates::chatmod_flagged_fragment(&flagged),
     }))
     .into_response()
 }
@@ -237,14 +234,10 @@ pub async fn chatmod_session_data(
         // page rather than leaving them polling a transcript that is now gone.
         return Redirect::to("/admin/chatmod").into_response();
     };
+    let (sessions, transcript) = chatmod_data::session_view(&state, &canon).await;
     Json(serde_json::json!({
-        "sessions": templates::chatmod_sessions_fragment(
-            &chatmod_data::live_sessions(&state).await,
-            Some(&canon),
-        ),
-        "transcript": templates::chatmod_transcript_fragment(
-            &chatmod_data::transcript_view(&state, &canon).await,
-        ),
+        "sessions": templates::chatmod_sessions_fragment(&sessions, Some(&canon)),
+        "transcript": templates::chatmod_transcript_fragment(&transcript),
     }))
     .into_response()
 }
@@ -481,7 +474,10 @@ pub async fn blacklist_remove(
         1 => "Removed 1 word.".to_string(),
         n => format!("Removed {n} words."),
     };
-    lists_redirect(from.as_deref(), "ok", &msg)
+    // A no-op is not a success, same as an all-duplicate add: nothing changed,
+    // and a green banner would read as though it had.
+    let key = if removed.is_empty() { "err" } else { "ok" };
+    lists_redirect(from.as_deref(), key, &msg)
 }
 
 /// POST /admin/chatmod/lists/blacklist/toggle — flip a word's Active Filter.
@@ -1075,6 +1071,14 @@ mod tests {
         // Refresh targets exist for the panels the poll swaps.
         assert!(html.contains(r#"id="cm-chat""#));
         assert!(html.contains(r#"id="cm-sessions""#));
+        // A failed send gives the message back rather than eating it silently.
+        assert!(html.contains("function restore()"));
+        assert!(html.contains("}).catch(restore);"));
+        assert!(html.contains("if(!r.ok){restore();return;}"));
+        // The poller holds one request at a time and idles on a hidden tab.
+        assert!(html.contains("if(busy)return;"));
+        assert!(html.contains("if(!document.hidden)load();"));
+        assert!(html.contains("visibilitychange"));
     }
 
     #[test]

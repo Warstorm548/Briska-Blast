@@ -1046,13 +1046,20 @@ window.bbCmPollNow=function(){{}};
 (function(){{
   var code=document.body.getAttribute('data-cm-code');
   var url=code?('/admin/chatmod/session/'+encodeURIComponent(code)+'/data'):'/admin/chatmod/data';
+  var busy=false;
   function apply(id,html){{if(html===undefined||html===null)return;var el=document.getElementById(id);if(el)el.innerHTML=html;}}
   function load(){{
+    // One request in flight at a time. On a slow link a 2s interval would
+    // otherwise stack requests faster than they complete, and out-of-order
+    // replies could render an older transcript over a newer one.
+    if(busy)return;
+    busy=true;
     fetch(url,{{headers:{{'Accept':'application/json'}}}}).then(function(r){{
       if(r.redirected){{window.location.href=r.url;return null;}}
       if(r.status===401||r.status===403){{window.location.href='/admin';return null;}}
       return r.ok?r.json():null;
     }}).then(function(d){{
+      busy=false;
       if(!d)return;
       apply('cm-sessions',d.sessions);
       apply('cm-flagged',d.flagged);
@@ -1065,10 +1072,13 @@ window.bbCmPollNow=function(){{}};
         chat.innerHTML=d.transcript;
         if(atBottom)chat.scrollTop=chat.scrollHeight;
       }}
-    }}).catch(function(){{}});
+    }}).catch(function(){{busy=false;}});
   }}
   window.bbCmPollNow=load;
-  setInterval(load,code?2000:5000);
+  // A hidden tab has nobody reading it; polling it just burns the moderator's
+  // battery and the server's Redis. Catch up as soon as it comes back.
+  setInterval(function(){{if(!document.hidden)load();}},code?2000:5000);
+  document.addEventListener('visibilitychange',function(){{if(!document.hidden)load();}});
 }})();
 // Moderator chat. Enter and the Send button run the same path, so desktop and
 // the mobile drawer layout behave identically. Posting via fetch (rather than a
@@ -1097,6 +1107,10 @@ window.bbCmSay=function(){{
   // Clear optimistically: the line is echoed back by the next poll, the same
   // way the game client renders only what the server broadcast.
   input.value='';
+  // Restore what they typed if the send didn't land. Optimistic clearing is
+  // right when it works, but silently eating a moderator's message on a dropped
+  // connection is not — they would have no idea it never arrived.
+  function restore(){{ if(!input.value)input.value=text; }}
   fetch('/admin/chatmod/session/'+encodeURIComponent(code)+'/say',{{
     method:'POST',
     headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
@@ -1104,8 +1118,11 @@ window.bbCmSay=function(){{
   }}).then(function(r){{
     if(r.redirected){{window.location.href=r.url;return;}}
     if(r.status===401||r.status===403){{window.location.href='/admin';return;}}
+    // 404 means the session ended under them; anything else non-OK is a server
+    // problem. Either way the line was not delivered, so give it back.
+    if(!r.ok){{restore();return;}}
     bbCmPollNow();
-  }}).catch(function(){{}});
+  }}).catch(restore);
 }};
 </script>
 </body>

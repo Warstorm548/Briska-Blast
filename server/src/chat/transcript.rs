@@ -160,6 +160,13 @@ pub async fn sid_for(conn: &mut deadpool_redis::Connection, code: &str) -> Redis
 
 /// Append a line to a session's transcript, returning the instance id it landed
 /// in. A flagged line also retains the transcript and lights the red dot.
+///
+/// The append and its retention markers go out as **one transaction**. Written
+/// separately, a connection that died between them would leave a flagged message
+/// sitting in a transcript that was never marked retained — and teardown would
+/// then delete it as if nothing had happened. Losing the evidence a flag exists
+/// to preserve is the one failure here that cannot be recovered from, so the two
+/// writes either both land or neither does.
 pub async fn append(
     conn: &mut deadpool_redis::Connection,
     code: &str,
@@ -173,23 +180,21 @@ pub async fn append(
             e.to_string(),
         ))
     })?;
-    let _: () = conn.rpush(transcript_key(&sid), json).await?;
 
+    let mut pipe = deadpool_redis::redis::pipe();
+    pipe.atomic();
+    pipe.rpush(transcript_key(&sid), json).ignore();
     if msg.is_flagged() {
-        let _: RedisResult<()> = conn.sadd(FLAGGED_KEY, &sid).await;
-        retain(conn, &sid).await?;
+        pipe.sadd(FLAGGED_KEY, &sid).ignore();
+        pipe.sadd(RETAINED_KEY, &sid).ignore();
     } else if msg.kind == MessageKind::Moderator {
         // A deliberate intervention in a player-facing channel stays on the
         // record even when it was posted anonymously.
-        retain(conn, &sid).await?;
+        pipe.sadd(RETAINED_KEY, &sid).ignore();
     }
+    let _: () = pipe.query_async(&mut *conn).await?;
 
     Ok(sid)
-}
-
-/// Mark an instance as surviving teardown. Idempotent.
-pub async fn retain(conn: &mut deadpool_redis::Connection, sid: &str) -> RedisResult<()> {
-    conn.sadd(RETAINED_KEY, sid).await
 }
 
 pub async fn is_retained(conn: &mut deadpool_redis::Connection, sid: &str) -> RedisResult<bool> {
@@ -398,6 +403,25 @@ mod tests {
         assert!(msg.flagged_words.is_empty());
         assert!(!msg.is_flagged());
         assert!(!msg.mod_anonymous);
+    }
+
+    #[test]
+    fn retention_triggers_are_exactly_flagged_or_moderator() {
+        // These two predicates are what `append`'s transaction branches on, so
+        // the atomic write covers precisely the lines that must not survive
+        // without their retention marker.
+        let flagged = player_line("frick you all", &["frick"]);
+        assert!(flagged.is_flagged());
+        assert_eq!(flagged.kind, MessageKind::Player);
+
+        let clean = player_line("nice shot", &[]);
+        assert!(!clean.is_flagged());
+        assert_eq!(clean.kind, MessageKind::Player, "retains nothing");
+
+        let mut moderator = player_line("keep it civil", &[]);
+        moderator.kind = MessageKind::Moderator;
+        assert!(!moderator.is_flagged());
+        assert_eq!(moderator.kind, MessageKind::Moderator, "retains on kind alone");
     }
 
     #[test]

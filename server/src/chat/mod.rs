@@ -49,6 +49,14 @@ use crate::signaling::protocol::{ChatKind, ServerMsg};
 use crate::state::AppState;
 use transcript::{MessageKind, StoredMessage};
 
+/// Upper bound on a single chat message after trimming.
+///
+/// Lives here rather than on either sender because both reach the same channel:
+/// a player over the signaling socket and a moderator through the admin panel.
+/// Two copies of the number would let one drift and quietly disagree about what
+/// a message may contain.
+pub const MAX_CHAT_LEN: usize = 500;
+
 /// A moderator speaking into a live session.
 pub struct ModeratorMessage<'a> {
     /// The name players will see — either the moderator's Pocket ID display name

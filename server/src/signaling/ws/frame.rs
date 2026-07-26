@@ -6,15 +6,14 @@
 use chrono::Utc;
 
 use crate::{
-    chat::blacklist,
+    // The message-length bound lives in `chat` because a moderator posting
+    // through the admin panel reaches this same channel and must share it.
+    chat::{blacklist, MAX_CHAT_LEN},
     signaling::protocol::{ChatKind, ClientMsg, ServerMsg},
     signaling::ReadyOutcome,
     state::AppState,
 };
 
-/// Upper bound on a single chat message after trimming. Keeps one client from
-/// flooding the room with an oversized frame; the client also limits input.
-const MAX_CHAT_LEN: usize = 500;
 
 /// Parse and route a single incoming text frame. Returns true to keep
 /// the loop running, false on explicit Leave.

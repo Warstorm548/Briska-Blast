@@ -140,22 +140,19 @@ pub async fn resolve_live_session(state: &AppState, code: &str) -> Option<String
     exists.then_some(canon)
 }
 
-/// The left "Active Game Sessions" panel.
-pub async fn live_sessions(state: &AppState) -> Vec<ChatSession> {
-    let Ok(mut conn) = state.redis.get().await else {
-        return Vec::new();
-    };
-
-    let codes = live_codes(&mut conn).await;
+/// The left "Active Game Sessions" panel, from an enumeration the caller already
+/// made. Split from [`live_sessions`] so a page needing several views pays for
+/// one connection and one `KEYS` scan rather than one of each per view.
+async fn collect_sessions(
+    conn: &mut deadpool_redis::Connection,
+    codes: &[String],
+) -> Vec<ChatSession> {
     let mut out = Vec::with_capacity(codes.len());
-    for code in codes {
-        let sid = transcript::live_sid(&mut conn, &code)
-            .await
-            .ok()
-            .flatten();
+    for code in codes.iter().cloned() {
+        let sid = transcript::live_sid(conn, &code).await.ok().flatten();
         let (preview, flagged) = match sid {
             Some(sid) => {
-                let lines = transcript::tail(&mut conn, &sid, PREVIEW_LINES)
+                let lines = transcript::tail(conn, &sid, PREVIEW_LINES)
                     .await
                     .unwrap_or_default();
                 let preview = lines
@@ -165,7 +162,7 @@ pub async fn live_sessions(state: &AppState) -> Vec<ChatSession> {
                         flagged_word: m.flagged_words.first().cloned(),
                     })
                     .collect();
-                let flagged = transcript::is_flagged(&mut conn, &sid).await.unwrap_or(false);
+                let flagged = transcript::is_flagged(conn, &sid).await.unwrap_or(false);
                 (preview, flagged)
             }
             // A session with no chat yet still belongs in the panel — a moderator
@@ -177,21 +174,21 @@ pub async fn live_sessions(state: &AppState) -> Vec<ChatSession> {
     out
 }
 
-/// The landing page's "Flagged Messages" panel, over live sessions.
-pub async fn flagged_overview(state: &AppState) -> Vec<FlaggedSession> {
-    let Ok(mut conn) = state.redis.get().await else {
-        return Vec::new();
-    };
-
+/// The landing page's "Flagged Messages" panel, from a caller-supplied
+/// enumeration (see [`collect_sessions`] for why).
+async fn collect_flagged(
+    conn: &mut deadpool_redis::Connection,
+    codes: &[String],
+) -> Vec<FlaggedSession> {
     let mut out = Vec::new();
-    for code in live_codes(&mut conn).await {
-        let Ok(Some(sid)) = transcript::live_sid(&mut conn, &code).await else {
+    for code in codes.iter().cloned() {
+        let Ok(Some(sid)) = transcript::live_sid(conn, &code).await else {
             continue;
         };
-        if !transcript::is_flagged(&mut conn, &sid).await.unwrap_or(false) {
+        if !transcript::is_flagged(conn, &sid).await.unwrap_or(false) {
             continue;
         }
-        let bodies: Vec<FlaggedBody> = transcript::all(&mut conn, &sid)
+        let bodies: Vec<FlaggedBody> = transcript::all(conn, &sid)
             .await
             .unwrap_or_default()
             .iter()
@@ -214,20 +211,58 @@ pub async fn flagged_overview(state: &AppState) -> Vec<FlaggedSession> {
 }
 
 /// A live session's transcript, oldest first.
-pub async fn transcript_view(state: &AppState, code: &str) -> Vec<ChatMessage> {
-    let Ok(mut conn) = state.redis.get().await else {
-        return Vec::new();
-    };
-    let Ok(Some(sid)) = transcript::live_sid(&mut conn, code).await else {
+async fn collect_transcript(
+    conn: &mut deadpool_redis::Connection,
+    code: &str,
+) -> Vec<ChatMessage> {
+    let Ok(Some(sid)) = transcript::live_sid(conn, code).await else {
         // No chat in this session yet — the template renders its own empty state.
         return Vec::new();
     };
-    transcript::all(&mut conn, &sid)
+    transcript::all(conn, &sid)
         .await
         .unwrap_or_default()
         .iter()
         .map(to_view)
         .collect()
+}
+
+/// The left panel alone — for the two Chat Nav sub-pages, which show sessions
+/// but neither the flagged panel nor a transcript.
+pub async fn live_sessions(state: &AppState) -> Vec<ChatSession> {
+    let Ok(mut conn) = state.redis.get().await else {
+        return Vec::new();
+    };
+    let codes = live_codes(&mut conn).await;
+    collect_sessions(&mut conn, &codes).await
+}
+
+/// Both landing-page panels: session cards and the flagged overview.
+///
+/// One connection and one `KEYS session:*` scan for the pair. Fetched separately
+/// they cost two of each on every 5s poll, for two views of the same enumeration.
+pub async fn landing_view(state: &AppState) -> (Vec<ChatSession>, Vec<FlaggedSession>) {
+    let Ok(mut conn) = state.redis.get().await else {
+        return (Vec::new(), Vec::new());
+    };
+    let codes = live_codes(&mut conn).await;
+    let sessions = collect_sessions(&mut conn, &codes).await;
+    let flagged = collect_flagged(&mut conn, &codes).await;
+    (sessions, flagged)
+}
+
+/// The entered-session view: the left panel plus that session's transcript.
+///
+/// Shares one connection, which matters more here than on the landing page —
+/// this is the 2s poll.
+pub async fn session_view(state: &AppState, code: &str) -> (Vec<ChatSession>, Vec<ChatMessage>) {
+    let Ok(mut conn) = state.redis.get().await else {
+        return (Vec::new(), Vec::new());
+    };
+    let codes = live_codes(&mut conn).await;
+    let sessions = collect_sessions(&mut conn, &codes).await;
+    let transcript = collect_transcript(&mut conn, code).await;
+    (sessions, transcript)
 }
 
 /// The Moderation Lists datasets.

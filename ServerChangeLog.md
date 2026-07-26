@@ -81,7 +81,8 @@ the reason. One record per word, since "who blacklisted this and why" cannot be
 answered by a record naming several. A word that fires writes a System record.
 
 Duplicate entries are impossible by construction: the storage key is the
-normalized word, so `Frick`, `frick` and `  FRICK  ` are one entry, and an
+normalized word, so "Frick", "frick" and "&nbsp;&nbsp;FRICK&nbsp;&nbsp;" (with
+surrounding spaces) are one entry, and an
 existing word is never overwritten — the first add already wrote an audit record
 naming its author and reason, and rewriting the entry would leave the list
 disagreeing with the log. A partial add now names what it skipped ("Added 2
