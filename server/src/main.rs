@@ -1,5 +1,6 @@
 mod admin;
 mod api;
+mod chat;
 mod config;
 mod error;
 mod gamemode;
