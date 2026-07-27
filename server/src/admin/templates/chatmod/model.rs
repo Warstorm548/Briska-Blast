@@ -43,6 +43,11 @@ pub struct FlaggedSession {
 }
 
 /// One transcript row in the session view.
+///
+/// `Default` exists for test fixtures, which care about two or three fields at a
+/// time. Production has exactly one construction site
+/// ([`crate::admin::chatmod_data`]), which fills every field explicitly.
+#[derive(Default)]
 pub struct ChatMessage {
     pub body_id: String,
     pub username: String,
@@ -69,6 +74,53 @@ pub struct ChatMessage {
     /// moderators working one session, "who said this" has to stay answerable
     /// from the transcript, and it is recorded on every line regardless.
     pub posted_as: Option<String>,
+    /// True when this line is a warning a moderator sent to one player, rather
+    /// than anything said in the chat. Mutually exclusive with `is_moderator`;
+    /// [`message_role`] is the single place that decides between them.
+    ///
+    /// `username`/`player_id` name the **target**, and `body` is the reason.
+    pub is_warning: bool,
+    /// For a warning: whether it actually reached the target's client. `None` on
+    /// every other kind, where delivery is not a concept.
+    pub delivered: Option<bool>,
+    /// Set when this body has been withdrawn from players' view. The message
+    /// still renders — the moderator's copy is the record — but greyed, with a
+    /// note saying it is no longer visible to players.
+    pub deleted: Option<Deletion>,
+}
+
+/// Who withdrew a body from players' view, and why.
+#[derive(Default)]
+pub struct Deletion {
+    /// The acting moderator's real display name. A deletion is never anonymous.
+    pub mod_user: String,
+    pub reason: String,
+    /// Pre-formatted UTC timestamp, matching the audit tables' rendering.
+    pub at: String,
+}
+
+/// What a transcript line is, for the one branch that picks its tag and styling.
+///
+/// The view model carries booleans because that is how each fact arrives from
+/// storage, but nothing should read them individually — collapsing them here
+/// means a line can never render as two things at once.
+#[derive(Clone, Copy, PartialEq)]
+pub enum MessageRole {
+    Player,
+    Moderator,
+    Warning,
+}
+
+/// Resolve a line's role. A warning wins over the moderator flag: it is sent
+/// *by* a moderator, so both are true of it, but only one describes it.
+pub fn message_role(m: &ChatMessage) -> MessageRole {
+    if m.is_warning {
+        MessageRole::Warning
+    } else if m.is_moderator {
+        MessageRole::Moderator
+    } else {
+        MessageRole::Player
+    }
 }
 
 /// The Chat Audit Logs are split into category tables (chosen by a dropdown),

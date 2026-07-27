@@ -46,12 +46,19 @@ pub(super) fn chat_nav_html(lists_href: &str, audit_href: &str, current: ChatNav
     )
 }
 
-/// The session view's "Quick Access Tools" panel. Deliberately styled as the
-/// finished controls (not grayed out) so the final look can be judged — but
-/// nothing is wired: buttons are `type="button"` with no handlers.
+/// The session view's "Quick Access Tools" panel.
+///
+/// Warn, Warn + Delete and Blacklist Words post through `fetch` (see
+/// `script.rs`) rather than as forms, because the page is polling a live
+/// transcript — a redirect would cost the moderator their place in the
+/// conversation. Suspend and Ban remain inert placeholders.
+///
+/// Stays a `const` with no interpolation: the session code the handlers need is
+/// already page-wide on `<body data-cm-code>`, which is how `bbCmSay` reaches it.
 pub(super) const TOOLS_HTML: &str = r#"<div class="cm-panel cm-tools">
       <p class="cm-panel-title">Quick Access Tools</p>
       <div class="cm-panel-scroll">
+      <p class="cm-tool-notice" id="cm-tool-notice" role="status" hidden></p>
       <div class="cm-tool-group">
         <p class="cm-tool-group-title">Player Actions</p>
         <div class="cm-tool">
@@ -60,12 +67,13 @@ pub(super) const TOOLS_HTML: &str = r#"<div class="cm-panel cm-tools">
           <p class="cm-approve-sel">Used by Warn, Suspend &amp; Ban. Ticking message checkboxes adds each body's sender.</p>
         </div>
         <div class="cm-tool">
-          <button type="button" class="btn btn-sm cm-tool-btn">Warn + Delete Chat Body</button>
-          <input type="text" class="cm-reason" placeholder="Reason (logged &amp; sent to player)">
+          <button type="button" class="btn btn-sm cm-tool-btn" onclick="bbCmWarn(1)">Warn + Delete Chat Body</button>
+          <input type="text" class="cm-reason" id="cm-warn-del-reason" placeholder="Reason (logged &amp; sent to player)">
+          <p class="cm-approve-sel">Deletes the ticked messages for every player still connected.</p>
         </div>
         <div class="cm-tool">
-          <button type="button" class="btn btn-sm cm-tool-btn">Warn Only</button>
-          <input type="text" class="cm-reason" placeholder="Reason (logged &amp; sent to player)">
+          <button type="button" class="btn btn-sm cm-tool-btn" onclick="bbCmWarn(0)">Warn Only</button>
+          <input type="text" class="cm-reason" id="cm-warn-reason" placeholder="Reason (logged &amp; sent to player)">
         </div>
         <div class="cm-tool">
           <label>Suspend User</label>
@@ -92,9 +100,10 @@ pub(super) const TOOLS_HTML: &str = r#"<div class="cm-panel cm-tools">
           <label for="cm-blacklist">Blacklist Words</label>
           <div class="row">
             <input type="text" id="cm-blacklist" placeholder="Word or words &mdash; separate with ;">
-            <button type="button" class="btn btn-sm">Add</button>
+            <button type="button" class="btn btn-sm" onclick="bbCmBlacklist()">Add</button>
           </div>
-          <input type="text" class="cm-reason" placeholder="Reason (logged)">
+          <input type="text" class="cm-reason" id="cm-bl-reason" placeholder="Reason (logged)">
+          <p class="cm-approve-sel">Censors future messages only &mdash; what players already saw is unchanged.</p>
         </div>
         <div class="cm-tool">
           <button type="button" class="btn btn-sm cm-tool-btn">Approve Word</button>
@@ -107,7 +116,7 @@ pub(super) const TOOLS_HTML: &str = r#"<div class="cm-panel cm-tools">
         <p class="cm-tool-group-title">Moderator Chat Settings</p>
         <label class="cm-check"><input type="checkbox" id="cm-show-name"> Appear As Your Display Name</label>
       </div>
-      <p class="note">Preview only &mdash; tools are not wired up yet.</p>
+      <p class="note">Suspend, Ban and Approve Word are not wired up yet.</p>
       </div>
     </div>
     <div id="cm-ban-modal" class="modal-backdrop" onclick="if(event.target===this)bbCmBanClose()">

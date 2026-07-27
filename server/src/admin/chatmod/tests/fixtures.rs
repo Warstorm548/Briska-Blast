@@ -116,8 +116,7 @@ pub(super) fn sample_transcript(code: &str) -> Vec<ChatMessage> {
                 player_id: Some(12),
                 body: "that portal save tho".into(),
                 flagged_word: None,
-                is_moderator: false,
-                posted_as: None,
+                ..Default::default()
             },
             ChatMessage {
                 body_id: "W34V67898701".into(),
@@ -125,8 +124,7 @@ pub(super) fn sample_transcript(code: &str) -> Vec<ChatMessage> {
                 player_id: Some(7),
                 body: "frick you all".into(),
                 flagged_word: Some("frick".into()),
-                is_moderator: false,
-                posted_as: None,
+                ..Default::default()
             },
             ChatMessage {
                 body_id: "J55RD2H8PL04".into(),
@@ -134,8 +132,7 @@ pub(super) fn sample_transcript(code: &str) -> Vec<ChatMessage> {
                 player_id: Some(12),
                 body: "chill, it is one point".into(),
                 flagged_word: None,
-                is_moderator: false,
-                posted_as: None,
+                ..Default::default()
             },
             ChatMessage {
                 body_id: "Q71ZT8C3VB55".into(),
@@ -143,8 +140,7 @@ pub(super) fn sample_transcript(code: &str) -> Vec<ChatMessage> {
                 player_id: Some(7),
                 body: "no frick this whole game".into(),
                 flagged_word: Some("frick".into()),
-                is_moderator: false,
-                posted_as: None,
+                ..Default::default()
             },
         ]
     } else {
@@ -155,8 +151,7 @@ pub(super) fn sample_transcript(code: &str) -> Vec<ChatMessage> {
                 player_id: Some(101),
                 body: "good game so far".into(),
                 flagged_word: None,
-                is_moderator: false,
-                posted_as: None,
+                ..Default::default()
             },
             ChatMessage {
                 body_id: "G78HJ9K1L2M3".into(),
@@ -164,8 +159,7 @@ pub(super) fn sample_transcript(code: &str) -> Vec<ChatMessage> {
                 player_id: Some(102),
                 body: "watch the corner barrier".into(),
                 flagged_word: None,
-                is_moderator: false,
-                posted_as: None,
+                ..Default::default()
             },
         ]
     }
@@ -179,8 +173,7 @@ pub(super) fn snap(body_id: &str, username: &str, player_id: u64, body: &str, wo
         player_id: Some(player_id),
         body: body.into(),
         flagged_word: word.map(Into::into),
-        is_moderator: false,
-        posted_as: None,
+        ..Default::default()
     }
 }
 

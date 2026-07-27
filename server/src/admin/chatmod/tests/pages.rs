@@ -63,8 +63,7 @@ fn moderator_line_renders_without_a_player_id() {
             player_id: Some(7),
             body: "nice shot".into(),
             flagged_word: None,
-            is_moderator: false,
-            posted_as: None,
+            ..Default::default()
         },
         ChatMessage {
             body_id: "a00000000002".into(),
@@ -74,6 +73,7 @@ fn moderator_line_renders_without_a_player_id() {
             flagged_word: None,
             is_moderator: true,
             posted_as: Some("Mod".into()),
+            ..Default::default()
         },
     ];
     let html = templates::chatmod_session_page(
@@ -188,7 +188,7 @@ fn session_page_renders_transcript_and_tools() {
     // Blacklist accepts multiple ;-separated words; its reason is
     // audit-logged (but not player-facing).
     assert!(html.contains(r#"placeholder="Word or words &mdash; separate with ;""#));
-    assert!(html.contains(r#"class="cm-reason" placeholder="Reason (logged)""#));
+    assert!(html.contains(r#"class="cm-reason" id="cm-bl-reason" placeholder="Reason (logged)""#));
     // Shared optional multi-target field for Warn/Suspend/Ban (;-separated,
     // same convention as Blacklist Words), fed by the message checkboxes
     // (each carries its sender's padded id).
@@ -220,4 +220,120 @@ fn session_page_renders_transcript_and_tools() {
     assert!(html.contains("Permanently remove chat privileges for"));
     assert!(html.contains("Ban User (Chat)"));
     assert!(html.contains(r#"id="cm-ban-cancel""#));
+}
+
+#[test]
+fn the_wired_tools_post_and_the_rest_still_say_they_do_not() {
+    let html = templates::chatmod_session_page(
+        "FJ5B3V",
+        &sample_transcript("FJ5B3V"),
+        &sample_sessions(),
+        crate::admin::AdminRole::Moderator,
+        "modtester",
+    );
+    // Both warn buttons run one handler, distinguished by the delete flag —
+    // which is what makes Warn Only and Warn + Delete a single audited path.
+    assert!(html.contains(r#"onclick="bbCmWarn(1)">Warn + Delete Chat Body"#));
+    assert!(html.contains(r#"onclick="bbCmWarn(0)">Warn Only"#));
+    assert!(html.contains(r#"onclick="bbCmBlacklist()">Add"#));
+    // Each warn variant has its own reason box, so typing one and pressing the
+    // other cannot send a reason the moderator meant for a different action.
+    assert!(html.contains(r#"id="cm-warn-del-reason""#));
+    assert!(html.contains(r#"id="cm-warn-reason""#));
+    // Somewhere to report what happened — including a warning that reached
+    // nobody, which is a failure the moderator has to see.
+    assert!(html.contains(r#"id="cm-tool-notice""#));
+
+    // The panel must stop claiming the wired tools are a preview, while still
+    // being honest about the ones that genuinely are not wired. (Other "preview
+    // only" notes remain elsewhere on the page for the approve-word overlay and
+    // the ban modal, which really are unwired.)
+    assert!(!html.contains("Preview only &mdash; tools are not wired up yet."));
+    assert!(html.contains("Suspend, Ban and Approve Word are not wired up yet."));
+}
+
+#[test]
+fn a_selected_body_carries_its_id_for_the_warn_tools() {
+    let html = templates::chatmod_session_page(
+        "FJ5B3V",
+        &sample_transcript("FJ5B3V"),
+        &sample_sessions(),
+        crate::admin::AdminRole::Moderator,
+        "modtester",
+    );
+    // The checkbox carries both: the sender feeds the target field, the body id
+    // is what the action actually covers. Without the latter an audit record
+    // could not say which messages a warning was about.
+    assert!(html.contains(r#"data-pid="000000007" data-body="W34V67898701""#));
+}
+
+#[test]
+fn a_deleted_body_stays_visible_to_the_moderator_but_reads_as_withdrawn() {
+    // The whole point of not removing it: the moderator's copy is the record.
+    let transcript = vec![ChatMessage {
+        body_id: "W34V67898701".into(),
+        username: "Warstorm".into(),
+        player_id: Some(7),
+        body: "frick you all".into(),
+        deleted: Some(templates::Deletion {
+            mod_user: "jeanluc".into(),
+            reason: "Offensive language".into(),
+            at: "2026-07-24 13:58:20 UTC".into(),
+        }),
+        ..Default::default()
+    }];
+    let html = templates::chatmod_session_page(
+        "FJ5B3V",
+        &transcript,
+        &sample_sessions(),
+        crate::admin::AdminRole::Moderator,
+        "modtester",
+    );
+    assert!(html.contains("cm-msg-deleted"), "greyed, not gone");
+    assert!(html.contains("frick you all"), "the text is still the evidence");
+    assert!(html.contains("Removed from players&rsquo; view by jeanluc"));
+    assert!(html.contains("2026-07-24 13:58:20 UTC"));
+    assert!(html.contains("Offensive language"));
+}
+
+#[test]
+fn a_warning_reads_as_an_action_and_says_when_it_did_not_land() {
+    let sent = ChatMessage {
+        body_id: "Q71ZT8C3VB55".into(),
+        username: "Warstorm".into(),
+        player_id: Some(7),
+        body: "Offensive language".into(),
+        is_warning: true,
+        delivered: Some(true),
+        ..Default::default()
+    };
+    let missed = ChatMessage {
+        body_id: "Q71ZT8C3VB56".into(),
+        username: "PixelPirate".into(),
+        player_id: Some(12),
+        body: "Spam".into(),
+        is_warning: true,
+        delivered: Some(false),
+        ..Default::default()
+    };
+    let html = templates::chatmod_session_page(
+        "FJ5B3V",
+        &[sent, missed],
+        &sample_sessions(),
+        crate::admin::AdminRole::Moderator,
+        "modtester",
+    );
+    assert!(html.contains(r#"<span class="cm-msg-warn">WARNED</span>"#));
+    assert!(html.contains(r#"<span class="cm-msg-sent">sent to player</span>"#));
+    // Warnings are never queued, so an undelivered one never will arrive. A
+    // moderator who missed this would assume the player had been told.
+    assert!(html.contains(r#"<span class="cm-msg-undelivered">not delivered</span>"#));
+    assert!(html.contains("cm-msg-warning"), "the purple edge");
+    // A warning is not something the player said, so it must not be offered as
+    // a body to act on — that would let a moderator delete their own warning as
+    // though the player had sent it.
+    assert!(
+        !html.contains(r#"data-body="Q71ZT8C3VB55""#),
+        "a warning takes no select checkbox"
+    );
 }

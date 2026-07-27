@@ -7,7 +7,7 @@ use shared::types::player::PlayerId;
 
 use super::super::common::escape;
 use super::highlight::{highlight, highlight_toggle};
-use super::model::{ChatMessage, ChatSession, FlaggedSession};
+use super::model::{message_role, ChatMessage, ChatSession, FlaggedSession, MessageRole};
 
 /// The left "Active Game Sessions" card list. `active_code` highlights the
 /// session currently entered (session view only).
@@ -112,33 +112,73 @@ pub(super) fn transcript_html(transcript: &[ChatMessage]) -> String {
                 None => escape(&m.body),
             };
             let id = escape(&m.body_id);
-            // A moderator line carries no player id and no select checkbox —
-            // the player tools act on player accounts, and a moderator is not
-            // one. The MOD tag keeps it from reading as a player's message.
+            let role = message_role(m);
+            // Neither a moderator line nor a warning takes a select checkbox. The
+            // player tools act on what a player said, and a moderator is not a
+            // player; a warning's player id names its *target*, so offering it as
+            // a selectable body would let a moderator act on their own message as
+            // though the player had sent it.
+            let selectable = role == MessageRole::Player;
             let (pid_chip, select) = match m.player_id {
                 Some(pid) => {
                     let pid = PlayerId::from_counter(pid);
-                    (
-                        format!(
-                            r#"<span class="cm-pid mono" data-copy="{pid}" role="button" tabindex="0" title="Copy player ID">ID {pid}</span> "#
-                        ),
-                        format!(r#"<input type="checkbox" data-pid="{pid}" aria-label="Select message {id}">"#),
-                    )
+                    let chip = format!(
+                        r#"<span class="cm-pid mono" data-copy="{pid}" role="button" tabindex="0" title="Copy player ID">ID {pid}</span> "#
+                    );
+                    let select = if selectable {
+                        format!(r#"<input type="checkbox" data-pid="{pid}" data-body="{id}" aria-label="Select message {id}">"#)
+                    } else {
+                        String::new()
+                    };
+                    (chip, select)
                 }
                 None => (String::new(), String::new()),
             };
-            let mod_tag = if m.is_moderator {
-                r#"<span class="cm-msg-mod">MOD</span> "#
-            } else {
-                ""
+            let tag = match role {
+                MessageRole::Player => "",
+                MessageRole::Moderator => r#"<span class="cm-msg-mod">MOD</span> "#,
+                MessageRole::Warning => r#"<span class="cm-msg-warn">WARNED</span> "#,
+            };
+            // A warning's header reads as an action on someone, not as something
+            // they said — and says plainly when it never reached them, because
+            // warnings are not queued and a moderator would otherwise assume it
+            // landed.
+            let sent_to = match (role, m.delivered) {
+                (MessageRole::Warning, Some(true)) => {
+                    r#"<span class="cm-msg-sent">sent to player</span> "#.to_string()
+                }
+                (MessageRole::Warning, _) => {
+                    r#"<span class="cm-msg-undelivered">not delivered</span> "#.to_string()
+                }
+                _ => String::new(),
+            };
+            let (state_class, notice) = match &m.deleted {
+                Some(d) => (
+                    " cm-msg-deleted",
+                    format!(
+                        r#"<p class="cm-msg-removed">Removed from players&rsquo; view by {who} &middot; {at}{why}</p>"#,
+                        who = escape(&d.mod_user),
+                        at = escape(&d.at),
+                        why = if d.reason.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" &middot; {}", escape(&d.reason))
+                        },
+                    ),
+                ),
+                None => ("", String::new()),
+            };
+            let role_class = match role {
+                MessageRole::Warning => " cm-msg-warning",
+                _ => "",
             };
             format!(
-                r#"<div class="cm-msg">
+                r#"<div class="cm-msg{role_class}{state_class}">
             <div class="cm-msg-head">
-              <span class="cm-msg-user">{mod_tag}{user}{posted_as} {pid_chip}<span class="cm-bodyid mono" data-copy="{id}" role="button" tabindex="0" title="Copy body ID">Body ID: {id}</span></span>
+              <span class="cm-msg-user">{tag}{sent_to}{user}{posted_as} {pid_chip}<span class="cm-bodyid mono" data-copy="{id}" role="button" tabindex="0" title="Copy body ID">Body ID: {id}</span></span>
               {select}
             </div>
-            <div class="cm-msg-body">{body}</div>
+            {notice}<div class="cm-msg-body">{body}</div>
           </div>"#,
                 user = escape(&m.username),
                 posted_as = posted_as_html(m),

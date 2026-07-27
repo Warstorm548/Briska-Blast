@@ -55,6 +55,39 @@ document.addEventListener('keydown',function(e){
   e.preventDefault();
   bbCmDoCopy(el);
 });
+// Which message bodies are ticked, kept outside the DOM.
+//
+// The transcript is replaced wholesale every 2s (see the poller below), so any
+// state living only in the markup is destroyed on each refresh. The Target
+// Player IDs field survives because it sits outside #cm-chat, but the ticks —
+// and therefore the set of bodies an action covers — would not.
+window.bbCmPicked=(function(){
+  var picked={};
+  document.addEventListener('change',function(e){
+    var cb=e.target;
+    if(!cb.getAttribute)return;
+    var body=cb.getAttribute('data-body');
+    if(body===null)return;
+    if(cb.checked)picked[body]=1;else delete picked[body];
+  });
+  return {
+    ids:function(){return Object.keys(picked);},
+    // Re-tick after a swap. Setting .checked in script fires no change event,
+    // so this cannot double-append to the target field.
+    restore:function(root){
+      if(!root)return;
+      root.querySelectorAll('input[data-body]').forEach(function(cb){
+        if(picked[cb.getAttribute('data-body')])cb.checked=true;
+      });
+    },
+    // After an action consumes the selection, so the next one does not silently
+    // reuse bodies the moderator has already dealt with.
+    clear:function(){
+      picked={};
+      document.querySelectorAll('input[data-body]:checked').forEach(function(cb){cb.checked=false;});
+    }
+  };
+})();
 // Message checkboxes feed the Target Player IDs field, a ;-separated list
 // (same separator convention as Blacklist Words). Ticking a body appends its
 // sender once; unticking removes the id only when no other ticked body still
@@ -234,6 +267,10 @@ window.bbCmPollNow=function(){};
         // single most annoying thing a live chat view can do.
         var atBottom=(chat.scrollHeight-chat.scrollTop-chat.clientHeight)<40;
         chat.innerHTML=d.transcript;
+        // The swap replaces every checkbox, so re-tick from the registry.
+        // Without this a moderator could never hold a selection long enough to
+        // act on it — the ticks would vanish under them every 2s.
+        bbCmPicked.restore(chat);
         if(atBottom)chat.scrollTop=chat.scrollHeight;
       }
     }).catch(function(){busy=false;});
@@ -287,4 +324,67 @@ window.bbCmSay=function(){
     if(!r.ok){restore();return;}
     bbCmPollNow();
   }).catch(restore);
+};
+// Quick Access Tools. Like the chat bar these post via fetch rather than as
+// forms: the page is polling a live transcript, and a redirect would drop the
+// moderator out of the conversation they are reading.
+//
+// Every reply is {ok, msg} — the server decides both. "Reached nobody" comes
+// back ok:false even though the request succeeded, because a green notice would
+// read as though the warning had gone out.
+function bbCmNotice(ok,msg){
+  var n=document.getElementById('cm-tool-notice');
+  if(!n)return;
+  // textContent, never innerHTML: msg carries usernames and moderator-typed
+  // reasons straight back from the server.
+  n.textContent=msg;
+  n.className='cm-tool-notice '+(ok?'cm-tool-notice-ok':'cm-tool-notice-err');
+  n.hidden=false;
+}
+function bbCmPost(path,body,onOk){
+  var code=document.body.getAttribute('data-cm-code');
+  if(!code)return;
+  fetch('/admin/chatmod/session/'+encodeURIComponent(code)+path,{
+    method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:body.toString()
+  }).then(function(r){
+    if(r.redirected){window.location.href=r.url;return null;}
+    if(r.status===401||r.status===403){window.location.href='/admin';return null;}
+    // 404 means the session ended under them — say so rather than leaving the
+    // last notice sitting there looking like this attempt's result.
+    if(r.status===404){bbCmNotice(false,'That session has ended.');return null;}
+    return r.json().catch(function(){return null;});
+  }).then(function(d){
+    if(!d)return;
+    bbCmNotice(d.ok,d.msg);
+    if(d.ok&&onOk)onOk();
+    bbCmPollNow();
+  }).catch(function(){bbCmNotice(false,'Could not reach the server.');});
+}
+window.bbCmWarn=function(del){
+  var t=document.getElementById('cm-target');
+  var r=document.getElementById(del?'cm-warn-del-reason':'cm-warn-reason');
+  var body=new URLSearchParams();
+  body.set('targets',t?t.value:'');
+  body.set('reason',r?r.value:'');
+  body.set('body_ids',bbCmPicked.ids().join(';'));
+  body.set('delete',del?'1':'0');
+  bbCmPost('/warn',body,function(){
+    if(r)r.value='';
+    if(t)t.value='';
+    bbCmPicked.clear();
+  });
+};
+window.bbCmBlacklist=function(){
+  var w=document.getElementById('cm-blacklist');
+  var r=document.getElementById('cm-bl-reason');
+  if(!w||!w.value.trim()){bbCmNotice(false,'Enter at least one word.');return;}
+  var body=new URLSearchParams();
+  body.set('words',w.value);
+  body.set('reason',r?r.value:'');
+  bbCmPost('/blacklist',body,function(){
+    w.value='';
+    if(r)r.value='';
+  });
 };"#;
