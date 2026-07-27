@@ -5,6 +5,84 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.32.0] — 2026-07-27
+
+**Three Quick Access Tools wired: Warn, Warn + Delete Chat Body, and Blacklist
+Words.** The first moderation actions that reach a player, so this release
+**requires `min_game_version` ≥ 0.30.0** — set it in the admin panel as part of
+the deploy. An older client silently ignores both new frames: the warning never
+appears and a deleted message stays on screen, while the server reports the send
+as delivered.
+
+### Warn / Warn + Delete
+
+`POST /admin/chatmod/session/:code/warn` handles both buttons, branching on a
+`delete` flag. Per the audit contract it writes **one Player record per (action
+instance, target player)**, each carrying the bodies that player sent; a press
+hitting three players writes three records, and repeated presses are never
+merged.
+
+- Which body belongs to which sender is derived from the stored transcript,
+  never from the form. A client could claim any pairing, and a record that
+  misattributes a message is worse than one that omits it.
+- The snapshot cut index is pinned before anything the action appends, so it
+  shows the conversation that prompted the warning, not the warning's own echo.
+- Delivery is **live-only and never queued**. A disconnected player, or one in a
+  match (chat renders only in the lobby), does not receive it. The outcome is
+  recorded on `AuditRecord.delivered` and on the transcript echo, and the panel
+  reports who it missed — otherwise a moderator would assume it landed.
+- Deletion marks are written before any broadcast. If the mark fails, nothing is
+  withdrawn: removing a message from players with no record of why is the worse
+  half-state.
+
+### Deletion never mutates the transcript
+
+Audit records pin a cut index into an append-only list, so removing an entry
+would shift every later index and silently corrupt earlier snapshots. Deletions
+are marked in a new `chat:deleted:{sid}` hash instead — a tombstone, the
+mark-don't-remove kind. The mark and the retention `SADD` go out in one
+transaction, the same reasoning as `append`.
+
+On the moderation surface a deleted body stays visible, greyed and struck
+through, with small print naming who withdrew it, when, and why. The moderator's
+copy is the record; hiding it would destroy the evidence the deletion exists to
+preserve. Snapshots apply marks as they stand now, not as of the cut — the marks
+carry their own timestamps, and replaying a body as live when it has since been
+withdrawn would misread as evidence players can still see.
+
+### Blacklist Words from the session view
+
+`POST /admin/chatmod/session/:code/blacklist` runs the identical code path as the
+Moderation Lists tool (`blacklist::apply_add`, extracted rather than copied), so
+the audit trail is identical: one Word record per newly-added word, nothing for a
+duplicate. It answers with JSON instead of redirecting, because the session view
+polls a live transcript and navigating away costs the moderator their place.
+
+Adding a word does **not** retroactively flag messages already in the transcript.
+`flagged_words` records what fired at broadcast time, which is what players'
+censoring actually reflected.
+
+### Protocol
+
+- `ServerMsg::ChatWarning { reason }` — to one player, naming no moderator.
+- `ServerMsg::ChatBodyDeleted { body_id }` — broadcast to the room.
+- `ChatMessage` gains `body_id`, the only identifier a client has ever had for a
+  chat message. It labels a line the client already holds so a delete can name
+  it; nothing can be looked up with it.
+
+### Also fixed
+
+The transcript is replaced wholesale every 2s, which destroyed checkbox state —
+a moderator could never hold a multi-message selection long enough to act on it.
+Ticks now live outside the DOM and are re-applied after each swap. The word-level
+selection behind Approve Word has the same flaw and is untouched: its buttons
+carry no per-occurrence identity to key on, and that tool is not wired yet.
+
+Still not wired: Suspend, Ban, Approve Word, the Banned/Suspended lists, audit
+filters, and manual deletion of retained records.
+
+---
+
 ## [0.31.1] — 2026-07-26
 
 **Chat-Mod split into module trees.** Structural only — no behavior, route,
