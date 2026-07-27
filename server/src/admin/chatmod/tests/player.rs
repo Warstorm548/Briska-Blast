@@ -47,6 +47,31 @@ fn warn_summary_reports_deletions_alongside_delivery() {
         "Warned nobody — Warstorm (000000007) — not connected. 2 messages removed."
     );
 
+    // Partial delivery *and* a deletion — the branch a real Warn + Delete on two
+    // players most often lands in. The count belongs between the delivery and
+    // failure sentences, so the removal does not read as something that only
+    // happened to the player it reached.
+    assert_eq!(
+        warn_summary(
+            &one,
+            &["EldenFire (000000012) — not connected".to_string()],
+            2
+        ),
+        "Warned 1 player. 2 messages removed. Not delivered to EldenFire (000000012) — not connected."
+    );
+
     // Warn Only passes 0 and must not mention messages at all.
     assert_eq!(warn_summary(&one, &[], 0), "Warned 1 player.");
+}
+
+#[test]
+fn a_target_who_was_never_in_the_session_is_reported_not_acted_on() {
+    // Strangers are filtered out before anything is written, so they can only
+    // ever appear in the missed list. One typo in the ;-separated target field
+    // would otherwise leave a permanent audit record against an uninvolved
+    // player, and manual deletion of audit records is not built.
+    assert_eq!(
+        warn_summary(&[], &["000000999 — not in this session".to_string()], 0),
+        "Warned nobody — 000000999 — not in this session."
+    );
 }

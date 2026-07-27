@@ -335,32 +335,55 @@ window.bbCmSay=function(){
 function bbCmNotice(ok,msg){
   var n=document.getElementById('cm-tool-notice');
   if(!n)return;
+  n.className='cm-tool-notice '+(ok?'cm-tool-notice-ok':'cm-tool-notice-err');
+  // Reveal before writing: a hidden element is out of the accessibility tree,
+  // so text set while hidden changes nothing a screen reader can announce.
+  n.hidden=false;
   // textContent, never innerHTML: msg carries usernames and moderator-typed
   // reasons straight back from the server.
   n.textContent=msg;
-  n.className='cm-tool-notice '+(ok?'cm-tool-notice-ok':'cm-tool-notice-err');
-  n.hidden=false;
 }
+// One tool request at a time. These write audit records and send warnings, so a
+// double-click would warn a player twice and leave two records behind — there is
+// no idempotency key to collapse them afterwards.
+var bbCmBusy=false;
 function bbCmPost(path,body,onOk){
   var code=document.body.getAttribute('data-cm-code');
-  if(!code)return;
+  if(!code||bbCmBusy)return;
+  bbCmBusy=true;
+  // Cleared on every exit below, including the redirect paths — a latch that
+  // leaks would wedge every tool in the panel until a reload.
+  function done(){bbCmBusy=false;}
   fetch('/admin/chatmod/session/'+encodeURIComponent(code)+path,{
     method:'POST',
     headers:{'Content-Type':'application/x-www-form-urlencoded'},
     body:body.toString()
   }).then(function(r){
-    if(r.redirected){window.location.href=r.url;return null;}
-    if(r.status===401||r.status===403){window.location.href='/admin';return null;}
+    if(r.redirected){done();window.location.href=r.url;return null;}
+    if(r.status===401||r.status===403){done();window.location.href='/admin';return null;}
     // 404 means the session ended under them — say so rather than leaving the
     // last notice sitting there looking like this attempt's result.
-    if(r.status===404){bbCmNotice(false,'That session has ended.');return null;}
-    return r.json().catch(function(){return null;});
+    if(r.status===404){done();bbCmNotice(false,'That session has ended.');return null;}
+    // Every handler answers {ok,msg}; anything unparseable is a 5xx page or a
+    // proxy error. Reporting it matters more than it looks: staying silent here
+    // leaves the PREVIOUS notice on screen, which then reads as this attempt's
+    // result — a moderator could take a stale green "Warned 1 player" as proof
+    // the warning they just sent had landed.
+    return r.json().catch(function(){
+      done();
+      bbCmNotice(false,'The server sent an unreadable reply — the action may not have run.');
+      return null;
+    });
   }).then(function(d){
     if(!d)return;
+    done();
     bbCmNotice(d.ok,d.msg);
     if(d.ok&&onOk)onOk();
     bbCmPollNow();
-  }).catch(function(){bbCmNotice(false,'Could not reach the server.');});
+  }).catch(function(){
+    done();
+    bbCmNotice(false,'Could not reach the server.');
+  });
 }
 window.bbCmWarn=function(del){
   var t=document.getElementById('cm-target');

@@ -60,21 +60,27 @@ fn lists_redirect(from: Option<&str>, key: &str, msg: &str) -> Response {
 /// in each caller is the point — two copies of an audit path drift, and a
 /// blacklist entry that is missing its record cannot be reconstructed.
 ///
-/// `Err` means the words were not written at all.
+/// Either way the words were not written; the two are separated so a moderator
+/// is told whether the storage was unreachable or the write itself failed.
+pub(super) enum AddError {
+    NoStorage,
+    AddFailed,
+}
+
 pub(super) async fn apply_add(
     state: &AppState,
     session: &crate::admin::AdminSession,
     words: &[String],
     reason: &str,
-) -> Result<blacklist::AddOutcome, ()> {
+) -> Result<blacklist::AddOutcome, AddError> {
     let Ok(mut conn) = state.redis.get().await else {
-        return Err(());
+        return Err(AddError::NoStorage);
     };
     let outcome = match blacklist::add(&mut conn, words, reason, &session.username).await {
         Ok(outcome) => outcome,
         Err(e) => {
             tracing::warn!("chatmod: blacklist add failed: {}", e);
-            return Err(());
+            return Err(AddError::AddFailed);
         }
     };
 
@@ -120,8 +126,14 @@ pub async fn blacklist_add(
         return lists_redirect(from.as_deref(), "err", "Enter at least one word.");
     }
 
-    let Ok(outcome) = apply_add(&state, &session, &words, &form.reason).await else {
-        return lists_redirect(from.as_deref(), "err", "Could not add those words.");
+    let outcome = match apply_add(&state, &session, &words, &form.reason).await {
+        Ok(outcome) => outcome,
+        Err(AddError::NoStorage) => {
+            return lists_redirect(from.as_deref(), "err", "Storage unavailable.")
+        }
+        Err(AddError::AddFailed) => {
+            return lists_redirect(from.as_deref(), "err", "Could not add those words.")
+        }
     };
 
     let msg = add_summary(&outcome.added, &outcome.duplicates);

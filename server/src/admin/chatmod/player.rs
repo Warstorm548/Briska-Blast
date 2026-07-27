@@ -30,6 +30,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     Form, Json,
 };
+use deadpool_redis::redis::AsyncCommands;
 
 use super::super::{chatmod_data, require_session};
 use super::blacklist::split_words;
@@ -77,6 +78,7 @@ fn bad(msg: impl Into<String>) -> Response {
 /// Why a warning did not reach someone. Phrased for a moderator reading a notice.
 const OFFLINE: &str = "not connected";
 const IN_MATCH: &str = "in an active match";
+const NOT_HERE: &str = "not in this session";
 
 /// POST /admin/chatmod/session/:code/warn
 ///
@@ -152,6 +154,36 @@ pub async fn chatmod_warn(
         return bad("None of those messages are in this session.");
     }
 
+    // A target must have something to do with this session: seated now (which
+    // covers a player inside their reconnect grace window), or on record as
+    // having spoken. Checked before anything is written.
+    //
+    // Without this, one typo in a `;`-separated field writes a permanent audit
+    // record — and a transcript echo naming them — against a player who was
+    // never in the conversation. Manual deletion of audit records is not built,
+    // so that record would be unremovable.
+    //
+    // Deliberately *not* "currently connected": warning someone who just said
+    // something and quit is the common case, and it must still land in the log
+    // as undelivered.
+    let seated: Option<crate::api::Session> = conn
+        .get::<_, Option<String>>(format!("session:{canon}"))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok());
+    let spoke: std::collections::HashSet<&str> =
+        lines.iter().map(|m| m.player_id.as_str()).collect();
+    let (targets, strangers): (Vec<String>, Vec<String>) = targets.into_iter().partition(|id| {
+        seated.as_ref().is_some_and(|s| s.contains_player(id)) || spoke.contains(id.as_str())
+    });
+    if targets.is_empty() {
+        return bad(format!(
+            "No valid target — {} not in this session.",
+            strangers.join(", ")
+        ));
+    }
+
     // Pinned before anything this action appends, so the snapshot shows the
     // conversation that prompted the warning rather than the warning's own echo.
     let cut_index = if sid.is_empty() {
@@ -205,7 +237,11 @@ pub async fn chatmod_warn(
     let action = if deleting { "Warn + Delete" } else { "Warn" };
 
     let mut delivered_to = Vec::new();
-    let mut missed = Vec::new();
+    // Strangers are reported but never acted on — no send, no echo, no record.
+    let mut missed: Vec<String> = strangers
+        .iter()
+        .map(|id| format!("{id} — {NOT_HERE}"))
+        .collect();
 
     for player_id in &targets {
         let username = usernames.get(player_id).cloned().unwrap_or_default();
@@ -353,13 +389,18 @@ pub async fn chatmod_quick_blacklist(
         return bad("Enter at least one word.");
     }
 
-    let Ok(outcome) = super::blacklist::apply_add(&state, &session, &words, &form.reason).await
-    else {
-        return reply(
-            StatusCode::SERVICE_UNAVAILABLE,
-            false,
-            "Could not add those words.",
-        );
+    let outcome = match super::blacklist::apply_add(&state, &session, &words, &form.reason).await {
+        Ok(outcome) => outcome,
+        Err(super::blacklist::AddError::NoStorage) => {
+            return reply(StatusCode::SERVICE_UNAVAILABLE, false, "Storage unavailable.")
+        }
+        Err(super::blacklist::AddError::AddFailed) => {
+            return reply(
+                StatusCode::SERVICE_UNAVAILABLE,
+                false,
+                "Could not add those words.",
+            )
+        }
     };
 
     // All-duplicate is not a success — nothing changed.
