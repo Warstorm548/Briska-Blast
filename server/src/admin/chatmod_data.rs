@@ -424,6 +424,7 @@ mod tests {
             mod_user: String::new(),
             mod_sub: String::new(),
             mod_anonymous: false,
+            delivered: None,
             at_ms: 0,
         }
     }

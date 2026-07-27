@@ -167,7 +167,7 @@ pub(super) async fn handle_client_frame(
             // display name. It degrades to an empty name (client shows
             // `Player <id>`) rather than dropping the message — moderation
             // failing must never silence chat.
-            let username = crate::chat::capture_player_message(
+            let captured = crate::chat::capture_player_message(
                 state,
                 code,
                 from_player,
@@ -184,9 +184,10 @@ pub(super) async fn handle_client_frame(
                     code,
                     ServerMsg::ChatMessage {
                         from: from_player.to_string(),
-                        username,
+                        username: captured.username,
                         text: broadcast_text,
                         kind: ChatKind::Player,
+                        body_id: captured.body_id,
                     },
                     None,
                 )

@@ -36,6 +36,8 @@
 //! `chat:live:*` pointer whose session key is gone gets the normal teardown. It
 //! runs on the Chat-Mod landing page, which already enumerates sessions.
 
+use std::collections::HashMap;
+
 use deadpool_redis::redis::{AsyncCommands, RedisResult};
 use serde::{Deserialize, Serialize};
 
@@ -56,6 +58,12 @@ fn meta_key(sid: &str) -> String {
     format!("chat:meta:{sid}")
 }
 
+/// Body id → [`DeletionMark`] for bodies withdrawn from players' view. Lives
+/// beside the transcript so the transcript itself is never mutated.
+fn deleted_key(sid: &str) -> String {
+    format!("chat:deleted:{sid}")
+}
+
 /// Sids that survive teardown.
 const RETAINED_KEY: &str = "chat:retained";
 
@@ -73,6 +81,15 @@ pub enum MessageKind {
     #[default]
     Player,
     Moderator,
+    /// A warning a moderator sent to one player. Recorded in the transcript so
+    /// the intervention sits in the conversation where it happened, but **never
+    /// broadcast** — only the target received it, over `ServerMsg::ChatWarning`.
+    ///
+    /// Field roles differ from the other kinds: `player_id`/`username` are the
+    /// **target**, `text` is the reason, and `mod_user`/`mod_sub` are the acting
+    /// moderator. `mod_anonymous` does not apply — a warning names no moderator
+    /// on the wire, and the panel always shows the real one.
+    Warning,
 }
 
 /// One captured chat line.
@@ -104,6 +121,15 @@ pub struct StoredMessage {
     pub mod_sub: String,
     #[serde(default)]
     pub mod_anonymous: bool,
+    /// Whether a [`MessageKind::Warning`] actually reached its target's client.
+    /// `None` on every other kind, where delivery is not a concept.
+    ///
+    /// Recorded here as well as on the audit record because the two are read in
+    /// different places: the panel renders the transcript echo without touching
+    /// the audit log, and a moderator needs to see "this did not land" in the
+    /// conversation itself, not only in a separate table.
+    #[serde(default)]
+    pub delivered: Option<bool>,
     pub at_ms: i64,
 }
 
@@ -111,6 +137,27 @@ impl StoredMessage {
     pub fn is_flagged(&self) -> bool {
         !self.flagged_words.is_empty()
     }
+}
+
+/// Why a body was removed from players' view, and by whom.
+///
+/// Stored per body in `chat:deleted:{sid}` rather than on the [`StoredMessage`]
+/// itself. The transcript list is append-only — audit records pin a cut index
+/// into it, so mutating an entry in place would need an index lookup and would
+/// make "append-only" a convention rather than a fact. A side key keeps the list
+/// literally untouched after append.
+///
+/// This **is** a tombstone, the mark-don't-remove kind. Removing the entry
+/// instead would shift every later index and silently corrupt every audit
+/// snapshot written after it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeletionMark {
+    /// The moderator's real display name. A deletion is never anonymous.
+    pub mod_user: String,
+    pub mod_sub: String,
+    /// The reason given for the action that deleted it.
+    pub reason: String,
+    pub at_ms: i64,
 }
 
 /// Per-instance metadata, written once when the instance is minted.
@@ -195,6 +242,61 @@ pub async fn append(
     let _: () = pipe.query_async(&mut *conn).await?;
 
     Ok(sid)
+}
+
+/// Mark bodies as removed from players' view, and retain the transcript.
+///
+/// The marks and the retention `SADD` go out as **one transaction**, for the
+/// same reason [`append`] pairs its writes: a connection that died between them
+/// would leave a moderated session unretained, and teardown would then delete
+/// the very conversation the deletion is evidence of.
+///
+/// Re-marking an already-deleted body simply overwrites its mark, which keeps
+/// the operation idempotent — a double-submitted form cannot corrupt anything.
+pub async fn mark_deleted(
+    conn: &mut deadpool_redis::Connection,
+    sid: &str,
+    body_ids: &[String],
+    mark: &DeletionMark,
+) -> RedisResult<()> {
+    if body_ids.is_empty() {
+        return Ok(());
+    }
+    let json = serde_json::to_string(mark).map_err(|e| {
+        deadpool_redis::redis::RedisError::from((
+            deadpool_redis::redis::ErrorKind::TypeError,
+            "chat: deletion mark serialize",
+            e.to_string(),
+        ))
+    })?;
+
+    let mut pipe = deadpool_redis::redis::pipe();
+    pipe.atomic();
+    for body_id in body_ids {
+        pipe.hset(deleted_key(sid), body_id, &json).ignore();
+    }
+    pipe.sadd(RETAINED_KEY, sid).ignore();
+    pipe.query_async(&mut *conn).await
+}
+
+/// Every deletion mark on an instance, keyed by body id. Empty when none.
+pub async fn deletions(
+    conn: &mut deadpool_redis::Connection,
+    sid: &str,
+) -> RedisResult<HashMap<String, DeletionMark>> {
+    let raw: HashMap<String, String> = conn.hgetall(deleted_key(sid)).await?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|(body_id, json)| match serde_json::from_str(&json) {
+            Ok(mark) => Some((body_id, mark)),
+            Err(e) => {
+                // A corrupt mark must not resurrect the body for players — but it
+                // is only a render concern here; the broadcast already happened.
+                tracing::warn!("chat: skipping malformed deletion mark: {}", e);
+                None
+            }
+        })
+        .collect())
 }
 
 pub async fn is_retained(conn: &mut deadpool_redis::Connection, sid: &str) -> RedisResult<bool> {
@@ -301,8 +403,13 @@ pub async fn on_session_end(state: &AppState, code: &str) {
         let _: RedisResult<()> = conn.zadd(ARCHIVES_KEY, &sid, now).await;
         tracing::info!(session = %code, sid = %sid, "chat: transcript retained");
     } else {
+        // Every key this instance owns goes here. Nothing in this module has a
+        // TTL, so a key missed on this branch leaks for the life of the
+        // deployment. A discarded instance cannot have deletion marks — marking
+        // retains — but delete the key anyway rather than rely on that.
         let _: RedisResult<()> = conn.del(transcript_key(&sid)).await;
         let _: RedisResult<()> = conn.del(meta_key(&sid)).await;
+        let _: RedisResult<()> = conn.del(deleted_key(&sid)).await;
         let _: RedisResult<()> = conn.srem(FLAGGED_KEY, &sid).await;
         tracing::debug!(session = %code, sid = %sid, "chat: transcript discarded");
     }
@@ -368,6 +475,7 @@ mod tests {
             mod_user: String::new(),
             mod_sub: String::new(),
             mod_anonymous: false,
+            delivered: None,
             at_ms: 1_753_000_000_000,
         }
     }
@@ -389,6 +497,77 @@ mod tests {
         let json = serde_json::to_string(&MessageKind::Moderator).unwrap();
         assert_eq!(json, r#""moderator""#);
         assert_eq!(serde_json::to_string(&MessageKind::Player).unwrap(), r#""player""#);
+        assert_eq!(serde_json::to_string(&MessageKind::Warning).unwrap(), r#""warning""#);
+    }
+
+    /// A warning inverts the usual field roles: the player slots name the
+    /// *target*, and the moderator slots the actor. Getting this backwards would
+    /// attribute the warning to the person who received it.
+    #[test]
+    fn warning_line_names_the_target_and_the_acting_moderator() {
+        let msg = StoredMessage {
+            body_id: "a00000000003".into(),
+            kind: MessageKind::Warning,
+            player_id: "000000007".into(),
+            username: "Warstorm".into(),
+            text: "Offensive language".into(),
+            flagged_words: vec![],
+            mod_user: "jeanluc".into(),
+            mod_sub: "pocket-id-sub-123".into(),
+            mod_anonymous: false,
+            delivered: Some(false),
+            at_ms: 1_753_000_000_000,
+        };
+        let back: StoredMessage =
+            serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+        assert_eq!(back.username, "Warstorm", "the player slot is the target");
+        assert_eq!(back.mod_user, "jeanluc", "the mod slot is the actor");
+        assert_eq!(back.text, "Offensive language", "the body is the reason");
+        assert_eq!(back.delivered, Some(false));
+    }
+
+    /// Delivery is only a concept for warnings; every other kind leaves it unset
+    /// so the panel can tell "did not land" apart from "not applicable".
+    #[test]
+    fn delivery_is_unset_on_ordinary_lines() {
+        assert_eq!(player_line("nice shot", &[]).delivered, None);
+        let old: StoredMessage = serde_json::from_str(
+            r#"{"body_id":"a00000000001","text":"hi","at_ms":1753000000000}"#,
+        )
+        .unwrap();
+        assert_eq!(old.delivered, None, "records predating warnings must load");
+    }
+
+    #[test]
+    fn deletion_mark_round_trips() {
+        let mark = DeletionMark {
+            mod_user: "jeanluc".into(),
+            mod_sub: "pocket-id-sub-123".into(),
+            reason: "Offensive language".into(),
+            at_ms: 1_753_000_000_000,
+        };
+        let back: DeletionMark =
+            serde_json::from_str(&serde_json::to_string(&mark).unwrap()).unwrap();
+        assert_eq!(back.mod_user, "jeanluc");
+        assert_eq!(back.reason, "Offensive language");
+    }
+
+    /// The deletion marks live under their own key, separate from the transcript
+    /// list and from every other per-instance key. A collision would either
+    /// clobber the conversation or resurrect deleted bodies.
+    #[test]
+    fn deleted_key_is_distinct_from_the_other_instance_keys() {
+        let sid = "a00000000001";
+        let keys = [
+            transcript_key(sid),
+            meta_key(sid),
+            deleted_key(sid),
+            live_key("FJ5B3V"),
+        ];
+        assert_eq!(deleted_key(sid), "chat:deleted:a00000000001");
+        let mut sorted = keys.clone();
+        sorted.sort();
+        sorted.windows(2).for_each(|w| assert_ne!(w[0], w[1]));
     }
 
     #[test]
@@ -443,6 +622,7 @@ mod tests {
             mod_user: "jeanluc".into(),
             mod_sub: "pocket-id-sub-123".into(),
             mod_anonymous: true,
+            delivered: None,
             at_ms: 1_753_000_000_000,
         };
         let back: StoredMessage =

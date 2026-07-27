@@ -115,6 +115,16 @@ pub struct AuditRecord {
     /// cover zero, one, or several bodies.
     #[serde(default)]
     pub body_ids: Vec<String>,
+
+    // --- outcome ---
+    /// Whether the action reached the player, for the actions that send them
+    /// something. `None` where delivery is not a concept — a blacklist edit
+    /// notifies nobody, so "not delivered" would be meaningless rather than bad.
+    ///
+    /// A warning is never queued: an offline or in-match player simply does not
+    /// receive it, and this is the only place that fact survives.
+    #[serde(default)]
+    pub delivered: Option<bool>,
 }
 
 impl AuditRecord {
@@ -167,6 +177,12 @@ impl AuditRecord {
 
     pub fn with_words(mut self, words: Vec<String>) -> Self {
         self.words = words;
+        self
+    }
+
+    /// Record whether what this action sent actually reached the player.
+    pub fn with_delivery(mut self, delivered: bool) -> Self {
+        self.delivered = Some(delivered);
         self
     }
 }
@@ -323,6 +339,28 @@ mod tests {
         assert!(r.words.is_empty());
         assert_eq!(r.target_player_id, None);
         assert_eq!(r.cut_index, 0);
+        assert_eq!(r.delivered, None, "records predating warnings must load");
+    }
+
+    /// Undelivered is a distinct state from not-applicable: a warning that never
+    /// landed must not read the same as a blacklist edit that notifies nobody.
+    #[test]
+    fn delivery_outcome_survives_a_round_trip() {
+        let missed = AuditRecord::by_moderator("jeanluc", "sub", AdminRole::Moderator, "Warn", "Spam")
+            .with_target("EldenFire", Some(12))
+            .with_delivery(false);
+        let back: AuditRecord =
+            serde_json::from_str(&serde_json::to_string(&missed).unwrap()).unwrap();
+        assert_eq!(back.delivered, Some(false));
+
+        let word = AuditRecord::by_moderator(
+            "jeanluc",
+            "sub",
+            AdminRole::Moderator,
+            "Blacklist Word",
+            "Slur",
+        );
+        assert_eq!(word.delivered, None, "a word action sends nothing");
     }
 
     #[test]

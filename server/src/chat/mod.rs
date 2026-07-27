@@ -57,6 +57,32 @@ use transcript::{MessageKind, StoredMessage};
 /// a message may contain.
 pub const MAX_CHAT_LEN: usize = 500;
 
+/// What capture learned about a chat line, for the broadcast that follows.
+///
+/// Both fields degrade to empty independently, and the caller must broadcast
+/// regardless — a moderation outage costs the audit trail for that line, never
+/// the line itself. An empty `body_id` simply means this message cannot be
+/// targeted by a later moderation action, because nothing recorded it.
+#[derive(Debug, Default, Clone)]
+pub struct Captured {
+    /// Display name, or empty when none is on file (the client falls back to
+    /// `Player <id>`).
+    pub username: String,
+    /// The id the transcript stored this line under, or empty when it was not
+    /// stored.
+    pub body_id: String,
+}
+
+impl Captured {
+    /// A name resolved, but no body recorded.
+    fn named(username: String) -> Self {
+        Self {
+            username,
+            body_id: String::new(),
+        }
+    }
+}
+
 /// A moderator speaking into a live session.
 pub struct ModeratorMessage<'a> {
     /// The name players will see — either the moderator's Pocket ID display name
@@ -90,11 +116,14 @@ pub struct ModeratorMessage<'a> {
 /// Broadcasting works from an admin handler because both routers share one
 /// `AppState`, and therefore one `SignalHub`.
 pub async fn speak_as_moderator(state: &AppState, code: &str, msg: ModeratorMessage<'_>) {
+    // Empty unless the line was actually stored; an unrecorded moderator line
+    // goes out unlabelled and simply cannot be targeted by a later delete.
+    let mut body_id = String::new();
     match state.redis.get().await {
         Ok(mut conn) => match ids::next_body_id(&mut conn).await {
-            Ok(body_id) => {
+            Ok(id) => {
                 let stored = StoredMessage {
-                    body_id,
+                    body_id: id.clone(),
                     kind: MessageKind::Moderator,
                     // A moderator has no player account.
                     player_id: String::new(),
@@ -104,10 +133,15 @@ pub async fn speak_as_moderator(state: &AppState, code: &str, msg: ModeratorMess
                     mod_user: msg.moderator.to_string(),
                     mod_sub: msg.moderator_sub.to_string(),
                     mod_anonymous: msg.anonymous,
+                    // Chat, not a warning — delivery is a broadcast concern.
+                    delivered: None,
                     at_ms: chrono::Utc::now().timestamp_millis(),
                 };
-                if let Err(e) = transcript::append(&mut conn, code, &stored).await {
-                    tracing::warn!("chat: moderator line not recorded for {}: {}", code, e);
+                match transcript::append(&mut conn, code, &stored).await {
+                    Ok(_) => body_id = id,
+                    Err(e) => {
+                        tracing::warn!("chat: moderator line not recorded for {}: {}", code, e)
+                    }
                 }
             }
             Err(e) => tracing::warn!("chat: no body id for the moderator line: {}", e),
@@ -126,6 +160,7 @@ pub async fn speak_as_moderator(state: &AppState, code: &str, msg: ModeratorMess
                 username: msg.display_name.to_string(),
                 text: msg.text.to_string(),
                 kind: ChatKind::Moderator,
+                body_id,
             },
             None,
         )
@@ -160,12 +195,12 @@ pub async fn capture_player_message(
     player_id: &str,
     text: &str,
     flagged_words: Vec<String>,
-) -> String {
+) -> Captured {
     let mut conn = match state.redis.get().await {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!("chat: capture skipped for {}, no redis: {}", code, e);
-            return String::new();
+            return Captured::default();
         }
     };
 
@@ -179,7 +214,7 @@ pub async fn capture_player_message(
         Ok(id) => id,
         Err(e) => {
             tracing::warn!("chat: could not mint a body id: {}", e);
-            return username;
+            return Captured::named(username);
         }
     };
 
@@ -194,6 +229,7 @@ pub async fn capture_player_message(
         mod_user: String::new(),
         mod_sub: String::new(),
         mod_anonymous: false,
+        delivered: None,
         at_ms: chrono::Utc::now().timestamp_millis(),
     };
 
@@ -201,7 +237,9 @@ pub async fn capture_player_message(
         Ok(sid) => sid,
         Err(e) => {
             tracing::warn!("chat: could not append to the transcript: {}", e);
-            return username;
+            // The line was never recorded, so nothing can target it later; the
+            // id would name a body no moderator can see.
+            return Captured::named(username);
         }
     };
 
@@ -217,12 +255,12 @@ pub async fn capture_player_message(
         )
         .with_target(&username, player_id.parse::<u64>().ok())
         .with_words(flagged_words)
-        .with_snapshot(&sid, cut_index, vec![body_id]);
+        .with_snapshot(&sid, cut_index, vec![body_id.clone()]);
 
         if let Err(e) = audit::write(&mut conn, audit::AuditCategory::System, &record).await {
             tracing::warn!("chat: could not write the flag audit record: {}", e);
         }
     }
 
-    username
+    Captured { username, body_id }
 }

@@ -248,12 +248,59 @@ pub enum ServerMsg {
     /// chose. Clients predating this field ignore it and render the line as an
     /// ordinary chat message, which is a correct (if unstyled) degradation, so
     /// this addition does not require a `min_game_version` bump.
+    ///
+    /// `body_id` labels this line so a later [`ServerMsg::ChatBodyDeleted`] can
+    /// name it. It is not a lookup handle — nothing lets a client ask the server
+    /// for a message — it is a tag the client keeps beside a line it already
+    /// received, so a delete order can identify *which* line on screen to erase.
+    /// Matching on text instead would be ambiguous the moment two messages read
+    /// the same, or the broadcast body was censored and no longer matches what
+    /// was typed.
+    ///
+    /// Unlike `kind`, this is not a graceful degradation: a client that ignores
+    /// it cannot act on a delete at all and keeps showing a removed message.
+    /// That is what requires the `min_game_version` bump.
     ChatMessage {
         from: String,
         username: String,
         text: String,
         kind: ChatKind,
+        body_id: String,
     },
+    /// A moderator warning, sent to **one player only** — never broadcast. The
+    /// reason is what the moderator typed into the Quick Access Tools panel.
+    ///
+    /// Deliberately carries no moderator identity, anonymous or otherwise: a
+    /// warning reads as coming from "a moderator". The anonymity toggle is scoped
+    /// to moderator *chat*, and the audit record holds the real identity either
+    /// way, so putting a name on the wire would only widen what a client learns.
+    ///
+    /// Delivery is best-effort and never queued. `SignalHub::send_to` reports
+    /// whether the frame reached a live socket, and that outcome is recorded on
+    /// the audit record. Note that a live socket is necessary but not sufficient:
+    /// chat is rendered only in the lobby, so a player already in a match has a
+    /// healthy socket and no surface to show this on. Callers must treat
+    /// in-match players as undeliverable rather than trusting `send_to` alone.
+    ChatWarning { reason: String },
+    /// Remove a previously-broadcast chat line from every client in the session.
+    /// `body_id` matches the field of the same name on [`ServerMsg::ChatMessage`].
+    ///
+    /// Clients wipe the line's text but **keep the id as a placeholder** in their
+    /// ordered chat list, rendering skips it so the visible log closes up with no
+    /// gap. That preserves the line's original position for a possible future
+    /// restore, which could then refill the hole in place without the server
+    /// having to describe where it went. The placeholder lives only as long as
+    /// the client's lobby chat does — leaving the session discards it.
+    ///
+    /// Server-side nothing is removed. The transcript is append-only because
+    /// audit records pin a cut index into it, so a deletion is recorded as a mark
+    /// in a side key and the list itself is never touched.
+    ///
+    /// **Trap for any future restore:** the transcript stores the *uncensored*
+    /// original, while players only ever saw the masked form. Re-sending the
+    /// stored text would leak the exact word the mask existed to hide. A restore
+    /// must re-mask against the blacklist before it goes on the wire.
+    ChatBodyDeleted { body_id: String },
     /// The ready barrier resolved: every seated player reported `ClientReady`
     /// (or the server's grace valve fired) and the session is now `Active`.
     /// Clients hold on the connecting screen until this arrives, so nobody can
@@ -287,8 +334,9 @@ mod tests {
     use super::*;
 
     /// A player line must keep the exact three fields older clients read, with
-    /// `kind` added alongside them. Adding a field is safe precisely because the
-    /// C# dispatcher pulls named properties rather than deserializing a struct.
+    /// `kind` and `body_id` added alongside them. Adding a field is safe
+    /// precisely because the C# dispatcher pulls named properties rather than
+    /// deserializing a struct.
     #[test]
     fn chat_message_serializes_with_kind() {
         let msg = ServerMsg::ChatMessage {
@@ -296,11 +344,12 @@ mod tests {
             username: "Warstorm".into(),
             text: "nice shot".into(),
             kind: ChatKind::Player,
+            body_id: "a00000000005".into(),
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert_eq!(
             json,
-            r#"{"type":"chat_message","from":"000000007","username":"Warstorm","text":"nice shot","kind":"player"}"#
+            r#"{"type":"chat_message","from":"000000007","username":"Warstorm","text":"nice shot","kind":"player","body_id":"a00000000005"}"#
         );
     }
 
@@ -314,11 +363,60 @@ mod tests {
             username: "Mod".into(),
             text: "keep it civil".into(),
             kind: ChatKind::Moderator,
+            body_id: "a00000000006".into(),
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert_eq!(
             json,
-            r#"{"type":"chat_message","from":"","username":"Mod","text":"keep it civil","kind":"moderator"}"#
+            r#"{"type":"chat_message","from":"","username":"Mod","text":"keep it civil","kind":"moderator","body_id":"a00000000006"}"#
+        );
+    }
+
+    /// A line the transcript never stored still broadcasts — it just carries no
+    /// id, and so cannot be targeted by a later moderation action. Capture
+    /// failing must never silence chat.
+    #[test]
+    fn chat_message_tolerates_an_unrecorded_body() {
+        let msg = ServerMsg::ChatMessage {
+            from: "000000007".into(),
+            username: "Warstorm".into(),
+            text: "nice shot".into(),
+            kind: ChatKind::Player,
+            body_id: String::new(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""body_id":"""#));
+    }
+
+    /// A warning names no moderator. The audit record holds the real identity;
+    /// the wire carries only what the player is being told.
+    #[test]
+    fn chat_warning_serializes_with_only_a_reason() {
+        let msg = ServerMsg::ChatWarning {
+            reason: "Offensive language".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"chat_warning","reason":"Offensive language"}"#
+        );
+        assert!(
+            !json.contains("moderator"),
+            "a warning must not identify who sent it"
+        );
+    }
+
+    /// The delete order carries the same id the original `ChatMessage` did, and
+    /// nothing else — the client already holds everything else about that line.
+    #[test]
+    fn chat_body_deleted_serializes_with_the_body_id() {
+        let msg = ServerMsg::ChatBodyDeleted {
+            body_id: "a00000000005".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"chat_body_deleted","body_id":"a00000000005"}"#
         );
     }
 
