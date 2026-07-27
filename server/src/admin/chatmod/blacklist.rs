@@ -51,6 +51,56 @@ fn lists_redirect(from: Option<&str>, key: &str, msg: &str) -> Response {
     Redirect::to(&target).into_response()
 }
 
+/// Add words to the blacklist, write the audit trail, and refresh the cache.
+///
+/// Shared verbatim by the Moderation Lists page and the session view's Quick
+/// Access Tools, which differ only in how they answer: the Lists page redirects
+/// with a notice, the session view returns JSON because it must not navigate a
+/// moderator away from a live conversation. Keeping the logging here rather than
+/// in each caller is the point — two copies of an audit path drift, and a
+/// blacklist entry that is missing its record cannot be reconstructed.
+///
+/// `Err` means the words were not written at all.
+pub(super) async fn apply_add(
+    state: &AppState,
+    session: &crate::admin::AdminSession,
+    words: &[String],
+    reason: &str,
+) -> Result<blacklist::AddOutcome, ()> {
+    let Ok(mut conn) = state.redis.get().await else {
+        return Err(());
+    };
+    let outcome = match blacklist::add(&mut conn, words, reason, &session.username).await {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            tracing::warn!("chatmod: blacklist add failed: {}", e);
+            return Err(());
+        }
+    };
+
+    // One record per word: the audit log answers "who blacklisted this word and
+    // why", which a single record naming several words could not. Duplicates
+    // write nothing — the original add is already on the record, and a second
+    // entry would imply the list changed when it did not.
+    for word in &outcome.added {
+        let record = audit::AuditRecord::by_moderator(
+            &session.username,
+            &session.sub,
+            session.role,
+            "Blacklist Word",
+            reason,
+        )
+        .with_words(vec![word.clone()]);
+        if let Err(e) = audit::write(&mut conn, audit::AuditCategory::Word, &record).await {
+            tracing::warn!("chatmod: blacklist audit write failed: {}", e);
+        }
+    }
+    drop(conn);
+    blacklist::invalidate(state).await;
+
+    Ok(outcome)
+}
+
 /// POST /admin/chatmod/lists/blacklist/add
 pub async fn blacklist_add(
     State(state): State<AppState>,
@@ -70,42 +120,14 @@ pub async fn blacklist_add(
         return lists_redirect(from.as_deref(), "err", "Enter at least one word.");
     }
 
-    let Ok(mut conn) = state.redis.get().await else {
-        return lists_redirect(from.as_deref(), "err", "Storage unavailable.");
+    let Ok(outcome) = apply_add(&state, &session, &words, &form.reason).await else {
+        return lists_redirect(from.as_deref(), "err", "Could not add those words.");
     };
-    let outcome = match blacklist::add(&mut conn, &words, &form.reason, &session.username).await {
-        Ok(outcome) => outcome,
-        Err(e) => {
-            tracing::warn!("chatmod: blacklist add failed: {}", e);
-            return lists_redirect(from.as_deref(), "err", "Could not add those words.");
-        }
-    };
-    let added = &outcome.added;
 
-    // One record per word: the audit log answers "who blacklisted this word and
-    // why", which a single record naming several words could not. Duplicates
-    // write nothing — the original add is already on the record, and a second
-    // entry would imply the list changed when it did not.
-    for word in added {
-        let record = audit::AuditRecord::by_moderator(
-            &session.username,
-            &session.sub,
-            session.role,
-            "Blacklist Word",
-            &form.reason,
-        )
-        .with_words(vec![word.clone()]);
-        if let Err(e) = audit::write(&mut conn, audit::AuditCategory::Word, &record).await {
-            tracing::warn!("chatmod: blacklist audit write failed: {}", e);
-        }
-    }
-    drop(conn);
-    blacklist::invalidate(&state).await;
-
-    let msg = add_summary(added, &outcome.duplicates);
+    let msg = add_summary(&outcome.added, &outcome.duplicates);
     // All-duplicate is not a success — nothing changed, and saying "Added 0
     // words" in a green banner reads as though it worked.
-    let key = if added.is_empty() { "err" } else { "ok" };
+    let key = if outcome.added.is_empty() { "err" } else { "ok" };
     lists_redirect(from.as_deref(), key, &msg)
 }
 

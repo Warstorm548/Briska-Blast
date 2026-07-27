@@ -166,6 +166,14 @@ async fn main() {
         )
         .route("/admin/chatmod/session/:code/say", post(admin::chatmod::chatmod_say))
         .route(
+            "/admin/chatmod/session/:code/warn",
+            post(admin::chatmod::chatmod_warn),
+        )
+        .route(
+            "/admin/chatmod/session/:code/blacklist",
+            post(admin::chatmod::chatmod_quick_blacklist),
+        )
+        .route(
             "/admin/chatmod/lists/blacklist/add",
             post(admin::chatmod::blacklist_add),
         )
