@@ -25,11 +25,18 @@ namespace BriskaBlast.Net;
 /// client and there is nothing to filter here.</param>
 /// <param name="IsModerator">True when a moderator spoke into the session
 /// rather than a player. Drives the distinct styling.</param>
+/// <param name="BodyId">The server's moderation id for this line, and the only
+/// identifier a client ever gets for a chat message. It exists so a later
+/// <c>chat_body_deleted</c> can name <em>which</em> displayed line to remove;
+/// nothing can be looked up with it. Empty when the server did not record the
+/// line (a moderation outage never silences chat), in which case the line simply
+/// cannot be targeted.</param>
 public readonly record struct ChatLine(
     string From,
     string Username,
     string Text,
-    bool IsModerator);
+    bool IsModerator,
+    string BodyId);
 
 /// <summary>
 /// One player's signaling connection for one session. A <see cref="Node"/>
@@ -106,6 +113,19 @@ public partial class SignalingClient : Node
     /// render player lines all the same way. See <see cref="ChatLine"/> for the
     /// moderator case, which carries no sender id.</summary>
     public event Action<ChatLine>? ChatMessage;
+    /// <summary>A moderator sent this player a warning. Carries the reason. Sent
+    /// to the targeted player alone, never broadcast, and never queued — if it
+    /// arrives at all it is because this client was connected and in the lobby
+    /// when the moderator acted.
+    ///
+    /// Deliberately carries no moderator identity: the reason is the whole
+    /// message.</summary>
+    public event Action<string>? ChatWarning;
+    /// <summary>A moderator withdrew a chat line from every player in the
+    /// session. Carries the <see cref="ChatLine.BodyId"/> of the line to remove.
+    /// Fires for a message this client may never have seen (it may have joined
+    /// after), in which case there is simply nothing to remove.</summary>
+    public event Action<string>? ChatBodyDeleted;
     /// <summary>Socket closed for good (deliberate close, an auth-level
     /// rejection, or the reconnect window expired). Carries the close code
     /// (4xxx app codes from the server, or transport codes like 1006) and the
@@ -503,11 +523,21 @@ public partial class SignalingClient : Node
                 case "chat_message":
                     // `kind` is absent on servers predating moderator chat; Str
                     // returns "" there, which reads as an ordinary player line.
+                    // `body_id` is absent on servers predating deletion, and
+                    // empty when the server could not record the line — either
+                    // way the line renders and simply cannot be deleted.
                     ChatMessage?.Invoke(new ChatLine(
                         Str(root, "from"),
                         Str(root, "username"),
                         Str(root, "text"),
-                        Str(root, "kind") == "moderator"));
+                        Str(root, "kind") == "moderator",
+                        Str(root, "body_id")));
+                    break;
+                case "chat_warning":
+                    ChatWarning?.Invoke(Str(root, "reason"));
+                    break;
+                case "chat_body_deleted":
+                    ChatBodyDeleted?.Invoke(Str(root, "body_id"));
                     break;
                 case "match_started":
                     MatchStarted?.Invoke();
