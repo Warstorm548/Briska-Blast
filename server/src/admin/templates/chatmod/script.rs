@@ -55,6 +55,39 @@ document.addEventListener('keydown',function(e){
   e.preventDefault();
   bbCmDoCopy(el);
 });
+// Which message bodies are ticked, kept outside the DOM.
+//
+// The transcript is replaced wholesale every 2s (see the poller below), so any
+// state living only in the markup is destroyed on each refresh. The Target
+// Player IDs field survives because it sits outside #cm-chat, but the ticks —
+// and therefore the set of bodies an action covers — would not.
+window.bbCmPicked=(function(){
+  var picked={};
+  document.addEventListener('change',function(e){
+    var cb=e.target;
+    if(!cb.getAttribute)return;
+    var body=cb.getAttribute('data-body');
+    if(body===null)return;
+    if(cb.checked)picked[body]=1;else delete picked[body];
+  });
+  return {
+    ids:function(){return Object.keys(picked);},
+    // Re-tick after a swap. Setting .checked in script fires no change event,
+    // so this cannot double-append to the target field.
+    restore:function(root){
+      if(!root)return;
+      root.querySelectorAll('input[data-body]').forEach(function(cb){
+        if(picked[cb.getAttribute('data-body')])cb.checked=true;
+      });
+    },
+    // After an action consumes the selection, so the next one does not silently
+    // reuse bodies the moderator has already dealt with.
+    clear:function(){
+      picked={};
+      document.querySelectorAll('input[data-body]:checked').forEach(function(cb){cb.checked=false;});
+    }
+  };
+})();
 // Message checkboxes feed the Target Player IDs field, a ;-separated list
 // (same separator convention as Blacklist Words). Ticking a body appends its
 // sender once; unticking removes the id only when no other ticked body still
@@ -234,6 +267,10 @@ window.bbCmPollNow=function(){};
         // single most annoying thing a live chat view can do.
         var atBottom=(chat.scrollHeight-chat.scrollTop-chat.clientHeight)<40;
         chat.innerHTML=d.transcript;
+        // The swap replaces every checkbox, so re-tick from the registry.
+        // Without this a moderator could never hold a selection long enough to
+        // act on it — the ticks would vanish under them every 2s.
+        bbCmPicked.restore(chat);
         if(atBottom)chat.scrollTop=chat.scrollHeight;
       }
     }).catch(function(){busy=false;});
@@ -287,4 +324,90 @@ window.bbCmSay=function(){
     if(!r.ok){restore();return;}
     bbCmPollNow();
   }).catch(restore);
+};
+// Quick Access Tools. Like the chat bar these post via fetch rather than as
+// forms: the page is polling a live transcript, and a redirect would drop the
+// moderator out of the conversation they are reading.
+//
+// Every reply is {ok, msg} — the server decides both. "Reached nobody" comes
+// back ok:false even though the request succeeded, because a green notice would
+// read as though the warning had gone out.
+function bbCmNotice(ok,msg){
+  var n=document.getElementById('cm-tool-notice');
+  if(!n)return;
+  n.className='cm-tool-notice '+(ok?'cm-tool-notice-ok':'cm-tool-notice-err');
+  // Reveal before writing: a hidden element is out of the accessibility tree,
+  // so text set while hidden changes nothing a screen reader can announce.
+  n.hidden=false;
+  // textContent, never innerHTML: msg carries usernames and moderator-typed
+  // reasons straight back from the server.
+  n.textContent=msg;
+}
+// One tool request at a time. These write audit records and send warnings, so a
+// double-click would warn a player twice and leave two records behind — there is
+// no idempotency key to collapse them afterwards.
+var bbCmBusy=false;
+function bbCmPost(path,body,onOk){
+  var code=document.body.getAttribute('data-cm-code');
+  if(!code||bbCmBusy)return;
+  bbCmBusy=true;
+  // Cleared on every exit below, including the redirect paths — a latch that
+  // leaks would wedge every tool in the panel until a reload.
+  function done(){bbCmBusy=false;}
+  fetch('/admin/chatmod/session/'+encodeURIComponent(code)+path,{
+    method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:body.toString()
+  }).then(function(r){
+    if(r.redirected){done();window.location.href=r.url;return null;}
+    if(r.status===401||r.status===403){done();window.location.href='/admin';return null;}
+    // 404 means the session ended under them — say so rather than leaving the
+    // last notice sitting there looking like this attempt's result.
+    if(r.status===404){done();bbCmNotice(false,'That session has ended.');return null;}
+    // Every handler answers {ok,msg}; anything unparseable is a 5xx page or a
+    // proxy error. Reporting it matters more than it looks: staying silent here
+    // leaves the PREVIOUS notice on screen, which then reads as this attempt's
+    // result — a moderator could take a stale green "Warned 1 player" as proof
+    // the warning they just sent had landed.
+    return r.json().catch(function(){
+      done();
+      bbCmNotice(false,'The server sent an unreadable reply — the action may not have run.');
+      return null;
+    });
+  }).then(function(d){
+    if(!d)return;
+    done();
+    bbCmNotice(d.ok,d.msg);
+    if(d.ok&&onOk)onOk();
+    bbCmPollNow();
+  }).catch(function(){
+    done();
+    bbCmNotice(false,'Could not reach the server.');
+  });
+}
+window.bbCmWarn=function(del){
+  var t=document.getElementById('cm-target');
+  var r=document.getElementById(del?'cm-warn-del-reason':'cm-warn-reason');
+  var body=new URLSearchParams();
+  body.set('targets',t?t.value:'');
+  body.set('reason',r?r.value:'');
+  body.set('body_ids',bbCmPicked.ids().join(';'));
+  body.set('delete',del?'1':'0');
+  bbCmPost('/warn',body,function(){
+    if(r)r.value='';
+    if(t)t.value='';
+    bbCmPicked.clear();
+  });
+};
+window.bbCmBlacklist=function(){
+  var w=document.getElementById('cm-blacklist');
+  var r=document.getElementById('cm-bl-reason');
+  if(!w||!w.value.trim()){bbCmNotice(false,'Enter at least one word.');return;}
+  var body=new URLSearchParams();
+  body.set('words',w.value);
+  body.set('reason',r?r.value:'');
+  bbCmPost('/blacklist',body,function(){
+    w.value='';
+    if(r)r.value='';
+  });
 };"#;

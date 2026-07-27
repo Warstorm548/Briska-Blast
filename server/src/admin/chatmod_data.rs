@@ -22,12 +22,12 @@ use shared::types::player::PlayerId;
 use crate::chat::{
     audit::{self, AuditCategory, AuditRecord},
     blacklist,
-    transcript::{self, MessageKind, StoredMessage},
+    transcript::{self, DeletionMark, MessageKind, StoredMessage},
 };
 use crate::state::AppState;
 use super::templates::{
-    AuditLog, BannedUser, BlacklistWord, ChatMessage, ChatSession, FlaggedBody, FlaggedSession,
-    ListAuditEntry, ModerationLists, PlayerAuditEntry, PreviewLine, SuspendedUser,
+    AuditLog, BannedUser, BlacklistWord, ChatMessage, ChatSession, Deletion, FlaggedBody,
+    FlaggedSession, ListAuditEntry, ModerationLists, PlayerAuditEntry, PreviewLine, SuspendedUser,
     SystemAuditEntry, WordAuditEntry,
 };
 
@@ -79,7 +79,15 @@ fn moderator_attribution(msg: &StoredMessage) -> (String, Option<String>) {
     (real, posted_as)
 }
 
-fn to_view(msg: &StoredMessage) -> ChatMessage {
+/// Project a stored line for rendering.
+///
+/// `deleted` is the instance's deletion marks, keyed by body id — passed in
+/// rather than looked up per line so one `HGETALL` covers a whole transcript.
+/// Empty when nothing in the session has been withdrawn.
+fn to_view(msg: &StoredMessage, deleted: &HashMap<String, DeletionMark>) -> ChatMessage {
+    // A warning's `username`/`player_id` name the target, not the moderator, so
+    // it takes the ordinary display path — only a moderator *speaking* is
+    // re-attributed.
     let (username, posted_as) = if msg.kind == MessageKind::Moderator {
         moderator_attribution(msg)
     } else {
@@ -95,6 +103,13 @@ fn to_view(msg: &StoredMessage) -> ChatMessage {
         flagged_word: msg.flagged_words.first().cloned(),
         is_moderator: msg.kind == MessageKind::Moderator,
         posted_as,
+        is_warning: msg.kind == MessageKind::Warning,
+        delivered: msg.delivered,
+        deleted: deleted.get(&msg.body_id).map(|d| Deletion {
+            mod_user: d.mod_user.clone(),
+            reason: d.reason.clone(),
+            at: audit::format_timestamp(d.at_ms),
+        }),
     }
 }
 
@@ -219,11 +234,14 @@ async fn collect_transcript(
         // No chat in this session yet — the template renders its own empty state.
         return Vec::new();
     };
+    // One read for the whole transcript. A failure here greys nothing rather
+    // than hiding the messages — the moderator still sees the conversation.
+    let deleted = transcript::deletions(conn, &sid).await.unwrap_or_default();
     transcript::all(conn, &sid)
         .await
         .unwrap_or_default()
         .iter()
-        .map(to_view)
+        .map(|m| to_view(m, &deleted))
         .collect()
 }
 
@@ -298,12 +316,20 @@ pub async fn moderation_lists(state: &AppState) -> ModerationLists {
 #[derive(Default)]
 struct SnapshotCache {
     by_sid: HashMap<String, Vec<StoredMessage>>,
+    deleted_by_sid: HashMap<String, HashMap<String, DeletionMark>>,
 }
 
 impl SnapshotCache {
     /// The chat as it stood when a record was written: the first `cut_index`
     /// lines of its transcript. This is what "a snapshot of the entire chat"
     /// resolves to — pinned, not copied.
+    ///
+    /// Deletion marks are applied as they stand *now*, not as of the cut. A body
+    /// withdrawn after this record was written therefore shows as deleted here
+    /// too. That is deliberate: the marks carry their own moderator and
+    /// timestamp, so the reviewer can see it happened later, and the alternative
+    /// — replaying a body as live when it has since been removed — would misread
+    /// as evidence that is still visible to players.
     async fn snapshot(
         &mut self,
         conn: &mut deadpool_redis::Connection,
@@ -315,10 +341,15 @@ impl SnapshotCache {
         if !self.by_sid.contains_key(&record.sid) {
             let lines = transcript::all(conn, &record.sid).await.unwrap_or_default();
             self.by_sid.insert(record.sid.clone(), lines);
+            let deleted = transcript::deletions(conn, &record.sid)
+                .await
+                .unwrap_or_default();
+            self.deleted_by_sid.insert(record.sid.clone(), deleted);
         }
         let lines = &self.by_sid[&record.sid];
+        let deleted = &self.deleted_by_sid[&record.sid];
         let cut = record.cut_index.min(lines.len());
-        lines[..cut].iter().map(to_view).collect()
+        lines[..cut].iter().map(|m| to_view(m, deleted)).collect()
     }
 }
 
@@ -424,8 +455,79 @@ mod tests {
             mod_user: String::new(),
             mod_sub: String::new(),
             mod_anonymous: false,
+            delivered: None,
             at_ms: 0,
         }
+    }
+
+    /// Project a line with nothing deleted — the ordinary case these tests are
+    /// about. Deletion rendering has its own tests below.
+    fn view(msg: &StoredMessage) -> ChatMessage {
+        to_view(msg, &HashMap::new())
+    }
+
+    fn mark(reason: &str) -> DeletionMark {
+        DeletionMark {
+            mod_user: "jeanluc".into(),
+            mod_sub: "pocket-id-sub-123".into(),
+            reason: reason.into(),
+            at_ms: 1_784_901_500_000,
+        }
+    }
+
+    #[test]
+    fn a_deleted_body_is_marked_but_still_projects_its_text() {
+        // The moderator's copy is the record. Hiding it here would destroy the
+        // evidence the deletion exists to preserve.
+        let msg = line(MessageKind::Player, "Warstorm", "000000007", "frick you all");
+        let deleted = HashMap::from([(msg.body_id.clone(), mark("Offensive language"))]);
+
+        let v = to_view(&msg, &deleted);
+        assert_eq!(v.body, "frick you all", "the transcript keeps the original");
+        let d = v.deleted.expect("the mark must reach the view");
+        assert_eq!(d.mod_user, "jeanluc");
+        assert_eq!(d.reason, "Offensive language");
+        assert_eq!(d.at, "2026-07-24 13:58:20 UTC");
+    }
+
+    #[test]
+    fn marks_apply_only_to_the_body_they_name() {
+        let deleted_line = line(MessageKind::Player, "Warstorm", "000000007", "bad");
+        let mut other = line(MessageKind::Player, "EldenFire", "000000012", "fine");
+        other.body_id = "a00000000009".into();
+        let deleted = HashMap::from([(deleted_line.body_id.clone(), mark("Spam"))]);
+
+        assert!(to_view(&deleted_line, &deleted).deleted.is_some());
+        assert!(
+            to_view(&other, &deleted).deleted.is_none(),
+            "an unrelated body must not grey out"
+        );
+    }
+
+    #[test]
+    fn a_warning_names_the_target_and_carries_its_delivery() {
+        // The player slots hold the target, so the panel must show the warned
+        // player — not the moderator who sent it.
+        let mut msg = line(MessageKind::Warning, "Warstorm", "000000007", "Offensive language");
+        msg.mod_user = "jeanluc".into();
+        msg.delivered = Some(false);
+
+        let v = view(&msg);
+        assert!(v.is_warning);
+        assert!(!v.is_moderator, "a warning is not a moderator chat line");
+        assert_eq!(v.username, "Warstorm", "the target, not the actor");
+        assert_eq!(v.player_id, Some(7), "and it stays actionable");
+        assert_eq!(v.body, "Offensive language", "the body is the reason");
+        assert_eq!(v.delivered, Some(false));
+        assert_eq!(v.posted_as, None, "warnings are never anonymous");
+    }
+
+    #[test]
+    fn delivery_is_absent_on_lines_that_send_nothing() {
+        assert_eq!(
+            view(&line(MessageKind::Player, "Warstorm", "000000007", "hi")).delivered,
+            None
+        );
     }
 
     #[test]
@@ -446,7 +548,7 @@ mod tests {
 
     #[test]
     fn player_line_projects_its_id() {
-        let view = to_view(&line(MessageKind::Player, "Warstorm", "000000007", "nice shot"));
+        let view = view(&line(MessageKind::Player, "Warstorm", "000000007", "nice shot"));
         assert_eq!(view.username, "Warstorm");
         assert_eq!(view.player_id, Some(7));
         assert!(!view.is_moderator);
@@ -457,7 +559,7 @@ mod tests {
         // A moderator has no player account; surfacing a zero id would assert one.
         let mut msg = line(MessageKind::Moderator, "Mod", "", "keep it civil");
         msg.mod_user = "jeanluc".into();
-        let view = to_view(&msg);
+        let view = view(&msg);
         assert_eq!(view.player_id, None);
         assert!(view.is_moderator);
     }
@@ -470,7 +572,7 @@ mod tests {
         let mut msg = line(MessageKind::Moderator, "Mod", "", "keep it civil");
         msg.mod_user = "jeanluc".into();
         msg.mod_anonymous = true;
-        let view = to_view(&msg);
+        let view = view(&msg);
         assert_eq!(view.username, "jeanluc", "the panel names the real moderator");
         assert_eq!(
             view.posted_as.as_deref(),
@@ -488,8 +590,8 @@ mod tests {
         second.mod_user = "alice".into();
         second.mod_anonymous = true;
 
-        let a = to_view(&first);
-        let b = to_view(&second);
+        let a = view(&first);
+        let b = view(&second);
         assert_ne!(a.username, b.username, "both would otherwise read as 'Mod'");
         assert_eq!(a.posted_as, b.posted_as, "players saw the same label for both");
     }
@@ -499,7 +601,7 @@ mod tests {
         let mut msg = line(MessageKind::Moderator, "jeanluc", "", "keep it civil");
         msg.mod_user = "jeanluc".into();
         msg.mod_anonymous = false;
-        let view = to_view(&msg);
+        let view = view(&msg);
         assert_eq!(view.username, "jeanluc");
         assert_eq!(view.posted_as, None, "nothing to disclose — they used their name");
     }
@@ -509,26 +611,26 @@ mod tests {
         // Defensive: a record written before the identity was captured, or one
         // whose write partially failed, must not render as an unattributed blank.
         let msg = line(MessageKind::Moderator, "Mod", "", "keep it civil");
-        let view = to_view(&msg);
+        let view = view(&msg);
         assert_eq!(view.username, "Mod");
         assert_eq!(view.posted_as, None);
     }
 
     #[test]
     fn player_lines_never_carry_an_attribution_suffix() {
-        let view = to_view(&line(MessageKind::Player, "Warstorm", "000000007", "hi"));
+        let view = view(&line(MessageKind::Player, "Warstorm", "000000007", "hi"));
         assert_eq!(view.posted_as, None);
     }
 
     #[test]
     fn missing_username_falls_back_to_the_player_id_form() {
-        let view = to_view(&line(MessageKind::Player, "", "000000007", "hi"));
+        let view = view(&line(MessageKind::Player, "", "000000007", "hi"));
         assert_eq!(view.username, "Player 000000007");
     }
 
     #[test]
     fn unparseable_player_id_degrades_without_panicking() {
-        let view = to_view(&line(MessageKind::Player, "", "not-a-number", "hi"));
+        let view = view(&line(MessageKind::Player, "", "not-a-number", "hi"));
         assert_eq!(view.username, "Player");
         assert_eq!(view.player_id, None);
     }
@@ -537,7 +639,7 @@ mod tests {
     fn view_carries_the_uncensored_original() {
         let mut msg = line(MessageKind::Player, "Warstorm", "000000007", "frick you all");
         msg.flagged_words = vec!["frick".into()];
-        let view = to_view(&msg);
+        let view = view(&msg);
         // Players received "##### you all"; the moderator must see what was typed.
         assert_eq!(view.body, "frick you all");
         assert_eq!(view.flagged_word.as_deref(), Some("frick"));

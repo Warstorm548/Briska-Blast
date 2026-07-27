@@ -219,6 +219,18 @@ impl SignalHub {
             .filter(|s| !s.is_empty())
     }
 
+    /// Whether `code`'s match has started — i.e. the ready barrier resolved and
+    /// players left the lobby for the play field. `false` for an unknown room.
+    ///
+    /// Chat is rendered only in the lobby, so this is what separates "reachable"
+    /// from "has a live socket". A player in a match answers [`Self::send_to`]
+    /// perfectly well and has nowhere to display a moderator warning, which would
+    /// otherwise report as delivered while the player saw nothing.
+    pub async fn match_started(&self, code: &str) -> bool {
+        let rooms = self.rooms.read().await;
+        rooms.get(code).is_some_and(|r| r.match_started)
+    }
+
     /// Max points a single score report may credit (master ball = 1, BallBT split
     /// ball = 2). Clamps a forged/garbled report.
     const MAX_SCORE_POINTS: i64 = 2;

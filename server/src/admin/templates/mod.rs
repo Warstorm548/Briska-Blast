@@ -13,7 +13,7 @@ mod users;
 pub use chatmod::{
     chatmod_audit_page, chatmod_flagged_fragment, chatmod_landing_page, chatmod_lists_page,
     chatmod_session_page, chatmod_sessions_fragment, chatmod_transcript_fragment, AuditLog,
-    BannedUser, BlacklistWord, ChatMessage, ChatSession, FlaggedBody, FlaggedSession,
+    BannedUser, BlacklistWord, ChatMessage, ChatSession, Deletion, FlaggedBody, FlaggedSession,
     ListAuditEntry, ModerationLists, PlayerAuditEntry, PreviewLine, SuspendedUser,
     SystemAuditEntry, WordAuditEntry,
 };

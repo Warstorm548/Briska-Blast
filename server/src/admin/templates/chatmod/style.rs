@@ -71,6 +71,10 @@ body.cm-resizing { cursor: col-resize; user-select: none; }
 .cm-tool-group { margin-top: 12px; }
 .cm-tool-group + .cm-tool-group { border-top: 1px solid #30363d; margin-top: 18px; padding-top: 14px; }
 .cm-tool-group-title { font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.1px; color: #8b949e; margin-bottom: 10px; }
+/* result of the last tool action; colour set by the reply, not by the markup */
+.cm-tool-notice { font-size: 0.72rem; border-radius: 6px; padding: 8px 10px; margin: 0 0 4px; border: 1px solid #30363d; }
+.cm-tool-notice-ok { color: #3fb950; border-color: #238636; background: #0f2417; }
+.cm-tool-notice-err { color: #f85149; border-color: #8b2c22; background: #2a1513; }
 .cm-tool { margin-bottom: 14px; }
 .cm-tool:last-child { margin-bottom: 0; }
 .cm-tool-btn { width: 100%; }
@@ -159,6 +163,19 @@ body.cm-resizing { cursor: col-resize; user-select: none; }
 .cm-msg-tag { display: inline-block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1px; color: #d29922; border: 1px solid #d29922; border-radius: 10px; padding: 0 6px; }
 .cm-msg-mod { display: inline-block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1px; color: #58a6ff; border: 1px solid #58a6ff; border-radius: 10px; padding: 0 6px; margin-right: 4px; }
 .cm-msg-as { color: #8b949e; font-size: 0.72rem; font-style: italic; }
+/* a warning sent to one player: purple, the one hue not already spoken for
+   (amber = flagged/targeted, blue = moderator chat, red = blacklisted word) */
+.cm-msg-warning { border-left: 3px solid #a371f7; }
+.cm-msg-warn { display: inline-block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1px; color: #a371f7; border: 1px solid #a371f7; border-radius: 10px; padding: 0 6px; margin-right: 4px; }
+.cm-msg-sent { color: #a371f7; font-size: 0.72rem; }
+/* undelivered is the state a moderator must not miss: warnings are never
+   queued, so this one never reached the player and never will */
+.cm-msg-undelivered { color: #f85149; font-size: 0.72rem; font-weight: 700; }
+/* deleted bodies stay on the moderation surface — the moderator's copy is the
+   record — but read as withdrawn rather than live */
+.cm-msg-deleted { background: #0d1117; border-style: dashed; opacity: 0.72; }
+.cm-msg-deleted .cm-msg-body { color: #8b949e; text-decoration: line-through; text-decoration-color: #6e7681; }
+.cm-msg-removed { font-size: 0.64rem; color: #6e7681; font-style: italic; margin: 0 0 6px; }
 /* transcript snapshot overlay: wider/taller than the shared 380px modal card so
    the chat reads cleanly; the shared semi-transparent backdrop keeps the page
    visible behind it */

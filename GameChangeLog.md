@@ -9,6 +9,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.30.0] — 2026-07-27
+
+**Moderator warnings, and chat messages a moderator can delete** (server
+0.32.0). Both arrive in the lobby, which is still the only place chat exists.
+
+**A warning** shows the moderator's reason twice over: as an amber `[WARNING]`
+line where the conversation is, and on a dismissible banner pinned above the
+chat. Warnings are sent to the targeted player alone, are never queued, and the
+server does not resend them — one that scrolled away behind the next few
+messages would be gone for good. The frame carries no moderator identity by
+design; the reason is the whole message.
+
+**A deleted message** disappears from every player still connected. The client
+keeps an ordered list of what it received and rebuilds the log from it — the
+chat log is a single `RichTextLabel` buffer with no per-line nodes, so there was
+nothing in the scene tree to address. Rebuilding was chosen over
+`RemoveParagraph`: paragraph indices are positional and untracked, and one
+message is only one paragraph by accident.
+
+The deleted entry is emptied rather than dropped. Rendering skips it so the
+visible log closes up with no gap, while the message's id keeps its place in the
+order — groundwork for a possible restore, which could then refill it exactly
+where it was. That list lives and dies with the lobby scene.
+
+**This release is required.** Server 0.32.0 sets `min_game_version` to 0.30.0,
+because an older client ignores both new frames: it would show no warning at all,
+and would keep displaying a message a moderator had deleted.
+
+---
+
 ## [0.29.0] — 2026-07-26
 
 **Moderator chat lines.** A moderator can now speak into a session from the admin

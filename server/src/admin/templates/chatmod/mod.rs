@@ -28,8 +28,8 @@ mod style;
 pub use audit::chatmod_audit_page;
 pub use lists::chatmod_lists_page;
 pub use model::{
-    AuditLog, BannedUser, BlacklistWord, ChatMessage, ChatSession, FlaggedBody, FlaggedSession,
-    ListAuditEntry, ModerationLists, PlayerAuditEntry, PreviewLine, SuspendedUser,
+    AuditLog, BannedUser, BlacklistWord, ChatMessage, ChatSession, Deletion, FlaggedBody,
+    FlaggedSession, ListAuditEntry, ModerationLists, PlayerAuditEntry, PreviewLine, SuspendedUser,
     SystemAuditEntry, WordAuditEntry,
 };
 pub use pages::{chatmod_landing_page, chatmod_session_page};

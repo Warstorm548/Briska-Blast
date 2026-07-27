@@ -8,3 +8,4 @@ mod blacklist;
 mod fixtures;
 mod lists;
 mod pages;
+mod player;

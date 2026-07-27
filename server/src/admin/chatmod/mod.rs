@@ -10,11 +10,20 @@
 //! `session:{CODE}` is the only key in the deployment that expires.
 //!
 //! Wired so far: the live transcript, body-id assignment, blacklist matching and
-//! censoring, the flagged red dot, the Blacklisted Words tab, moderator chat, and
-//! the Word/List/System audit categories. **Not** wired: the player tools (Warn,
-//! Warn + Delete, Suspend, Ban), Approve Word, the Banned/Suspended lists, audit
-//! filters, and manual deletion of retained records. The contracts below describe
-//! the whole design, including the parts still to come.
+//! censoring, the flagged red dot, the Blacklisted Words tab and its Quick Access
+//! twin, moderator chat, **Warn** and **Warn + Delete Chat Body**, and all four
+//! audit categories. **Not** wired: Suspend, Ban, Approve Word, the
+//! Banned/Suspended lists, audit filters, and manual deletion of retained
+//! records. The contracts below describe the whole design, including the parts
+//! still to come.
+//!
+//! Warning delivery is live-only and never queued: a player who is disconnected,
+//! or who is in a match (chat renders only in the lobby), does not receive it,
+//! and the attempt is recorded as undelivered. Deleting a body withdraws it from
+//! every connected player but removes nothing server-side — the transcript is
+//! append-only because audit snapshots pin cut indices into it, so a deletion is
+//! a mark in `chat:deleted:{sid}` and the moderator keeps seeing the message,
+//! greyed.
 //!
 //! Censoring contract for the wiring phase: when the server flags a
 //! blacklisted word, the game side renders it blacked/hashed out immediately.
@@ -53,13 +62,19 @@
 //! per-occurrence word approval) are scoped to their session's chat.
 //!
 //! Split by concern: the page renderers live in [`pages`], the live-refresh
-//! endpoints in [`fragments`], moderator chat in [`say`], and the Blacklisted
-//! Words tools in [`blacklist`]. The view models and markup they render through
-//! belong to `super::templates`.
+//! endpoints in [`fragments`], moderator chat in [`say`], the Blacklisted Words
+//! tools in [`blacklist`], and the player tools in [`player`]. The view models
+//! and markup they render through belong to `super::templates`.
+//!
+//! The session view's tools answer with JSON rather than a redirect, because that
+//! page polls a live transcript every two seconds and navigating away would cost
+//! the moderator their place. The Moderation Lists tools redirect as before; the
+//! blacklist logic itself is shared between them, not duplicated.
 
 mod blacklist;
 mod fragments;
 mod pages;
+mod player;
 mod say;
 
 #[cfg(test)]
@@ -72,4 +87,5 @@ mod tests;
 pub use blacklist::{blacklist_add, blacklist_remove, blacklist_toggle};
 pub use fragments::{chatmod_data_fragment, chatmod_session_data};
 pub use pages::{chatmod_audit_page, chatmod_lists_page, chatmod_page, chatmod_session_page};
+pub use player::{chatmod_quick_blacklist, chatmod_warn};
 pub use say::chatmod_say;

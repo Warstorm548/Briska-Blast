@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Godot;
 using BriskaBlast.Core;
 
@@ -17,8 +18,42 @@ public partial class SessionLobby : Control
     // The panel's own MOD badge uses the same blue (#58a6ff).
     private static readonly Color ModeratorChatColor = new("58a6ff");
 
+    // A warning aimed at this player. Amber rather than the moderator blue: it is
+    // not someone talking, it is an action taken against them.
+    private static readonly Color WarningChatColor = new("d29922");
+
+    /// <summary>
+    /// One line this client received, kept so the log can be rebuilt.
+    ///
+    /// The chat log is a single <see cref="RichTextLabel"/> buffer with no
+    /// per-line nodes, so there is nothing in the scene tree to address when a
+    /// moderator deletes a message. This list is that address book.
+    /// </summary>
+    private sealed class LogEntry
+    {
+        public string BodyId = "";
+        public string Name = "";
+        public string Text = "";
+        public bool IsModerator;
+        public bool IsWarning;
+        /// <summary>Deleted by a moderator: the text is wiped and rendering skips
+        /// it, but the entry stays in place. Holding the position means a future
+        /// restore could refill it where it belongs without the server having to
+        /// describe where that is.</summary>
+        public bool Deleted;
+    }
+
+    // Ordered oldest-first, mirroring what the log displays. Lives only as long
+    // as this scene — leaving the lobby discards it, which is also the window in
+    // which any restore would have to happen.
+    private readonly List<LogEntry> _log = new();
+
     private HBoxContainer[] _slots = null!;
     private Label _status = null!;
+
+    // Built on first use — a player who is never warned never gets one.
+    private Control? _warnBanner;
+    private Label? _warnText;
 
     // The signaling instance this scene subscribed to for pure-UI events.
     // Captured (not re-read from MatchFlow) so _ExitTree unsubscribes from the
@@ -68,6 +103,8 @@ public partial class SessionLobby : Control
         if (_signaling != null)
         {
             _signaling.ChatMessage += OnChatMessage;
+            _signaling.ChatWarning += OnChatWarning;
+            _signaling.ChatBodyDeleted += OnChatBodyDeleted;
             _signaling.Reconnecting += OnReconnecting;
             _signaling.Reconnected += OnReconnected;
         }
@@ -84,6 +121,8 @@ public partial class SessionLobby : Control
         if (_signaling != null)
         {
             _signaling.ChatMessage -= OnChatMessage;
+            _signaling.ChatWarning -= OnChatWarning;
+            _signaling.ChatBodyDeleted -= OnChatBodyDeleted;
             _signaling.Reconnecting -= OnReconnecting;
             _signaling.Reconnected -= OnReconnected;
             _signaling = null;
@@ -127,43 +166,148 @@ public partial class SessionLobby : Control
     {
         if (line.IsModerator)
         {
-            AppendModeratorLine(line.Username, line.Text);
+            Append(new LogEntry
+            {
+                BodyId = line.BodyId,
+                Name = line.Username,
+                Text = line.Text,
+                IsModerator = true,
+            });
             return;
         }
 
         var ctx = SessionContext.Instance;
         if (!string.IsNullOrEmpty(line.Username))
             ctx.SetUsername(line.From, line.Username);
-        AppendChatLine(ctx.DisplayNameFor(line.From), line.Text);
+        Append(new LogEntry
+        {
+            BodyId = line.BodyId,
+            Name = ctx.DisplayNameFor(line.From),
+            Text = line.Text,
+        });
     }
 
-    // Append one "<name>: <text>" line. Uses AddText (not AppendText) for the
-    // server- and user-supplied strings so they are never parsed as BBCode —
-    // only the bold tag around the name is pushed by us, so no tag injection.
-    private void AppendChatLine(string name, string text)
+    // A moderator warned this player. Only this client receives it, and it is
+    // never queued — so it is shown twice over: in the log where the conversation
+    // is, and on a banner that cannot scroll away.
+    private void OnChatWarning(string reason)
     {
-        var log = GetNode<RichTextLabel>("%ChatLog");
-        log.PushBold();
-        log.AddText(name);
-        log.Pop();
-        log.AddText($": {text}\n");
+        Append(new LogEntry { Text = reason, IsWarning = true });
+        ShowWarningBanner(reason);
     }
 
-    // A moderator speaking into the session: "[MOD] <name>: <text>", tinted so it
-    // reads as staff rather than another player. Same rule as AppendChatLine —
-    // the colour and bold are pushed by us via the API, never interpolated as
-    // BBCode into a string, so the moderator's name and text still cannot inject
-    // tags. The name here is whatever the moderator chose to appear as; the
-    // client is deliberately not told who is behind an anonymous "Mod".
-    private void AppendModeratorLine(string name, string text)
+    // A moderator withdrew a message from everyone in the session.
+    //
+    // The entry is emptied, not removed: rendering skips it so the visible log
+    // closes up with no gap, while the body id keeps its place in the order. A
+    // later restore could then refill it exactly where it was without the server
+    // needing to say where that is.
+    private void OnChatBodyDeleted(string bodyId)
+    {
+        if (string.IsNullOrEmpty(bodyId))
+            return;
+        foreach (var entry in _log)
+        {
+            // An unrecorded line carries no id, so an empty id must never match.
+            if (entry.BodyId != bodyId)
+                continue;
+            entry.Text = "";
+            entry.Name = "";
+            entry.Deleted = true;
+            RedrawLog();
+            return;
+        }
+        // Not found: this client joined after the message, or never saw it.
+    }
+
+    // Record a line and draw it. Appending rather than redrawing keeps the common
+    // case cheap and leaves RichTextLabel's scroll_following to do its job.
+    private void Append(LogEntry entry)
+    {
+        _log.Add(entry);
+        DrawEntry(GetNode<RichTextLabel>("%ChatLog"), entry);
+    }
+
+    // Rebuild from the kept list. Only a deletion needs this — every other change
+    // is an append.
+    private void RedrawLog()
     {
         var log = GetNode<RichTextLabel>("%ChatLog");
-        log.PushColor(ModeratorChatColor);
+        log.Clear();
+        foreach (var entry in _log)
+            DrawEntry(log, entry);
+    }
+
+    // Draw one entry. Every server- and user-supplied string goes through AddText
+    // (never AppendText), and colour/bold come from the Push*/Pop API rather than
+    // interpolated BBCode — the label has bbcode_enabled, so building tags into a
+    // string would be a tag-injection hole.
+    private static void DrawEntry(RichTextLabel log, LogEntry entry)
+    {
+        // A deleted line leaves no trace in the log: the placeholder exists to
+        // hold its position in the list, not to show a gap on screen.
+        if (entry.Deleted)
+            return;
+
+        if (entry.IsWarning)
+        {
+            log.PushColor(WarningChatColor);
+            log.PushBold();
+            log.AddText("[WARNING]");
+            log.Pop();
+            log.AddText($" {entry.Text}\n");
+            log.Pop();
+            return;
+        }
+
+        if (entry.IsModerator)
+        {
+            // The name is whatever the moderator chose to appear as; the client
+            // is deliberately not told who is behind an anonymous "Mod".
+            log.PushColor(ModeratorChatColor);
+            log.PushBold();
+            log.AddText($"[MOD] {entry.Name}");
+            log.Pop();
+            log.AddText($": {entry.Text}\n");
+            log.Pop();
+            return;
+        }
+
         log.PushBold();
-        log.AddText($"[MOD] {name}");
+        log.AddText(entry.Name);
         log.Pop();
-        log.AddText($": {text}\n");
-        log.Pop();
+        log.AddText($": {entry.Text}\n");
+    }
+
+    // A dismissible banner pinned at the top of the chat panel. A warning that
+    // only appeared in the log would scroll away behind the next few messages,
+    // and there is no second copy — the server does not resend it.
+    private void ShowWarningBanner(string reason)
+    {
+        if (_warnBanner == null)
+        {
+            var chat = GetNode<VBoxContainer>(
+                "RightPanel/RightMargins/RightContent/ChatBox/ChatMargins/ChatVBox");
+            var row = new HBoxContainer();
+            _warnText = new Label
+            {
+                AutowrapMode = TextServer.AutowrapMode.WordSmart,
+                SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            };
+            _warnText.AddThemeColorOverride("font_color", WarningChatColor);
+            var dismiss = new Button { Text = "✕" };
+            dismiss.Pressed += () => row.Visible = false;
+            row.AddChild(_warnText);
+            row.AddChild(dismiss);
+            chat.AddChild(row);
+            chat.MoveChild(row, 0);
+            _warnBanner = row;
+        }
+
+        // Replace rather than stack: a second warning is the current one, and a
+        // growing pile of banners would push the chat itself off screen.
+        _warnText!.Text = $"⚠ Warning from a moderator: {reason}";
+        _warnBanner.Visible = true;
     }
 
     // ---- buttons ----
