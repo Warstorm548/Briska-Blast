@@ -74,8 +74,9 @@ pub struct ChatMessage {
 /// The Chat Audit Logs are split into category tables (chosen by a dropdown),
 /// each with its own direct headers. Every category shares the same leading
 /// "who / when / what / why" columns — Timestamp, Display Name, Group, Action,
-/// Reason — then adds its own subject/evidence columns. `AuditEntry` groups the
-/// three category records so a handler can pass all of them to the page.
+/// Reason — then adds its own subject/evidence columns. `AuditLog` groups the
+/// four category records — players, words, lists, and system — so a handler can
+/// pass all of them to the page.
 ///
 /// (The admin-panel "Access" log — role/setting changes — deliberately lives
 /// elsewhere; it does not pertain to chat moderation.)

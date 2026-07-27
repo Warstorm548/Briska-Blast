@@ -10,7 +10,8 @@ use crate::admin::AdminRole;
 
 /// The full-width three-column document both views share: nav, left sessions
 /// panel, injected `center`, right Chat Nav panel, and the drawer-toggle
-/// script. Braces in the inline JS are doubled for `format!`.
+/// script. The script itself is interpolated from [`CHATMOD_JS`] rather than
+/// written inline, so its braces stay single — see [`super::script`].
 pub(super) fn chatmod_shell(
     center: &str,
     sessions: &[ChatSession],

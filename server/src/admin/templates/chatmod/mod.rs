@@ -1,10 +1,10 @@
-//! The admin **Chat-Mod** tab — the chat-moderation panel (UI preview).
+//! The admin **Chat-Mod** tab — the chat-moderation panel.
 //!
-//! Layout phase only: both views render placeholder data supplied by the
-//! handler (`admin::chatmod`) so the design can be iterated in a browser before
-//! any wiring. Two server-rendered views share one full-width three-column
-//! shell — the landing page (flagged-message overview) and the session view
-//! (transcript + quick-access tools). This is the first tab to span the full
+//! The renderers here consume view models the handler layer (`admin::chatmod`,
+//! via `admin::chatmod_data`) projects from live Redis state. Two server-rendered
+//! views share one full-width three-column shell — the landing page
+//! (flagged-message overview) and the session view (transcript +
+//! quick-access tools). This is the first tab to span the full
 //! viewport width instead of the shared `.page` container; everything here is
 //! `cm-`-prefixed so it can't collide with the common stylesheet.
 //!

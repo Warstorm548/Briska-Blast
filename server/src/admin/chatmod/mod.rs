@@ -57,17 +57,18 @@
 //! Words tools in [`blacklist`]. The view models and markup they render through
 //! belong to `super::templates`.
 
-pub mod blacklist;
-pub mod fragments;
-pub mod pages;
-pub mod say;
+mod blacklist;
+mod fragments;
+mod pages;
+mod say;
 
 #[cfg(test)]
 mod tests;
 
 // The handlers keep their original `admin::chatmod::*` paths so the router in
-// `main.rs` is untouched by the split. The `Form`/`Query` extractor types stay
-// on their own modules — nothing outside a handler signature names them.
+// `main.rs` is untouched by the split. The submodules stay private: the
+// `Form`/`Query` extractor types are named only inside a handler signature, so
+// re-exporting them would widen the surface for nothing.
 pub use blacklist::{blacklist_add, blacklist_remove, blacklist_toggle};
 pub use fragments::{chatmod_data_fragment, chatmod_session_data};
 pub use pages::{chatmod_audit_page, chatmod_lists_page, chatmod_page, chatmod_session_page};
