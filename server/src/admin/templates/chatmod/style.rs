@@ -151,6 +151,9 @@ body.cm-resizing { cursor: col-resize; user-select: none; }
 .cm-audit-words { white-space: normal; }
 .cm-audit-words .cm-flag { margin-right: 4px; }
 .cm-audit-none { color: #6e7681; }
+/* the action-point divider in a full-transcript snapshot (bans). Without it a
+   reviewer would read what came after the ban as the evidence that led to it */
+.cm-audit-cut { margin: 10px 0; padding: 3px 8px; border-top: 1px dashed #f85149; border-bottom: 1px dashed #f85149; color: #f85149; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; text-align: center; }
 /* multi-body cell: a ×N disclosure condensing one player's covered bodies */
 .cm-audit-bodies > summary { cursor: pointer; list-style: none; }
 .cm-audit-bodies > summary::-webkit-details-marker { display: none; }

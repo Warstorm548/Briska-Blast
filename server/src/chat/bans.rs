@@ -43,7 +43,7 @@ use crate::state::AppState;
 const BANNED_KEY: &str = "chat:banned";
 
 /// One banned player, as stored.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BanEntry {
     /// The player's counter number. Kept numeric so every moderation surface can
     /// render it through [`PlayerId::from_counter`] like all the others.
@@ -189,24 +189,16 @@ pub async fn lookup(
         return Ok(None);
     };
     let raw: Option<String> = conn.hget(BANNED_KEY, &key).await?;
-    Ok(raw.and_then(|json| match serde_json::from_str(&json) {
-        Ok(entry) => Some(entry),
-        Err(e) => {
-            // A corrupt entry must not silently un-ban someone, but there is no
-            // reason text to send either. Report it as a ban with no reason.
+    Ok(raw.map(|json| {
+        serde_json::from_str(&json).unwrap_or_else(|e| {
+            // A corrupt entry must not silently un-ban someone — the ban still
+            // holds, there is simply no reason text left to show for it.
             tracing::warn!(player = %player_id, "chat: malformed ban entry: {}", e);
-            Some(BanEntry {
+            BanEntry {
                 player_id: numeric_id(player_id).unwrap_or_default(),
-                username: String::new(),
-                reason: String::new(),
-                words: Vec::new(),
-                banned_by: String::new(),
-                banned_sub: String::new(),
-                at_ms: 0,
-                sid: String::new(),
-                cut_index: 0,
-            })
-        }
+                ..Default::default()
+            }
+        })
     }))
 }
 

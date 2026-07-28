@@ -78,7 +78,7 @@ fn audit_page_renders_table_and_snapshot_overlays() {
     assert!(html.contains(r#"id="cm-audit-back-word-1""#));
     // List table: list-edit actions carry the list chip and no snapshot.
     assert!(html.contains("Remove Ban"));
-    assert!(html.contains(r#"<span class="cm-audit-list">Ban List</span>"#));
+    assert!(html.contains(r#"<span class="cm-audit-list">Banned Users</span>"#));
     // System (automated) actions carry the distinct Group=System badge.
     assert!(html.contains(r#"<span class="cm-audit-sys">System</span>"#));
     // Auto-enforcement on a player lands in the PLAYER log (Group=System),
@@ -116,6 +116,85 @@ fn audit_splits_bulk_action_per_player_and_allows_recurrence() {
     assert!(
         html.matches(r#"data-copy="000000012""#).count() >= 3,
         "EldenFire should appear as the target of several distinct actions"
+    );
+}
+
+/// The HTML of one category view, sliced out of the rendered page.
+///
+/// The page emits all four views into `data-cat` divs and hides the inactive
+/// ones client-side, so asserting on the whole document cannot tell which table
+/// a row landed in — which is exactly what these tests are for.
+fn view_of(html: &str, cat: &str) -> String {
+    let marker = format!(r#"<div class="cm-audit-view" data-cat="{cat}""#);
+    let start = html.find(&marker).unwrap_or_else(|| panic!("no {cat} view"));
+    let rest = &html[start + marker.len()..];
+    // Views are siblings, so the next one begins where this one ends. The last
+    // view runs to the modals block that follows all four.
+    let end = rest
+        .find(r#"<div class="cm-audit-view""#)
+        .unwrap_or(rest.len());
+    rest[..end].to_string()
+}
+
+/// A record filed under the wrong category is invisible to a reviewer looking in
+/// the obvious place, and nothing else in the page would reveal it — the tables
+/// render whatever they are handed. So the split itself is asserted: a ban is a
+/// player action, lifting one is a list edit, and neither leaks into the other.
+#[test]
+fn ban_and_unban_land_in_their_own_category_tables() {
+    let html = templates::chatmod_audit_page(
+        &sample_audit_log(),
+        &sample_sessions(),
+        None,
+        crate::admin::AdminRole::Moderator,
+        "modtester",
+    );
+    let player_view = view_of(&html, "player");
+    let list_view = view_of(&html, "list");
+
+    assert!(player_view.contains("<td>Ban</td>"), "a ban is a player action");
+    assert!(
+        !player_view.contains("<td>Remove Ban</td>"),
+        "lifting a ban is a list edit, not a player action"
+    );
+    assert!(list_view.contains("<td>Remove Ban</td>"));
+    assert!(
+        !list_view.contains("<td>Ban</td>"),
+        "the ban itself must not also appear in the list log"
+    );
+
+    // A ban row carries everything a reviewer needs without opening anything:
+    // why, the target, the cited words, and a way into the transcript.
+    assert!(player_view.contains("Slur spam"));
+    assert!(player_view.contains(r#"<span class="cm-flag">frick</span>"#));
+    assert!(player_view.contains(r#"data-copy="000000012""#));
+    assert!(player_view.contains("Transcript"));
+}
+
+/// The `full` flag is the whole difference between a ban's evidence and every
+/// other record's. Asserted at the render boundary because that is where a
+/// reviewer sees it: a truncated ban would look exactly like a complete one.
+#[test]
+fn only_a_ban_snapshot_shows_what_happened_after_the_action() {
+    let html = templates::chatmod_audit_page(
+        &sample_audit_log(),
+        &sample_sessions(),
+        None,
+        crate::admin::AdminRole::Moderator,
+        "modtester",
+    );
+    // The ban overlay runs past the action and marks where it fell.
+    assert!(html.contains("everything below happened afterwards"));
+    assert!(
+        html.contains("well that escalated"),
+        "a ban's snapshot must keep the lines sent after it"
+    );
+    // Exactly one divider: the fixture's other records all end at their action,
+    // so a second would mean a non-ban record had started rendering past its cut.
+    assert_eq!(
+        html.matches("everything below happened afterwards").count(),
+        1,
+        "only the ban record shows an action-point divider"
     );
 }
 

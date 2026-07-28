@@ -65,10 +65,29 @@ fn lists_page_renders_subtabs_and_tables() {
     for col in ["Timestamp", "Username", "User ID", "Reason For Ban", "Transcript", "CheckBox"] {
         assert!(html.contains(&format!("<th>{col}</th>")), "missing banned column {col}");
     }
-    assert!(html.contains(r#"onclick="bbCmListsAsk('cm-lists-ban-modal')""#));
-    assert!(html.contains(r#"onclick="bbCmListsAsk('cm-lists-unban-modal')""#));
-    // Banned rows show the canonical zero-padded player id, tap-to-copy.
+    // Ban and UnBan are real posts now, but only the confirm dialog submits —
+    // neither visible button may carry a form action of its own.
+    assert!(html.contains(r#"action="/admin/chatmod/lists/ban""#));
+    assert!(html.contains(r#"action="/admin/chatmod/lists/unban""#));
+    assert!(html.contains(r#"onclick="bbCmListsBanAsk()""#));
+    assert!(html.contains(r#"onclick="bbCmListsUnbanAsk()""#));
+    assert!(html.contains(r#"onclick="bbCmListsBanConfirm()""#));
+    assert!(html.contains(r#"onclick="bbCmListsUnbanConfirm()""#));
+    // Banned rows show the canonical zero-padded player id, tap-to-copy, and
+    // carry it on the checkbox so UnBan reads the selection from the ticks
+    // rather than parsing it back out of markup the poll rewrites.
     assert!(html.contains(r#"data-copy="000000012""#));
+    assert!(html.contains(r#"class="cm-lists-ban-pick" data-pid="000000012""#));
+
+    // A ban carries the whole conversation with the action point marked; the
+    // divider is the only thing separating evidence from what came after it.
+    assert!(html.contains(r#"id="cm-audit-back-banned-0""#));
+    assert!(html.contains(r#"onclick="bbCmAuditOpen('banned-0')""#));
+    assert!(html.contains("everything below happened afterwards"));
+    // The second fixture ban came from this page and has no session context, so
+    // it must offer no overlay at all rather than an empty one.
+    assert!(!html.contains(r#"id="cm-audit-back-banned-1""#));
+    assert!(html.contains(r#"<span class="cm-audit-none">&mdash;</span>"#));
     // Active Suspensions columns + the three duration fields.
     for col in ["TimeStamp", "Suspended For", "Remaining Time Left"] {
         assert!(html.contains(&format!("<th>{col}</th>")), "missing suspension column {col}");

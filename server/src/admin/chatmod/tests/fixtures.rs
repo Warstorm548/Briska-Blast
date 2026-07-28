@@ -201,6 +201,7 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 target_username: "EldenFire".into(),
                 target_player_id: 12,
                 body_ids: vec!["Q71ZT8C3VB55".into()],
+                snapshot_cut: None,
                 flagged_words: vec!["frick".into()],
                 snapshot: vec![
                     snap("Q71ZT8C3VB55", "EldenFire", 12, "frick the mods", Some("frick")),
@@ -216,6 +217,7 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 target_username: "EldenFire".into(),
                 target_player_id: 12,
                 body_ids: vec![],
+                snapshot_cut: None,
                 flagged_words: vec![],
                 snapshot: vec![
                     snap("N44QW8T1RB29", "EldenFire", 12, "you all need to hit harder", None),
@@ -231,6 +233,7 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 target_username: "EldenFire".into(),
                 target_player_id: 12,
                 body_ids: vec!["T09XB4N6QW22".into(), "L88KD3F1QA72".into()],
+                snapshot_cut: None,
                 flagged_words: vec!["frick".into()],
                 snapshot: vec![
                     snap("R21WQ7H4NM08", "RallyKnight", 34, "nice portal defense", None),
@@ -249,10 +252,14 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 target_username: "EldenFire".into(),
                 target_player_id: 12,
                 body_ids: vec!["Q71ZT8C3VB55".into()],
+                // A ban keeps the whole conversation, so its snapshot runs past
+                // the action — the cut is what divides evidence from aftermath.
+                snapshot_cut: Some(2),
                 flagged_words: vec!["frick".into()],
                 snapshot: vec![
                     snap("Q71ZT8C3VB55", "EldenFire", 12, "frick the mods", Some("frick")),
                     snap("B19HN5J8WD30", "MossyOak", 3, "get rekt scrub", Some("scrub")),
+                    snap("Z66GT1Y5CV18", "RallyKnight", 34, "well that escalated", None),
                 ],
             },
             PlayerAuditEntry {
@@ -264,6 +271,7 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 target_username: "MossyOak".into(),
                 target_player_id: 3,
                 body_ids: vec!["B19HN5J8WD30".into(), "K82PQ4R7M2X9".into()],
+                snapshot_cut: None,
                 flagged_words: vec!["scrub".into()],
                 snapshot: vec![
                     snap("B19HN5J8WD30", "MossyOak", 3, "get rekt scrub", Some("scrub")),
@@ -279,6 +287,7 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 target_username: "TinCanTam".into(),
                 target_player_id: 88,
                 body_ids: vec!["H55RD2H8PL04".into()],
+                snapshot_cut: None,
                 flagged_words: vec![],
                 snapshot: vec![snap(
                     "H55RD2H8PL04",
@@ -327,7 +336,10 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 reason: "Appeal granted".into(),
                 target_username: "MossyOak".into(),
                 target_player_id: 3,
-                list: "Ban List".into(),
+                // Matches what `chatmod::bans::lists_unban` actually writes —
+                // the sub-tab's own title, so the chip names a list a moderator
+                // can go and open.
+                list: "Banned Users".into(),
             },
             ListAuditEntry {
                 timestamp: "2026-07-24 10:02:57 UTC".into(),
@@ -399,19 +411,31 @@ pub(super) fn sample_moderation_lists() -> ModerationLists {
             },
         ],
         banned: vec![
+            // A ban from the session view keeps the whole conversation, with the
+            // cut marking where it fell — the two lines after index 2 are what a
+            // reviewer must not mistake for the evidence that led to it.
             BannedUser {
                 timestamp: "2026-07-24 13:58:20 UTC".into(),
                 username: "EldenFire".into(),
                 player_id: 12,
                 reason: "Slur spam".into(),
-                has_transcript: true,
+                snapshot: vec![
+                    snap("R21WQ7H4NM08", "RallyKnight", 34, "nice portal defense", None),
+                    snap("L88KD3F1QA72", "EldenFire", 12, "frick that was my ball", Some("frick")),
+                    snap("T09XB4N6QW22", "EldenFire", 12, "frick this whole match", Some("frick")),
+                    snap("M04TC9V2HG61", "RallyKnight", 34, "well that escalated", None),
+                ],
+                snapshot_cut: Some(3),
             },
+            // A ban from this page has no session context, so no transcript to
+            // open — the ledger shows an em-dash rather than an empty overlay.
             BannedUser {
                 timestamp: "2026-07-24 13:58:20 UTC".into(),
                 username: "MossyOak".into(),
                 player_id: 3,
                 reason: "Slur spam".into(),
-                has_transcript: true,
+                snapshot: Vec::new(),
+                snapshot_cut: None,
             },
         ],
         suspended: vec![SuspendedUser {

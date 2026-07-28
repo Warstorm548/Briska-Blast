@@ -21,7 +21,7 @@ use shared::types::player::PlayerId;
 
 use crate::chat::{
     audit::{self, AuditCategory, AuditRecord},
-    blacklist,
+    bans, blacklist,
     transcript::{self, DeletionMark, MessageKind, StoredMessage},
 };
 use crate::state::AppState;
@@ -286,28 +286,56 @@ pub async fn session_view(state: &AppState, code: &str) -> (Vec<ChatSession>, Ve
 
 /// The Moderation Lists datasets.
 ///
-/// Only the blacklist is wired. Banned and suspended are empty because no tool
-/// writes them yet — showing invented rows in a panel that is otherwise live
-/// would read as real moderation history.
+/// Suspensions stay empty because no tool writes them yet — showing invented rows
+/// in a panel that is otherwise live would read as real moderation history.
 pub async fn moderation_lists(state: &AppState) -> ModerationLists {
-    let blacklist = match state.redis.get().await {
-        Ok(mut conn) => blacklist::load(&mut conn)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|e| BlacklistWord {
-                word: e.word,
-                reason: e.reason,
-                active_filter: e.active,
-            })
-            .collect(),
-        Err(_) => Vec::new(),
+    let Ok(mut conn) = state.redis.get().await else {
+        return ModerationLists {
+            blacklist: Vec::new(),
+            banned: Vec::new(),
+            suspended: Vec::new(),
+        };
     };
+
+    let blacklist = blacklist::load(&mut conn)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| BlacklistWord {
+            word: e.word,
+            reason: e.reason,
+            active_filter: e.active,
+        })
+        .collect();
+
+    // Ban rows replay their transcript through the same cache the audit page
+    // uses, so several bans from one session read it once. A ban stores the whole
+    // conversation rather than a cut, which is what `full` asks for here.
+    let mut cache = SnapshotCache::default();
+    let mut banned = Vec::new();
+    for entry in bans::load(&mut conn).await.unwrap_or_default() {
+        let pinned = AuditRecord {
+            sid: entry.sid.clone(),
+            cut_index: entry.cut_index,
+            full: true,
+            ..Default::default()
+        };
+        let snapshot = cache.snapshot(&mut conn, &pinned).await;
+        banned.push(BannedUser {
+            timestamp: audit::format_timestamp(entry.at_ms),
+            username: entry.username,
+            player_id: entry.player_id,
+            reason: entry.reason,
+            snapshot_cut: SnapshotCache::cut_marker(&pinned, snapshot.len()),
+            snapshot,
+        });
+    }
+
     ModerationLists {
         blacklist,
-        // Named explicitly rather than inferred: these stay empty until a ban or
-        // suspend tool exists to write them, and the types say what will fill them.
-        banned: Vec::<BannedUser>::new(),
+        banned,
+        // Named explicitly rather than inferred: this stays empty until a suspend
+        // tool exists to write it, and the type says what will fill it.
         suspended: Vec::<SuspendedUser>::new(),
     }
 }
@@ -324,6 +352,11 @@ impl SnapshotCache {
     /// The chat as it stood when a record was written: the first `cut_index`
     /// lines of its transcript. This is what "a snapshot of the entire chat"
     /// resolves to — pinned, not copied.
+    ///
+    /// A record with `full` set (bans) reads the **whole** transcript instead,
+    /// including anything said after the action. `cut_index` then marks where the
+    /// action fell rather than ending the view. Same storage either way — only
+    /// the range differs.
     ///
     /// Deletion marks are applied as they stand *now*, not as of the cut. A body
     /// withdrawn after this record was written therefore shows as deleted here
@@ -349,8 +382,19 @@ impl SnapshotCache {
         }
         let lines = &self.by_sid[&record.sid];
         let deleted = &self.deleted_by_sid[&record.sid];
-        let cut = record.cut_index.min(lines.len());
+        let cut = if record.full {
+            lines.len()
+        } else {
+            record.cut_index.min(lines.len())
+        };
         lines[..cut].iter().map(|m| to_view(m, deleted)).collect()
+    }
+
+    /// Where in a rendered snapshot the action fell, for the records that show
+    /// the whole transcript. `None` when the snapshot already ends at the action,
+    /// which is every other record — there is nothing after it to divide off.
+    fn cut_marker(record: &AuditRecord, snapshot_len: usize) -> Option<usize> {
+        (record.full && record.cut_index < snapshot_len).then_some(record.cut_index)
     }
 }
 
@@ -370,7 +414,9 @@ pub async fn audit_log(state: &AppState) -> AuditLog {
     let mut players = Vec::new();
     for r in read(&mut conn, AuditCategory::Player).await {
         let snapshot = cache.snapshot(&mut conn, &r).await;
+        let snapshot_cut = SnapshotCache::cut_marker(&r, snapshot.len());
         players.push(PlayerAuditEntry {
+            snapshot_cut,
             timestamp: audit::format_timestamp(r.at_ms),
             moderator_display: r.actor.clone(),
             moderator_group: r.group.clone(),

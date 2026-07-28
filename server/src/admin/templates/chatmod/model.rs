@@ -183,6 +183,11 @@ pub struct PlayerAuditEntry {
     /// Snapshot of the chat as it stood when the action was taken — surfaced
     /// read-only in the Transcript overlay.
     pub snapshot: Vec<ChatMessage>,
+    /// For a ban, whose snapshot is the *whole* transcript: how many lines
+    /// preceded the action, so the overlay can divide what prompted it from what
+    /// followed. `None` on every record whose snapshot already ends at the
+    /// action — there is nothing after it to mark off.
+    pub snapshot_cut: Option<usize>,
 }
 
 /// **Word** category — blacklist/approve actions on a word. Approve targets a
@@ -263,8 +268,22 @@ pub struct BannedUser {
     /// [`PlayerId::from_counter`]. Moderation surfaces only.
     pub player_id: u64,
     pub reason: String,
-    /// Whether a chat snapshot exists to open from the Transcript cell.
-    pub has_transcript: bool,
+    /// The conversation the ban happened in, in **full** — a ban is the one
+    /// action whose record keeps the whole transcript rather than cutting at the
+    /// moment it was taken. Empty for a ban applied from this page, which has no
+    /// session context; the Transcript cell then shows an em-dash.
+    pub snapshot: Vec<ChatMessage>,
+    /// How many lines preceded the ban, dividing what prompted it from what
+    /// followed. See [`PlayerAuditEntry::snapshot_cut`].
+    pub snapshot_cut: Option<usize>,
+}
+
+impl BannedUser {
+    /// Whether there is a chat to open from the Transcript cell. Derived rather
+    /// than stored so the cell can never advertise an overlay that renders empty.
+    pub fn has_transcript(&self) -> bool {
+        !self.snapshot.is_empty()
+    }
 }
 
 /// One row in the **Active Suspensions** sub-tab table: a temporary chat mute.

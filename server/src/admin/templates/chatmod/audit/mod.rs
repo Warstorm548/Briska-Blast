@@ -3,7 +3,7 @@
 
 mod cells;
 mod filters;
-mod modals;
+pub(super) mod modals;
 mod tables;
 
 use super::chrome::{ChatNavPage, SUBHEAD_HTML};
