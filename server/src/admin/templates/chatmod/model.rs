@@ -80,8 +80,12 @@ pub struct ChatMessage {
     ///
     /// `username`/`player_id` name the **target**, and `body` is the reason.
     pub is_warning: bool,
-    /// For a warning: whether it actually reached the target's client. `None` on
-    /// every other kind, where delivery is not a concept.
+    /// True when this line is a chat ban a moderator applied to one player. Same
+    /// field roles as `is_warning` — target in `username`/`player_id`, reason in
+    /// `body` — and likewise decided only through [`message_role`].
+    pub is_ban: bool,
+    /// For a warning or a ban: whether it actually reached the target's client.
+    /// `None` on every other kind, where delivery is not a concept.
     pub delivered: Option<bool>,
     /// Set when this body has been withdrawn from players' view. The message
     /// still renders — the moderator's copy is the record — but greyed, with a
@@ -109,12 +113,17 @@ pub enum MessageRole {
     Player,
     Moderator,
     Warning,
+    Ban,
 }
 
-/// Resolve a line's role. A warning wins over the moderator flag: it is sent
-/// *by* a moderator, so both are true of it, but only one describes it.
+/// Resolve a line's role. A ban or a warning wins over the moderator flag: both
+/// are sent *by* a moderator, so both facts are true of them, but only one
+/// describes the line. Ban is checked first — it is the stronger action, and the
+/// two are never set together.
 pub fn message_role(m: &ChatMessage) -> MessageRole {
-    if m.is_warning {
+    if m.is_ban {
+        MessageRole::Ban
+    } else if m.is_warning {
         MessageRole::Warning
     } else if m.is_moderator {
         MessageRole::Moderator

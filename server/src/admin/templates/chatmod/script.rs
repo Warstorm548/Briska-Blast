@@ -399,6 +399,26 @@ window.bbCmWarn=function(del){
     bbCmPicked.clear();
   });
 };
+// Confirmed chat ban. Only reachable through the confirm dialog — cancelling,
+// Escape or a backdrop click send nothing and write no audit record.
+//
+// The dialog closes before the post so the notice it produces is not hidden
+// behind the modal that triggered it. Ticked messages are cleared only on
+// success, so a rejected attempt keeps the moderator's selection.
+window.bbCmBanConfirm=function(){
+  var t=document.getElementById('cm-target');
+  var r=document.getElementById('cm-ban-reason');
+  var body=new URLSearchParams();
+  body.set('targets',t?t.value:'');
+  body.set('reason',r?r.value:'');
+  body.set('body_ids',bbCmPicked.ids().join(';'));
+  bbCmBanClose();
+  bbCmPost('/ban',body,function(){
+    if(r)r.value='';
+    if(t)t.value='';
+    bbCmPicked.clear();
+  });
+};
 window.bbCmBlacklist=function(){
   var w=document.getElementById('cm-blacklist');
   var r=document.getElementById('cm-bl-reason');

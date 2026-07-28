@@ -29,6 +29,11 @@
 //! must write a tombstone rather than removing the entry, or every earlier
 //! snapshot silently changes.
 //!
+//! A record with [`AuditRecord::full`] set replays the *whole* transcript instead
+//! of stopping at the cut, which is how a ban shows the entire conversation
+//! rather than only what preceded it. Same storage, same pinning — only the
+//! range read differs, and `cut_index` becomes an action-point marker.
+//!
 //! # Growth
 //!
 //! Records have **no TTL and are never trimmed** — that is the deliberate
@@ -115,6 +120,18 @@ pub struct AuditRecord {
     /// cover zero, one, or several bodies.
     #[serde(default)]
     pub body_ids: Vec<String>,
+    /// Render the **whole** transcript rather than truncating at `cut_index`.
+    ///
+    /// Set for bans only. A ban is permanent in a way no other tool is, so its
+    /// record is expected to answer "what else happened here", not just "what
+    /// prompted this" — `cut_index` stops being the end of the snapshot and
+    /// becomes a marker showing where in the conversation the ban fell.
+    ///
+    /// The pinning is unchanged: still one stored transcript, still replayed
+    /// rather than copied. Note this means the view keeps growing as the session
+    /// continues, which is the intent.
+    #[serde(default)]
+    pub full: bool,
 
     // --- outcome ---
     /// Whether the action reached the player, for the actions that send them
@@ -168,6 +185,13 @@ impl AuditRecord {
         self
     }
 
+    /// Keep the entire transcript, marking the action point instead of cutting
+    /// there. See [`AuditRecord::full`].
+    pub fn full(mut self) -> Self {
+        self.full = true;
+        self
+    }
+
     /// Attach the player this record is about.
     pub fn with_target(mut self, username: &str, player_id: Option<u64>) -> Self {
         self.target_username = username.to_string();
@@ -177,6 +201,12 @@ impl AuditRecord {
 
     pub fn with_words(mut self, words: Vec<String>) -> Self {
         self.words = words;
+        self
+    }
+
+    /// Name the moderation list this record edited (List category only).
+    pub fn with_list(mut self, list: &str) -> Self {
+        self.list = list.to_string();
         self
     }
 
@@ -340,6 +370,25 @@ mod tests {
         assert_eq!(r.target_player_id, None);
         assert_eq!(r.cut_index, 0);
         assert_eq!(r.delivered, None, "records predating warnings must load");
+        assert!(!r.full, "records predating bans must still truncate at the cut");
+    }
+
+    /// The whole point of the flag: a ban keeps the conversation after it, every
+    /// other record stops at the cut.
+    #[test]
+    fn only_a_full_record_asks_for_the_whole_transcript() {
+        let ban = AuditRecord::by_moderator("jeanluc", "sub", AdminRole::Moderator, "Ban", "Slurs")
+            .with_snapshot("a00000000001", 3, vec!["a00000000002".into()])
+            .full();
+        assert!(ban.full);
+        assert_eq!(ban.cut_index, 3, "the cut survives as the action-point marker");
+
+        let warn = AuditRecord::by_moderator("jeanluc", "sub", AdminRole::Moderator, "Warn", "Spam")
+            .with_snapshot("a00000000001", 3, vec![]);
+        assert!(!warn.full);
+
+        let back: AuditRecord = serde_json::from_str(&serde_json::to_string(&ban).unwrap()).unwrap();
+        assert!(back.full, "the flag must survive a round trip");
     }
 
     /// Undelivered is a distinct state from not-applicable: a warning that never

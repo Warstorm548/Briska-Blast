@@ -104,6 +104,7 @@ fn to_view(msg: &StoredMessage, deleted: &HashMap<String, DeletionMark>) -> Chat
         is_moderator: msg.kind == MessageKind::Moderator,
         posted_as,
         is_warning: msg.kind == MessageKind::Warning,
+        is_ban: msg.kind == MessageKind::Ban,
         delivered: msg.delivered,
         deleted: deleted.get(&msg.body_id).map(|d| Deletion {
             mod_user: d.mod_user.clone(),

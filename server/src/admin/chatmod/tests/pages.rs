@@ -236,6 +236,10 @@ fn the_wired_tools_post_and_the_rest_still_say_they_do_not() {
     assert!(html.contains(r#"onclick="bbCmWarn(1)">Warn + Delete Chat Body"#));
     assert!(html.contains(r#"onclick="bbCmWarn(0)">Warn Only"#));
     assert!(html.contains(r#"onclick="bbCmBlacklist()">Add"#));
+    // Ban only fires from the confirm dialog, never from the tools panel — the
+    // panel button opens the dialog and nothing else.
+    assert!(html.contains(r#"onclick="bbCmBanAsk()">Ban"#));
+    assert!(html.contains(r#"onclick="bbCmBanConfirm()">Confirm Chat Ban"#));
     // Each warn variant has its own reason box, so typing one and pressing the
     // other cannot send a reason the moderator meant for a different action.
     assert!(html.contains(r#"id="cm-warn-del-reason""#));
@@ -245,11 +249,14 @@ fn the_wired_tools_post_and_the_rest_still_say_they_do_not() {
     assert!(html.contains(r#"id="cm-tool-notice""#));
 
     // The panel must stop claiming the wired tools are a preview, while still
-    // being honest about the ones that genuinely are not wired. (Other "preview
-    // only" notes remain elsewhere on the page for the approve-word overlay and
-    // the ban modal, which really are unwired.)
+    // being honest about the ones that genuinely are not wired. Ban left this
+    // list when it was wired; Suspend and Approve Word have not.
     assert!(!html.contains("Preview only &mdash; tools are not wired up yet."));
-    assert!(html.contains("Suspend, Ban and Approve Word are not wired up yet."));
+    assert!(html.contains("Suspend and Approve Word are not wired up yet."));
+    assert!(
+        !html.contains("Suspend, Ban and Approve Word"),
+        "a wired tool must not still be listed as unwired"
+    );
 }
 
 #[test]

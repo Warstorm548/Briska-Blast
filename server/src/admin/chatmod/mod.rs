@@ -11,15 +11,18 @@
 //!
 //! Wired so far: the live transcript, body-id assignment, blacklist matching and
 //! censoring, the flagged red dot, the Blacklisted Words tab and its Quick Access
-//! twin, moderator chat, **Warn** and **Warn + Delete Chat Body**, and all four
-//! audit categories. **Not** wired: Suspend, Ban, Approve Word, the
-//! Banned/Suspended lists, audit filters, and manual deletion of retained
-//! records. The contracts below describe the whole design, including the parts
-//! still to come.
+//! twin, moderator chat, **Warn**, **Warn + Delete Chat Body**, **Ban** (from
+//! both the session view and the Banned Users list, with un-ban), and all four
+//! audit categories. **Not** wired: Suspend, Approve Word, the Suspensions and
+//! Whitelist lists, audit filters, and manual deletion of retained records. The
+//! contracts below describe the whole design, including the parts still to come.
 //!
 //! Warning delivery is live-only and never queued: a player who is disconnected,
 //! or who is in a match (chat renders only in the lobby), does not receive it,
-//! and the attempt is recorded as undelivered. Deleting a body withdraws it from
+//! and the attempt is recorded as undelivered. A ban notice is delivered on the
+//! same terms, but the ban itself does not depend on it — `chat::bans` re-sends
+//! the notice on every message it refuses, so a player who missed it learns of
+//! the ban the moment it first affects them. Deleting a body withdraws it from
 //! every connected player but removes nothing server-side — the transcript is
 //! append-only because audit snapshots pin cut indices into it, so a deletion is
 //! a mark in `chat:deleted:{sid}` and the moderator keeps seeing the message,
@@ -71,6 +74,7 @@
 //! the moderator their place. The Moderation Lists tools redirect as before; the
 //! blacklist logic itself is shared between them, not duplicated.
 
+mod bans;
 mod blacklist;
 mod fragments;
 mod pages;
@@ -84,8 +88,9 @@ mod tests;
 // `main.rs` is untouched by the split. The submodules stay private: the
 // `Form`/`Query` extractor types are named only inside a handler signature, so
 // re-exporting them would widen the surface for nothing.
+pub use bans::{lists_ban, lists_unban};
 pub use blacklist::{blacklist_add, blacklist_remove, blacklist_toggle};
 pub use fragments::{chatmod_data_fragment, chatmod_session_data};
 pub use pages::{chatmod_audit_page, chatmod_lists_page, chatmod_page, chatmod_session_page};
-pub use player::{chatmod_quick_blacklist, chatmod_warn};
+pub use player::{chatmod_ban, chatmod_quick_blacklist, chatmod_warn};
 pub use say::chatmod_say;

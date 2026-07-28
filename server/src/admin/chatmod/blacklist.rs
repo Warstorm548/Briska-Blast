@@ -42,7 +42,8 @@ pub(super) fn split_words(raw: &str) -> Vec<String> {
 }
 
 /// Where a lists action returns to, preserving `?from=` and appending a notice.
-fn lists_redirect(from: Option<&str>, key: &str, msg: &str) -> Response {
+/// Shared by every Moderation Lists tool so they all land the same way.
+pub(super) fn lists_redirect(from: Option<&str>, key: &str, msg: &str) -> Response {
     let encoded = urlencoding::encode(msg).into_owned();
     let target = match from {
         Some(code) => format!("/admin/chatmod/lists?from={code}&{key}={encoded}"),

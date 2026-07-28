@@ -1,9 +1,16 @@
-//! Player moderation tools: **Warn Only** and **Warn + Delete Chat Body**.
+//! Player moderation tools: **Warn Only**, **Warn + Delete Chat Body**, and
+//! **Ban User (Chat)**.
 //!
-//! Both post from the session view and answer with JSON rather than a redirect,
-//! because that page polls its transcript every two seconds — navigating away
-//! and back would throw away the moderator's place in a live conversation. That
-//! is the only reason these differ from the Moderation Lists tools.
+//! All three post from the session view and answer with JSON rather than a
+//! redirect, because that page polls its transcript every two seconds —
+//! navigating away and back would throw away the moderator's place in a live
+//! conversation. That is the only reason these differ from the Moderation Lists
+//! tools.
+//!
+//! They also share one code path ([`apply`]) rather than one per button. The
+//! target resolution, the transcript echo and the audit write are identical
+//! between them, and two copies of an audit path drift — the same reason
+//! [`super::blacklist::apply_add`] is shared by its two callers.
 //!
 //! # What a warning is
 //!
@@ -16,6 +23,18 @@
 //! it; the attempt is recorded as undelivered on both the audit record and the
 //! transcript echo, and the moderator is told. Holding warnings for later would
 //! deliver them detached from the conversation that prompted them.
+//!
+//! # What a ban is
+//!
+//! A permanent, account-wide loss of chat privileges, lifted only from the
+//! Moderation Lists page. The player keeps playing — a chat ban never touches
+//! game access. Enforcement lives in `chat::bans`, not here; this module only
+//! writes the entry.
+//!
+//! Its notice is delivered on the same best-effort terms as a warning, but the
+//! ban does not depend on it: [`crate::chat::bans`] re-sends the notice on every
+//! refused message, so a player who was offline finds out the moment they try to
+//! speak.
 //!
 //! # What deletion is
 //!
@@ -34,13 +53,15 @@ use deadpool_redis::redis::AsyncCommands;
 
 use super::super::{chatmod_data, require_session};
 use super::blacklist::split_words;
-use crate::chat::{audit, transcript, MAX_CHAT_LEN};
+use crate::admin::AdminSession;
+use crate::chat::{audit, bans, transcript, MAX_CHAT_LEN};
 use crate::signaling::protocol::ServerMsg;
 use crate::state::AppState;
 
-/// Form body for both warn buttons. `targets` and `body_ids` are `;`-separated,
-/// matching the separator convention the panel uses everywhere. `delete` is `1`
-/// for Warn + Delete Chat Body and absent for Warn Only.
+/// Form body shared by all three player buttons. `targets` and `body_ids` are
+/// `;`-separated, matching the separator convention the panel uses everywhere.
+/// `delete` is `1` for Warn + Delete Chat Body and absent otherwise; the ban
+/// button never sets it.
 #[derive(serde::Deserialize)]
 pub struct WarnForm {
     #[serde(default)]
@@ -51,6 +72,47 @@ pub struct WarnForm {
     reason: String,
     #[serde(default)]
     delete: String,
+}
+
+/// Which tool was pressed. The differences between them are small enough to
+/// thread through one path, and keeping them together is what stops the audit
+/// trail diverging per button.
+#[derive(Clone, Copy, PartialEq)]
+enum Action {
+    /// Warn Only, or Warn + Delete Chat Body when the flag is set.
+    Warn { delete: bool },
+    Ban,
+}
+
+impl Action {
+    /// The `action` string on the audit record. These match the vocabulary the
+    /// Chat Audit Logs filter panel already offers, so a moderator filtering for
+    /// "Ban" finds these rows.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Warn { delete: true } => "Warn + Delete",
+            Self::Warn { delete: false } => "Warn",
+            Self::Ban => "Ban",
+        }
+    }
+
+    fn transcript_kind(self) -> transcript::MessageKind {
+        match self {
+            Self::Warn { .. } => transcript::MessageKind::Warning,
+            Self::Ban => transcript::MessageKind::Ban,
+        }
+    }
+
+    fn frame(self, reason: String) -> ServerMsg {
+        match self {
+            Self::Warn { .. } => ServerMsg::ChatWarning { reason },
+            Self::Ban => ServerMsg::ChatBanned { reason },
+        }
+    }
+
+    fn deletes(self) -> bool {
+        matches!(self, Self::Warn { delete: true })
+    }
 }
 
 /// What the panel renders as a notice above the tools.
@@ -75,17 +137,12 @@ fn bad(msg: impl Into<String>) -> Response {
     reply(StatusCode::BAD_REQUEST, false, msg)
 }
 
-/// Why a warning did not reach someone. Phrased for a moderator reading a notice.
+/// Why a notice did not reach someone. Phrased for a moderator reading a notice.
 const OFFLINE: &str = "not connected";
 const IN_MATCH: &str = "in an active match";
 const NOT_HERE: &str = "not in this session";
 
 /// POST /admin/chatmod/session/:code/warn
-///
-/// One audit record per **(action instance, target player)** — a press hitting
-/// three players writes three records, each carrying the bodies that player sent.
-/// Repeated presses are never merged: a player may be warned several times in one
-/// session and each is its own row.
 pub async fn chatmod_warn(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -95,7 +152,40 @@ pub async fn chatmod_warn(
     let Some(session) = require_session(&headers, &state.redis).await else {
         return Redirect::to("/admin").into_response();
     };
-    let Some(canon) = chatmod_data::resolve_live_session(&state, &code).await else {
+    let delete = form.delete == "1";
+    apply(&state, &session, &code, &form, Action::Warn { delete }).await
+}
+
+/// POST /admin/chatmod/session/:code/ban
+///
+/// Bans every named target from chat, permanently and account-wide. The reason
+/// reaches the player; lifting it is a Moderation Lists action.
+pub async fn chatmod_ban(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(code): Path<String>,
+    Form(form): Form<WarnForm>,
+) -> Response {
+    let Some(session) = require_session(&headers, &state.redis).await else {
+        return Redirect::to("/admin").into_response();
+    };
+    apply(&state, &session, &code, &form, Action::Ban).await
+}
+
+/// The shared body of every player tool.
+///
+/// One audit record per **(action instance, target player)** — a press hitting
+/// three players writes three records, each carrying the bodies that player sent.
+/// Repeated presses are never merged: a player may be warned several times in one
+/// session and each is its own row.
+async fn apply(
+    state: &AppState,
+    session: &AdminSession,
+    code: &str,
+    form: &WarnForm,
+    action: Action,
+) -> Response {
+    let Some(canon) = chatmod_data::resolve_live_session(state, code).await else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
@@ -113,7 +203,7 @@ pub async fn chatmod_warn(
         return bad("Enter at least one target player ID.");
     }
     let selected = split_words(&form.body_ids);
-    let deleting = form.delete == "1";
+    let deleting = action.deletes();
     if deleting && selected.is_empty() {
         return bad("Tick at least one message to delete, or use Warn Only.");
     }
@@ -123,7 +213,7 @@ pub async fn chatmod_warn(
     };
 
     // No transcript means no chat happened here: there is nothing to delete and
-    // no conversation to pin a snapshot to. A warning still sends.
+    // no conversation to pin a snapshot to. A warning or ban still applies.
     let sid = transcript::live_sid(&mut conn, &canon)
         .await
         .unwrap_or_default()
@@ -160,10 +250,11 @@ pub async fn chatmod_warn(
     //
     // Without this, one typo in a `;`-separated field writes a permanent audit
     // record — and a transcript echo naming them — against a player who was
-    // never in the conversation. Manual deletion of audit records is not built,
-    // so that record would be unremovable.
+    // never in the conversation. For a ban it would also write a permanent chat
+    // ban against a stranger. Manual deletion of audit records is not built, so
+    // that record would be unremovable.
     //
-    // Deliberately *not* "currently connected": warning someone who just said
+    // Deliberately *not* "currently connected": acting on someone who just said
     // something and quit is the common case, and it must still land in the log
     // as undelivered.
     let seated: Option<crate::api::Session> = conn
@@ -184,8 +275,9 @@ pub async fn chatmod_warn(
         ));
     }
 
-    // Pinned before anything this action appends, so the snapshot shows the
-    // conversation that prompted the warning rather than the warning's own echo.
+    // Pinned before anything this action appends, so a warning's snapshot shows
+    // the conversation that prompted it rather than its own echo. For a ban the
+    // whole transcript renders and this marks where the ban fell.
     let cut_index = if sid.is_empty() {
         0
     } else {
@@ -234,46 +326,33 @@ pub async fn chatmod_warn(
     let in_match = state.signal_hub.match_started(&canon).await;
 
     let usernames = crate::api::fetch_usernames(&mut conn, &targets).await;
-    let action = if deleting { "Warn + Delete" } else { "Warn" };
 
+    // Kept as separate lists rather than one pre-formatted "missed" pile: the
+    // reply has to distinguish "acted on but the notice missed" from "not acted
+    // on at all", and re-reading that distinction out of display strings would
+    // break the moment the wording changed.
     let mut delivered_to = Vec::new();
+    let mut undelivered: Vec<String> = Vec::new();
     // Strangers are reported but never acted on — no send, no echo, no record.
-    let mut missed: Vec<String> = strangers
+    let strangers_note: Vec<String> = strangers
         .iter()
         .map(|id| format!("{id} — {NOT_HERE}"))
         .collect();
+    // Already banned: the player is in the state the moderator wanted, so this is
+    // not a failure, but no second record is written.
+    let mut already: Vec<String> = Vec::new();
+    // Targets a ban could not be written for. Reported separately from a failed
+    // delivery: the notice not landing is expected and harmless, the ban itself
+    // not being recorded means the player is not actually banned.
+    let mut failed: Vec<String> = Vec::new();
 
     for player_id in &targets {
         let username = usernames.get(player_id).cloned().unwrap_or_default();
-
-        let delivered = if in_match {
-            false
-        } else {
-            state
-                .signal_hub
-                .send_to(
-                    &canon,
-                    player_id,
-                    ServerMsg::ChatWarning {
-                        reason: reason.clone(),
-                    },
-                )
-                .await
-        };
-
         let label = if username.is_empty() {
             player_id.clone()
         } else {
             format!("{username} ({player_id})")
         };
-        if delivered {
-            delivered_to.push(label);
-        } else {
-            missed.push(format!(
-                "{label} — {}",
-                if in_match { IN_MATCH } else { OFFLINE }
-            ));
-        }
 
         // The bodies this particular player sent. Any tool may cover zero, one,
         // or several, so this is always a list.
@@ -282,29 +361,90 @@ pub async fn chatmod_warn(
             .filter(|id| known.get(id.as_str()) == Some(&player_id.as_str()))
             .cloned()
             .collect();
+        // The blacklisted words that fired on those bodies — what the audit
+        // table renders as red chips. Read from the transcript rather than the
+        // form for the same reason the sender map is: the server knows what
+        // actually fired at broadcast time.
+        let words: Vec<String> = lines
+            .iter()
+            .filter(|m| covered.iter().any(|id| id == &m.body_id))
+            .flat_map(|m| m.flagged_words.iter().cloned())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        // The ban is written before the notice goes out: if the entry fails, the
+        // player must not be told they are banned when they are not.
+        if action == Action::Ban {
+            let entry = bans::BanEntry {
+                player_id: bans::numeric_id(player_id).unwrap_or_default(),
+                username: username.clone(),
+                reason: reason.clone(),
+                words: words.clone(),
+                banned_by: session.username.clone(),
+                banned_sub: session.sub.clone(),
+                at_ms: now,
+                sid: sid.clone(),
+                cut_index,
+            };
+            match bans::ban(&mut conn, std::slice::from_ref(player_id), &entry).await {
+                // A second ban writes no second record: the first one already
+                // holds the reason and the evidence, and overwriting it would
+                // leave the list disagreeing with the audit log.
+                Ok(outcome) if outcome.banned.is_empty() => {
+                    already.push(label);
+                    continue;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!("chatmod: ban write failed for {}: {}", player_id, e);
+                    failed.push(label);
+                    continue;
+                }
+            }
+        }
+
+        let delivered = if in_match {
+            false
+        } else {
+            state
+                .signal_hub
+                .send_to(&canon, player_id, action.frame(reason.clone()))
+                .await
+        };
+
+        if delivered {
+            delivered_to.push(label);
+        } else {
+            undelivered.push(format!(
+                "{label} — {}",
+                if in_match { IN_MATCH } else { OFFLINE }
+            ));
+        }
 
         // The mod-side echo: the intervention sits in the conversation where it
-        // happened. Never broadcast — only the target got the warning itself.
+        // happened. Never broadcast — only the target got the notice itself.
         if !sid.is_empty() {
             let echo = transcript::StoredMessage {
                 body_id: crate::chat::ids::next_body_id(&mut conn)
                     .await
                     .unwrap_or_default(),
-                kind: transcript::MessageKind::Warning,
+                kind: action.transcript_kind(),
                 player_id: player_id.clone(),
                 username: username.clone(),
                 text: reason.clone(),
                 flagged_words: Vec::new(),
                 mod_user: session.username.clone(),
                 mod_sub: session.sub.clone(),
-                // A warning names no moderator on the wire, but the panel always
-                // shows the real one — there is nothing to be anonymous about.
+                // A warning or ban names no moderator on the wire, but the panel
+                // always shows the real one — there is nothing to be anonymous
+                // about.
                 mod_anonymous: false,
                 delivered: Some(delivered),
                 at_ms: now,
             };
             if let Err(e) = transcript::append(&mut conn, &canon, &echo).await {
-                tracing::warn!("chatmod: warning echo not recorded: {}", e);
+                tracing::warn!("chatmod: action echo not recorded: {}", e);
             }
         }
 
@@ -312,18 +452,25 @@ pub async fn chatmod_warn(
             &session.username,
             &session.sub,
             session.role,
-            action,
+            action.label(),
             &reason,
         )
         .with_target(&username, player_id.parse::<u64>().ok())
+        .with_words(words)
         .with_delivery(delivered);
         if !sid.is_empty() {
             record = record.with_snapshot(&sid, cut_index, covered);
+            // A ban keeps the whole conversation, not just what preceded it —
+            // it is permanent in a way the other tools are not, so the record is
+            // expected to answer what else happened here.
+            if action == Action::Ban {
+                record = record.full();
+            }
         }
         if let Err(e) = audit::write(&mut conn, audit::AuditCategory::Player, &record).await {
             // The action already happened. Losing the log line is bad; failing
             // the moderator's action after it took effect is worse.
-            tracing::warn!("chatmod: warn audit write failed: {}", e);
+            tracing::warn!("chatmod: player action audit write failed: {}", e);
         }
     }
     drop(conn);
@@ -331,21 +478,49 @@ pub async fn chatmod_warn(
     tracing::info!(
         session = %canon,
         moderator = %session.username,
-        action = %action,
+        action = %action.label(),
         targets = targets.len(),
         bodies = bodies.len(),
-        undelivered = missed.len(),
+        undelivered = undelivered.len(),
         "chatmod: player action"
     );
 
-    let removed = if deleting { bodies.len() } else { 0 };
-    // Nobody reached is not a success, even though the deletion may have landed —
-    // a green notice would read as though the warning had gone out.
-    reply(
-        StatusCode::OK,
-        !delivered_to.is_empty(),
-        warn_summary(&delivered_to, &missed, removed),
-    )
+    match action {
+        Action::Warn { .. } => {
+            // A warn reports strangers and undelivered notices the same way —
+            // both are people the warning did not reach.
+            let missed: Vec<String> = strangers_note
+                .into_iter()
+                .chain(undelivered)
+                .collect();
+            let removed = if deleting { bodies.len() } else { 0 };
+            // Nobody reached is not a success, even though the deletion may have
+            // landed — a green notice would read as though the warning had gone
+            // out.
+            reply(
+                StatusCode::OK,
+                !delivered_to.is_empty(),
+                warn_summary(&delivered_to, &missed, removed),
+            )
+        }
+        Action::Ban => {
+            // A ban applies whether or not its notice arrived, so success is
+            // "somebody is now banned", not "somebody was told". Reporting an
+            // applied ban as a failure would invite a moderator to press again.
+            let applied = !delivered_to.is_empty() || !undelivered.is_empty();
+            reply(
+                StatusCode::OK,
+                applied || !already.is_empty(),
+                ban_summary(
+                    delivered_to.len() + undelivered.len(),
+                    &undelivered,
+                    &already,
+                    &strangers_note,
+                    &failed,
+                ),
+            )
+        }
+    }
 }
 
 /// Form body for the session view's Blacklist Words tool.
@@ -428,4 +603,51 @@ pub(super) fn warn_summary(delivered: &[String], missed: &[String], removed: usi
             missed.join("; ")
         ),
     }
+}
+
+/// Human summary of a ban.
+///
+/// Deliberately shaped differently from [`warn_summary`]. A warning that reaches
+/// nobody has done nothing, so delivery is its headline; a ban applies whether or
+/// not its notice arrived, so the headline is how many players are now banned and
+/// an undelivered notice is a footnote. `failed` is the case that actually
+/// matters — those players are *not* banned, despite the moderator pressing the
+/// button.
+///
+/// `banned` counts players newly written to the list. `already` are those the
+/// tool found were banned before, `strangers` were never in the session and were
+/// not acted on at all.
+pub(super) fn ban_summary(
+    banned: usize,
+    undelivered: &[String],
+    already: &[String],
+    strangers: &[String],
+    failed: &[String],
+) -> String {
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let mut msg = match banned {
+        0 => "Banned nobody.".to_string(),
+        n => format!("Banned {n} player{} from chat.", plural(n)),
+    };
+    if !already.is_empty() {
+        msg.push_str(&format!(" Already banned: {}.", already.join("; ")));
+    }
+    if !undelivered.is_empty() {
+        // The ban still applies — they are told the next time they try to speak.
+        msg.push_str(&format!(
+            " Notice not delivered to {}.",
+            undelivered.join("; ")
+        ));
+    }
+    if !strangers.is_empty() {
+        msg.push_str(&format!(" Skipped {}.", strangers.join("; ")));
+    }
+    if !failed.is_empty() {
+        // The one line a moderator must not skim past.
+        msg.push_str(&format!(
+            " NOT banned, could not be recorded: {}.",
+            failed.join("; ")
+        ));
+    }
+    msg
 }

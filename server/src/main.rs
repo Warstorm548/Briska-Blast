@@ -170,6 +170,10 @@ async fn main() {
             post(admin::chatmod::chatmod_warn),
         )
         .route(
+            "/admin/chatmod/session/:code/ban",
+            post(admin::chatmod::chatmod_ban),
+        )
+        .route(
             "/admin/chatmod/session/:code/blacklist",
             post(admin::chatmod::chatmod_quick_blacklist),
         )
@@ -184,6 +188,11 @@ async fn main() {
         .route(
             "/admin/chatmod/lists/blacklist/toggle",
             post(admin::chatmod::blacklist_toggle),
+        )
+        .route("/admin/chatmod/lists/ban", post(admin::chatmod::lists_ban))
+        .route(
+            "/admin/chatmod/lists/unban",
+            post(admin::chatmod::lists_unban),
         )
         .layer(TraceLayer::new_for_http())
         .with_state(state);

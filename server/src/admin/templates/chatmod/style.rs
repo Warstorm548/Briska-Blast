@@ -168,8 +168,12 @@ body.cm-resizing { cursor: col-resize; user-select: none; }
 .cm-msg-warning { border-left: 3px solid #a371f7; }
 .cm-msg-warn { display: inline-block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1px; color: #a371f7; border: 1px solid #a371f7; border-radius: 10px; padding: 0 6px; margin-right: 4px; }
 .cm-msg-sent { color: #a371f7; font-size: 0.72rem; }
-/* undelivered is the state a moderator must not miss: warnings are never
-   queued, so this one never reached the player and never will */
+/* a chat ban: red, deliberately the same hue as a blacklisted word and the
+   client's own ban notice, because it is the panel's one permanent action */
+.cm-msg-banned { border-left: 3px solid #f85149; }
+.cm-msg-ban { display: inline-block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1px; color: #f85149; border: 1px solid #f85149; border-radius: 10px; padding: 0 6px; margin-right: 4px; }
+/* undelivered is the state a moderator must not miss: warnings and bans are
+   never queued, so this one never reached the player at the time */
 .cm-msg-undelivered { color: #f85149; font-size: 0.72rem; font-weight: 700; }
 /* deleted bodies stay on the moderation surface — the moderator's copy is the
    record — but read as withdrawn rather than live */

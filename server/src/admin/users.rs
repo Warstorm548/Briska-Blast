@@ -219,6 +219,14 @@ pub async fn delete_user(
         return Redirect::to("/admin/users?err=Redis+error").into_response();
     }
 
+    // Drop any chat ban before the number goes back into circulation. Bans are
+    // keyed by player number, so one left behind would transfer to whoever
+    // `/register` next hands this number to — an unrelated player, silently
+    // muted, with a ban record naming someone else. Deleting the account
+    // destroys the token that *was* the identity, so there is nobody left to
+    // ban. Best effort: the user is already gone.
+    crate::chat::bans::clear(&mut conn, &id).await;
+
     // Return the id number to the reuse pool. The id is the zero-padded counter
     // value (a legacy 7-digit id parses the same way); store the bare numeric
     // form as both member and score so ZPOPMIN reissues lowest-first. Best
