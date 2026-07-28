@@ -36,7 +36,14 @@ Work intentionally deferred until after the initial production deployment of the
 - **Delete Body must tombstone, not delete.** Audit snapshots are pinned as a transcript instance plus a cut index and replayed on render. Removing a line from a transcript would silently rewrite every earlier snapshot that spans it. **Related**: `server/src/chat/audit.rs`, `server/src/chat/transcript.rs`.
 - **No CSRF tokens on the Chat-Mod POST routes**, matching the existing Users/Dashboard forms — the whole admin panel shares this gap rather than Chat-Mod introducing one. Worth closing panel-wide rather than per-tab.
 - **The orphan sweep runs on a page load.** Transcripts from sessions that expired passively are reconciled when a moderator opens the landing page. If nobody opens it, they linger. **Trigger**: if that proves to leak, move the sweep to a periodic task rather than a request path.
-- **Not wired**: player tools (Warn / Warn + Delete / Suspend / Ban), Approve Word, Banned + Suspended lists, blacklist CSV import.
+- **Not wired**: Suspend, Approve Word, the Suspended + Whitelist lists, blacklist CSV import. (Warn / Warn + Delete shipped in 0.32.0; Ban, the Banned Users list and un-ban in 0.33.0.)
+
+### A deleted player's id still appears across their infraction history (server 0.33.0)
+
+- **What**: Deleting a user in the Users tab now clears their chat ban, because bans key on the player number and `delete_user` returns that number to `player:freelist` for reissue — a ban left behind would mute whoever inherited it. But every **other** record naming that id (Player and List audit rows, and future suspensions) still carries it, so a reissued number reads as continuous history belonging to one person when it is two. The intended fix is to clear or mark those records too, most likely via a new column on the player-action audit rows recording that the account behind the id was deleted and the number reissued.
+- **Why deferred**: Audit records are deliberately append-only and have no manual-deletion path yet (see the unbounded-growth entry above); adding one just for this would front-run that decision. The ban itself — the only record with live enforcement behind it — is already handled, so nothing currently mis-mutes a player.
+- **Trigger to start**: The first time a recycled id makes an audit trail actually misleading, OR alongside the manual audit-record deletion UI, whichever lands first.
+- **Related**: `server/src/admin/users.rs::delete_user`, `server/src/chat/bans.rs::clear`, `server/src/chat/audit.rs`.
 
 ### Pocket ID admin SSO
 

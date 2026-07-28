@@ -5,6 +5,85 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.33.0] — 2026-07-28
+
+**Chat bans wired end to end: the Ban quick tool, the Banned Users list, un-ban,
+and enforcement.** A chat ban is permanent and account-wide, governs chat
+privileges only, and never touches game access — a banned player keeps playing
+and simply cannot speak. This release **requires `min_game_version` ≥ 0.31.0**;
+set it in the admin panel as part of the deploy. An older client ignores the new
+`chat_banned` frame outright, so the player sees nothing at all while the panel
+reports the ban applied — the same silent false positive the 0.32.0 warning
+release had.
+
+### Enforcement
+
+The ban is enforced in the `SendChat` handler and nowhere else, before censoring
+and capture, so a refused message never becomes a body id, a broadcast, or a
+transcript line — a banned player leaves no trace in the conversation they were
+removed from.
+
+- The check **fails open**. An unreachable ban list allows the message through;
+  treating an outage as "everyone is banned" would silence chat for the entire
+  deployment, which is far worse than a banned player getting a line out until
+  Redis returns.
+- The notice is re-sent on every refused message. That is what makes delivery
+  durable without a queue: a player who was offline when the ban landed learns of
+  it the moment it first affects them, which is the only moment it matters.
+
+### Storage
+
+`chat:banned`, a hash keyed by the **normalized** player id (zero-padded through
+`PlayerId::from_counter`). Normalization is load-bearing, not tidiness — the
+panel renders ids padded and a moderator may type the bare number, so a ban
+stored in one shape would silently never match chat arriving in the other. No
+TTL, like every other chat key: a ban ends when a moderator ends it.
+
+Deleting a user now clears their ban. Bans key on the player number and
+`delete_user` returns that number to `player:freelist` for reissue, so one left
+behind would mute whoever inherited it, under a record naming someone else.
+
+### Ban from the session view
+
+`POST /admin/chatmod/session/:code/ban`, sharing one path with the two warn
+buttons rather than duplicating it — target resolution, the transcript echo and
+the audit write are identical between them, and two copies of an audit path
+drift. Writes one Player record per target with `action = "Ban"`, the cited
+flagged words, and the covered bodies. Only the confirm dialog submits.
+
+### Ban / UnBan from Moderation Lists
+
+`POST /admin/chatmod/lists/ban` and `/lists/unban`, following the blacklist
+handlers' redirect-with-notice pattern. Reasons here stay logging-only per the
+0.30.0 lists contract. UnBan writes one **List** record per lifted id
+(`action = "Remove Ban"`, `list = "Banned Users"`) and needs no player frame — an
+un-banned player simply starts passing the chat gate again.
+
+### Evidence: the whole transcript, not a cut
+
+A ban's audit record sets a new `full` flag, and rendering replays the **entire**
+transcript instead of stopping at `cut_index`. A ban is permanent in a way no
+other tool is, so its record answers "what else happened here", not only "what
+prompted this". Storage and pinning are unchanged — still one transcript,
+replayed rather than copied; only the range read differs.
+
+`cut_index` survives as an **action-point marker**: the overlay draws a divider
+there. Without it a reviewer would read messages sent after the ban as the
+evidence that led to it. The Banned Users ledger opens the same overlay as the
+audit page rather than a second renderer.
+
+### Fixed
+
+- **Warning echoes did not retain their transcript.** Retention tested for
+  `MessageKind::Moderator`, and a warning echo is neither flagged nor a moderator
+  line — so a Warn Only in an otherwise-clean session left the transcript
+  unretained, teardown deleted it, and that warning's audit record then rendered
+  "No chat captured for this action". The conversation it pinned a snapshot into
+  was gone. Retention now covers any non-player line, matching the rule the
+  module doc always stated.
+
+---
+
 ## [0.32.0] — 2026-07-27
 
 **Three Quick Access Tools wired: Warn, Warn + Delete Chat Body, and Blacklist
