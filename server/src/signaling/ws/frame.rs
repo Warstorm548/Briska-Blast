@@ -153,6 +153,25 @@ pub(super) async fn handle_client_frame(
             }
             let text: String = text.chars().take(MAX_CHAT_LEN).collect();
 
+            // A chat ban is enforced here and nowhere else. Checked before
+            // censoring and capture so a refused message never becomes a body
+            // id, a broadcast, or a transcript line — a banned player leaves no
+            // trace in the conversation they were removed from.
+            //
+            // Answering with the notice on every attempt is what makes the ban
+            // durable without a queue: a player who was offline when it landed
+            // learns of it the moment it first affects them. The frame is a
+            // direct response to their own send, so it cannot amplify.
+            //
+            // Fails open on a Redis fault (see `bans::enforced_on`).
+            if let Some(ban) = crate::chat::bans::enforced_on(state, from_player).await {
+                state
+                    .signal_hub
+                    .send_to(code, from_player, ServerMsg::ChatBanned { reason: ban.reason })
+                    .await;
+                return true;
+            }
+
             // Censor before broadcast, not after: players are sent the masked
             // form, so the raw word never leaves the server and no client-side
             // support is needed. The uncensored original goes to the moderation

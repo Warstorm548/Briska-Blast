@@ -8,6 +8,9 @@
 //! ([`blacklist`]), and appended to a transcript ([`transcript`]) that moderators
 //! watch live. Moderation events land in [`audit`].
 //!
+//! [`bans`] sits *before* all of that: a banned player's message is refused at
+//! the frame handler and never becomes a body, a broadcast, or a transcript line.
+//!
 //! # Storage
 //!
 //! Redis, using the same patterns as the rest of the server — plain commands, no
@@ -41,6 +44,7 @@
 //! rather than removing the entry, or older snapshots stop being faithful.
 
 pub mod audit;
+pub mod bans;
 pub mod blacklist;
 pub mod ids;
 pub mod transcript;

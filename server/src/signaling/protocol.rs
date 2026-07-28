@@ -282,6 +282,30 @@ pub enum ServerMsg {
     /// healthy socket and no surface to show this on. Callers must treat
     /// in-match players as undeliverable rather than trusting `send_to` alone.
     ChatWarning { reason: String },
+    /// A player's chat privileges have been revoked, carrying the reason the
+    /// moderator gave. Sent to **one player only**, and rendered red rather than
+    /// the warning's amber — the colour is the difference between a one-off
+    /// notice and a permanent one.
+    ///
+    /// Carries no moderator identity, for the same reason [`ServerMsg::ChatWarning`]
+    /// does not.
+    ///
+    /// # Two send sites
+    ///
+    /// 1. When the ban is applied, if the target is live in a lobby. Best-effort
+    ///    and never queued, exactly like a warning: an offline or in-match player
+    ///    does not receive it and the attempt is recorded as undelivered.
+    /// 2. Whenever a banned player attempts to send chat — the frame handler
+    ///    refuses the message and answers with this instead of broadcasting.
+    ///
+    /// The second site is what makes delivery durable without a queue. A player
+    /// who missed the first notice learns of the ban the moment they try to
+    /// speak, which is the only moment it actually affects them.
+    ///
+    /// A client that ignores this frame shows nothing at all while the panel
+    /// reports the ban applied — a silent false positive, which is what requires
+    /// the `min_game_version` bump.
+    ChatBanned { reason: String },
     /// Remove a previously-broadcast chat line from every client in the session.
     /// `body_id` matches the field of the same name on [`ServerMsg::ChatMessage`].
     ///
@@ -403,6 +427,22 @@ mod tests {
         assert!(
             !json.contains("moderator"),
             "a warning must not identify who sent it"
+        );
+    }
+
+    /// A ban notice is shaped exactly like a warning on the wire — the client
+    /// tells them apart by frame type, not by any field, which is what lets the
+    /// two share one banner and differ only in colour.
+    #[test]
+    fn chat_banned_serializes_with_only_a_reason() {
+        let msg = ServerMsg::ChatBanned {
+            reason: "Repeated slurs".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert_eq!(json, r#"{"type":"chat_banned","reason":"Repeated slurs"}"#);
+        assert!(
+            !json.contains("moderator"),
+            "a ban notice must not identify who applied it"
         );
     }
 
