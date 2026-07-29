@@ -111,13 +111,21 @@ impl AuditCategory {
     /// Every category, for the migration and for tests that must cover all of
     /// them rather than the ones someone remembered.
     const ALL: [Self; 4] = [Self::Player, Self::Word, Self::List, Self::System];
+
+    /// How many of this category's legacy records [`migrate`] has already
+    /// imported. See that function for why the count is a safe cursor.
+    fn cursor_key(self) -> &'static str {
+        match self {
+            Self::Player => "chat:audit:migrated:player",
+            Self::Word => "chat:audit:migrated:word",
+            Self::List => "chat:audit:migrated:list",
+            Self::System => "chat:audit:migrated:system",
+        }
+    }
 }
 
 /// Key prefix for the stored records themselves.
 const RECORD_PREFIX: &str = "chat:audit:rec:";
-
-/// Marker set once [`migrate`] has completed a full pass.
-const MIGRATION_MARKER: &str = "chat:audit:migrated";
 
 fn record_key(event_id: &str) -> String {
     format!("{RECORD_PREFIX}{event_id}")
@@ -315,19 +323,25 @@ pub async fn write(
     stored.event_id.clone_from(&event_id);
     let json = serialize(&stored)?;
 
-    index_record(conn, category, &event_id, &json, &stored.list).await
+    index_record(conn, category, &event_id, &json, &stored.list, None).await
 }
 
 /// Write one record key and push its id onto the indexes it belongs in.
 ///
 /// Atomic, so a failure can never leave an index pointing at a record that was
 /// not stored — a dangling pointer would render as a silently missing row.
+///
+/// `cursor` advances a migration cursor in the *same* transaction. Committing
+/// the record and the fact that it was migrated together is what makes
+/// [`migrate`] resumable: there is no window where a record is imported but not
+/// counted, so a crash never re-imports one it already wrote.
 async fn index_record(
     conn: &mut deadpool_redis::Connection,
     home: AuditCategory,
     event_id: &str,
     json: &str,
     list: &str,
+    cursor: Option<(&str, usize)>,
 ) -> RedisResult<()> {
     let mut pipe = deadpool_redis::redis::pipe();
     pipe.atomic();
@@ -337,6 +351,9 @@ async fn index_record(
     // somehow already List cannot be indexed onto it twice.
     if !list.is_empty() && home != AuditCategory::List {
         pipe.lpush(AuditCategory::List.key(), event_id).ignore();
+    }
+    if let Some((key, done)) = cursor {
+        pipe.set(key, done).ignore();
     }
     pipe.query_async(conn).await
 }
@@ -485,56 +502,63 @@ pub async fn read(
         .collect())
 }
 
-/// Move pre-0.34.0 records into the record store and build the indexes.
+/// Import pre-0.34.0 records into the record store and index them.
 ///
 /// Runs at boot before either server binds, so no request can observe a
-/// half-migrated log. A no-op once [`MIGRATION_MARKER`] is set.
+/// half-migrated log.
 ///
-/// # Why it rebuilds rather than appends
+/// # Resumable, never destructive
 ///
-/// The indexes are deleted and rebuilt from the legacy lists. That makes a
-/// crashed run self-healing: the marker is only set after a complete pass, so
-/// the next boot starts from scratch instead of appending a second copy of
-/// whatever it already moved. Records orphaned by the failed run keep their own
-/// keys and are simply never pointed at — wasted bytes, not corruption.
+/// Each category keeps a cursor ([`AuditCategory::cursor_key`]) counting how many
+/// of its legacy records have been imported. Import replays the legacy list
+/// oldest-first and skips past the cursor, which is advanced **in the same
+/// transaction as the record it describes** — so there is no window where a
+/// record is written but not counted.
 ///
-/// **Operator note:** clearing the marker by hand is therefore a *rebuild from
-/// the legacy lists*, which discards anything written since the migration. It is
-/// not a harmless re-run once the deployment has taken new actions.
+/// This is why nothing is ever deleted here. An earlier design rebuilt the
+/// indexes from scratch on every incomplete run, which made a crash self-healing
+/// but meant that clearing the marker on a live deployment silently orphaned
+/// every record written since the migration. A cursor makes the crash case
+/// resumable *and* leaves live data alone.
 ///
-/// The legacy lists are only ever read. A rollback to an older server finds its
-/// data exactly as it left it.
+/// The cursor is only sound because the legacy lists are **immutable** — nothing
+/// writes to them after 0.34.0 — so a count taken from the oldest end always
+/// names the same records.
+///
+/// Failure modes, worst-case first:
+///
+/// | Situation | Result |
+/// |---|---|
+/// | Crash partway | Next boot resumes at the cursor; no duplicates, nothing lost |
+/// | Cursor cleared by hand | Legacy re-imports as **duplicate rows** — visible and fixable, never deletion |
+/// | Records written since | Untouched in every case |
+///
+/// The legacy lists are only ever read, so a rollback to an older server finds
+/// its data exactly as it left it.
 pub async fn migrate(conn: &mut deadpool_redis::Connection) -> RedisResult<()> {
-    if conn.exists(MIGRATION_MARKER).await? {
-        return Ok(());
-    }
-
     for category in AuditCategory::ALL {
-        // Non-empty here means a previous run died partway, or someone cleared
-        // the marker. Either way the rebuild is correct, but it is worth saying
-        // out loud rather than silently discarding rows.
-        let stale: isize = conn.llen(category.key()).await.unwrap_or(0);
-        if stale > 0 {
-            tracing::warn!(
-                index = %category.key(),
-                entries = stale,
-                "chat: rebuilding a non-empty audit index — prior run incomplete or marker cleared"
-            );
-        }
-        let _: () = conn.del(category.key()).await?;
-    }
-
-    for category in AuditCategory::ALL {
-        // Stored newest-first, so replay in reverse to rebuild the same order.
+        // Stored newest-first, so replay in reverse to preserve the original
+        // order in the rebuilt index.
         let legacy: Vec<String> = conn.lrange(category.legacy_key(), 0, -1).await?;
+        let done: usize = conn.get(category.cursor_key()).await.unwrap_or(None).unwrap_or(0);
+        if done >= legacy.len() {
+            continue;
+        }
+
         let mut moved = 0usize;
         let mut skipped = 0usize;
 
-        for json in legacy.iter().rev() {
+        for (position, json) in legacy.iter().rev().enumerate().skip(done) {
+            // The cursor counts records *considered*, not records written, so an
+            // unparseable one is stepped over permanently rather than retried on
+            // every boot forever.
+            let cursor = Some((category.cursor_key(), position + 1));
+
             let Ok(mut record) = serde_json::from_str::<AuditRecord>(json) else {
                 // A record that will not parse cannot be rendered either, so it
                 // was already invisible. Counted, not fatal.
                 skipped += 1;
+                let _: () = conn.set(category.cursor_key(), position + 1).await?;
                 continue;
             };
 
@@ -545,33 +569,27 @@ pub async fn migrate(conn: &mut deadpool_redis::Connection) -> RedisResult<()> {
                 AuditCategory::List => AuditCategory::Player,
                 other => other,
             };
-            let list = if category == AuditCategory::List && record.list.is_empty() {
+            if category == AuditCategory::List && record.list.is_empty() {
                 // Keep it visible in the table it came from even if untagged.
-                record.list = "Ban List".to_string();
-                record.list.clone()
-            } else {
-                record.list.clone()
-            };
+                record.list = crate::chat::bans::AUDIT_LIST_NAME.to_string();
+            }
+            let list = record.list.clone();
 
             let event_id = ids::next_audit_id(conn).await?;
             record.event_id.clone_from(&event_id);
             let encoded = serialize(&record)?;
-            index_record(conn, home, &event_id, &encoded, &list).await?;
+            index_record(conn, home, &event_id, &encoded, &list, cursor).await?;
             moved += 1;
         }
 
-        if moved > 0 || skipped > 0 {
-            tracing::info!(
-                from = %category.legacy_key(),
-                moved,
-                skipped,
-                "chat: audit records migrated"
-            );
-        }
+        tracing::info!(
+            from = %category.legacy_key(),
+            moved,
+            skipped,
+            total = legacy.len(),
+            "chat: audit records imported"
+        );
     }
-
-    let _: () = conn.set(MIGRATION_MARKER, "1").await?;
-    tracing::info!("chat: audit log migration complete");
     Ok(())
 }
 
@@ -632,6 +650,35 @@ mod tests {
             "chat:audit:list",
             "chat:audit:system",
         ]);
+    }
+
+    /// Every key the migration touches must be distinct from every other. A
+    /// cursor sharing a name with an index would be overwritten by the very
+    /// import it is meant to track, and the migration would restart forever —
+    /// re-importing the whole legacy log on every boot.
+    #[test]
+    fn migration_cursors_collide_with_nothing() {
+        let cursors = AuditCategory::ALL.map(|c| c.cursor_key());
+        assert_eq!(cursors, [
+            "chat:audit:migrated:player",
+            "chat:audit:migrated:word",
+            "chat:audit:migrated:list",
+            "chat:audit:migrated:system",
+        ]);
+
+        let mut sorted = cursors;
+        sorted.sort_unstable();
+        sorted
+            .windows(2)
+            .for_each(|w| assert_ne!(w[0], w[1], "each category needs its own cursor"));
+
+        for cursor in cursors {
+            for category in AuditCategory::ALL {
+                assert_ne!(cursor, category.key());
+                assert_ne!(cursor, category.legacy_key());
+            }
+            assert!(!cursor.starts_with(RECORD_PREFIX));
+        }
     }
 
     /// Records live under their own prefix, distinct from every index — a record

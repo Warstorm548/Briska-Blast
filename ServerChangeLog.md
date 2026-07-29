@@ -56,17 +56,22 @@ only.
 
 ### Migration
 
-Runs once at boot, before either server binds. Pre-0.34.0 records are moved into
-the record store and the indexes are built from them.
+Runs at boot, before either server binds. Pre-0.34.0 records are imported into
+the record store and indexed.
 
-- **Idempotent**, guarded by `chat:audit:migrated`; the marker is set only after
-  a complete pass, so a failure retries on the next boot.
-- **Non-fatal.** A failed migration leaves the audit page thin until the retry
-  rather than keeping the game server down over an admin-panel concern.
+- **Resumable, and never destructive.** Each category keeps a cursor
+  (`chat:audit:migrated:{category}`) counting how many of its legacy records have
+  been imported, advanced in the same transaction as the record it describes. A
+  run that dies partway picks up exactly where it stopped — no duplicates, and
+  nothing is ever deleted to achieve it.
+- **Non-fatal.** A partial import leaves the audit page thin until the next boot
+  resumes it, rather than keeping the game server down over an admin-panel
+  concern.
 - **Additive.** The pre-0.34.0 keys are only ever read, never modified, so
   rolling back to an older server finds its data exactly as it left it.
-- Clearing the marker by hand is a *rebuild from the old keys* and discards
-  anything recorded since the migration — it is not a harmless re-run.
+- Clearing a cursor by hand re-imports that category's legacy records as
+  **duplicate rows**. Untidy and fixable — it never removes anything, and records
+  written since the migration are untouched in every case.
 
 ## [0.33.0] — 2026-07-28
 

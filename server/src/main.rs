@@ -263,14 +263,15 @@ async fn main() {
     tokio::try_join!(game_serve, admin_serve).unwrap();
 }
 
-/// Move pre-0.34.0 audit records into the record store and build the category
-/// indexes. Runs before either server binds so no request sees a half-migrated
-/// log; a no-op on every boot after the first.
+/// Import pre-0.34.0 audit records into the record store and index them. Runs
+/// before either server binds so no request sees a half-migrated log; a no-op on
+/// every boot after the first.
 ///
-/// Deliberately **not fatal**. A failed migration leaves the audit page thin
-/// until the next boot retries, which is bad — but refusing to start the game
-/// server over it would take chat and matchmaking down for an admin-panel
-/// concern. The marker stays unset, so the retry is automatic.
+/// Deliberately **not fatal**. A partial import leaves the audit page thin until
+/// the next boot resumes it, which is bad — but refusing to start the game server
+/// over it would take chat and matchmaking down for an admin-panel concern. The
+/// per-category cursors mean the retry picks up exactly where it stopped rather
+/// than starting over.
 async fn migrate_audit_log(pool: &deadpool_redis::Pool) {
     let Ok(mut conn) = pool.get().await else {
         tracing::error!("chat: audit migration skipped — no Redis connection; retries next boot");
