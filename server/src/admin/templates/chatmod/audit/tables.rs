@@ -5,14 +5,29 @@ use super::super::super::common::escape;
 use super::super::model::{ListAuditEntry, PlayerAuditEntry, SystemAuditEntry, WordAuditEntry};
 use super::cells::{audit_bodies_cell, audit_group_cell, audit_player_cells, audit_transcript_cell};
 
+/// What an empty table says.
+///
+/// Names the window rather than stopping at "nothing here", because every table
+/// is a *slice* of its log. "No list actions recorded yet" in front of a
+/// moderator who asked for records 400-500 is simply false — the actions exist,
+/// they are older than what was requested — and it is the kind of false that
+/// ends an investigation early.
+fn empty_state(kind: &str, window: &str) -> String {
+    format!(
+        r#"<p class="cm-empty">No {kind} in records {window}. Widen the range to look further back.</p>"#,
+        kind = escape(kind),
+        window = escape(window),
+    )
+}
+
 /// **Player** category table (today's headers, unchanged): one row per
 /// (action, target player); a player's covered bodies condense into a
 /// `×N bodies` disclosure, flagged words render as red chips. A row's actor may
 /// be the program (`Group = System`, an auto-enforcement rule) — rendered
 /// identically but with the System badge.
-pub(super) fn player_audit_table_html(entries: &[PlayerAuditEntry]) -> String {
+pub(super) fn player_audit_table_html(entries: &[PlayerAuditEntry], window: &str) -> String {
     if entries.is_empty() {
-        return r#"<p class="cm-empty">No player actions recorded yet.</p>"#.to_string();
+        return empty_state("player actions", window);
     }
     let rows = entries
         .iter()
@@ -65,9 +80,9 @@ pub(super) fn player_audit_table_html(entries: &[PlayerAuditEntry]) -> String {
 
 /// **Word** category table: blacklist/approve actions keyed by the word, with
 /// the occurrence's sender + body when the action was an Approve.
-pub(super) fn word_audit_table_html(entries: &[WordAuditEntry]) -> String {
+pub(super) fn word_audit_table_html(entries: &[WordAuditEntry], window: &str) -> String {
     if entries.is_empty() {
-        return r#"<p class="cm-empty">No word actions recorded yet.</p>"#.to_string();
+        return empty_state("word actions", window);
     }
     let rows = entries
         .iter()
@@ -113,9 +128,9 @@ pub(super) fn word_audit_table_html(entries: &[WordAuditEntry]) -> String {
 
 /// **List** category table: moderation-list edits, targeting a player and
 /// naming which list. No chat snapshot.
-pub(super) fn list_audit_table_html(entries: &[ListAuditEntry]) -> String {
+pub(super) fn list_audit_table_html(entries: &[ListAuditEntry], window: &str) -> String {
     if entries.is_empty() {
-        return r#"<p class="cm-empty">No list actions recorded yet.</p>"#.to_string();
+        return empty_state("list actions", window);
     }
     let rows = entries
         .iter()
@@ -157,9 +172,9 @@ pub(super) fn list_audit_table_html(entries: &[ListAuditEntry]) -> String {
 /// **System** category table: automated non-enforcement events (word flagging).
 /// Same columns as the Word table, but every row is `Group = System`, the
 /// Display Name is the automated `source`, and Reason holds the `trigger`.
-pub(super) fn system_audit_table_html(entries: &[SystemAuditEntry]) -> String {
+pub(super) fn system_audit_table_html(entries: &[SystemAuditEntry], window: &str) -> String {
     if entries.is_empty() {
-        return r#"<p class="cm-empty">No automated actions recorded yet.</p>"#.to_string();
+        return empty_state("automated actions", window);
     }
     let rows = entries
         .iter()

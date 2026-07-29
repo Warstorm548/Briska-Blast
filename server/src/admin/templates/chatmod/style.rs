@@ -121,7 +121,11 @@ body.cm-resizing { cursor: col-resize; user-select: none; }
 .cm-audit-filter-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #8b949e; margin-bottom: 6px; }
 .cm-audit-filter-note { font-size: 0.8rem; color: #6e7681; min-height: 34px; }
 /* category dropdown: picks which log table + filter renders */
-.cm-audit-select { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.cm-filter-actions { display: flex; gap: 8px; margin-top: 10px; }
+.cm-audit-window { font-size: 0.8rem; color: #8b949e; }
+.cm-audit-window strong { color: #c9d1d9; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.cm-audit-window-notice { background: #2d2100; border: 1px solid #d29922; border-radius: 6px; color: #e3b341; font-size: 0.85rem; padding: 8px 12px; margin-bottom: 14px; }
+.cm-audit-select { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
 .cm-audit-select label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #8b949e; }
 .cm-audit-select select { min-width: 180px; }
 /* per-table Advanced Filter: shared spine group beside the table-specific one */

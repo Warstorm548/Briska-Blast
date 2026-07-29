@@ -341,7 +341,112 @@ async fn index_record(
     pipe.query_async(conn).await
 }
 
-/// Records at index positions `start..=stop` for a category, newest first.
+/// How many records a page shows when no range is asked for.
+pub const DEFAULT_WINDOW: usize = 100;
+
+/// The most records one request may pull. A range is a free-text field reaching
+/// `LRANGE`, so this is the only thing standing between a typo and a query that
+/// loads the entire log into memory and renders it as one table.
+pub const MAX_WINDOW: usize = 500;
+
+/// A window into a category index, as 1-based inclusive record positions.
+///
+/// **Position 1 is the most recent record.** Indexes are built with `LPUSH`, so
+/// `1-100` is the newest hundred and larger numbers reach further back.
+///
+/// A window is not a search depth: filters apply *within* it, so a match outside
+/// the window will not appear. That is deliberate — "keep scanning until N
+/// matches" is unbounded work — but it means an empty result must name the
+/// window, or it reads as "this never happened" when it means "not in what you
+/// asked for". See [`AuditWindow::label`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditWindow {
+    first: usize,
+    last: usize,
+    /// Set when the request could not be honoured as typed.
+    pub notice: Option<String>,
+}
+
+impl Default for AuditWindow {
+    fn default() -> Self {
+        Self { first: 1, last: DEFAULT_WINDOW, notice: None }
+    }
+}
+
+impl AuditWindow {
+    /// Parse the Advanced Filter's Range field.
+    ///
+    /// | Input | Window |
+    /// |---|---|
+    /// | empty | `1-100` |
+    /// | `200` | `1-200` |
+    /// | `100-200` | `100-200` |
+    /// | reversed, zero, negative, junk | `1-100` with a notice |
+    /// | wider than [`MAX_WINDOW`] | clamped from `first`, with a notice |
+    ///
+    /// Never fails: an unusable range falls back to the default page rather than
+    /// erroring, because a moderator mistyping a filter should still see the log.
+    pub fn parse(raw: Option<&str>) -> Self {
+        let raw = raw.unwrap_or_default().trim();
+        if raw.is_empty() {
+            return Self::default();
+        }
+
+        let bounds = match raw.split_once('-') {
+            // A bare number reads as "the newest N".
+            None => raw.parse::<usize>().ok().map(|n| (1, n)),
+            Some((first, last)) => {
+                match (first.trim().parse::<usize>(), last.trim().parse::<usize>()) {
+                    (Ok(first), Ok(last)) => Some((first, last)),
+                    _ => None,
+                }
+            }
+        };
+
+        // Zero is rejected rather than treated as 1: positions are 1-based, so a
+        // `0-50` is a misunderstanding worth correcting rather than guessing at.
+        let Some((first, last)) = bounds.filter(|&(first, last)| first >= 1 && last >= first)
+        else {
+            return Self {
+                notice: Some(format!(
+                    "That isn't a valid range — showing the newest {DEFAULT_WINDOW} records. \
+                     Use a number like 200, or a span like 100-200."
+                )),
+                ..Self::default()
+            };
+        };
+
+        if last - first + 1 > MAX_WINDOW {
+            let capped = first.saturating_add(MAX_WINDOW - 1);
+            return Self {
+                first,
+                last: capped,
+                notice: Some(format!(
+                    "A range covers at most {MAX_WINDOW} records — showing {first}-{capped}."
+                )),
+            };
+        }
+
+        Self { first, last, notice: None }
+    }
+
+    /// 0-based inclusive `LRANGE` bounds.
+    ///
+    /// Saturating, because a position past `isize::MAX` would wrap to a negative
+    /// bound — which Redis reads as counting back from the end of the list, and
+    /// would silently return the wrong records rather than none.
+    fn bounds(&self) -> (isize, isize) {
+        let clamp = |v: usize| isize::try_from(v.saturating_sub(1)).unwrap_or(isize::MAX);
+        (clamp(self.first), clamp(self.last))
+    }
+
+    /// How the window is written for a moderator: `100-200`.
+    pub fn label(&self) -> String {
+        format!("{}-{}", self.first, self.last)
+    }
+}
+
+/// Records in `window` for a category, newest first.
 ///
 /// Two round trips regardless of depth: `LRANGE` the index for the window, then
 /// one `MGET` for exactly those records. Paging deep costs the same as paging
@@ -349,9 +454,9 @@ async fn index_record(
 pub async fn read(
     conn: &mut deadpool_redis::Connection,
     category: AuditCategory,
-    start: isize,
-    stop: isize,
+    window: &AuditWindow,
 ) -> RedisResult<Vec<AuditRecord>> {
+    let (start, stop) = window.bounds();
     let ids: Vec<String> = conn.lrange(category.key(), start, stop).await?;
     if ids.is_empty() {
         return Ok(Vec::new());
@@ -680,6 +785,84 @@ mod tests {
             "Slur",
         );
         assert_eq!(word.delivered, None, "a word action sends nothing");
+    }
+
+    #[test]
+    fn a_missing_or_empty_range_is_the_newest_default_page() {
+        for raw in [None, Some(""), Some("   ")] {
+            let w = AuditWindow::parse(raw);
+            assert_eq!(w, AuditWindow::default(), "{raw:?}");
+            assert_eq!(w.bounds(), (0, DEFAULT_WINDOW as isize - 1));
+            assert!(w.notice.is_none(), "the default is not a correction");
+        }
+    }
+
+    /// Position 1 is the newest record, so a bare number reads as "the newest N"
+    /// and a span reaches further back. Getting this inverted would silently
+    /// serve the oldest records to someone asking for the latest.
+    #[test]
+    fn ranges_map_to_zero_based_lrange_bounds() {
+        assert_eq!(AuditWindow::parse(Some("200")).bounds(), (0, 199));
+        assert_eq!(AuditWindow::parse(Some("100-200")).bounds(), (99, 199));
+        assert_eq!(AuditWindow::parse(Some("1-1")).bounds(), (0, 0));
+        // Whitespace around the parts is a typo, not a rejection.
+        assert_eq!(AuditWindow::parse(Some(" 100 - 200 ")).bounds(), (99, 199));
+    }
+
+    #[test]
+    fn unusable_ranges_fall_back_to_the_default_with_a_notice() {
+        for raw in [
+            "200-100", // reversed
+            "0-50",    // positions are 1-based
+            "0",
+            "-5",
+            "5-",
+            "-",
+            "abc",
+            "100-abc",
+            "1.5",
+            "1-2-3",
+        ] {
+            let w = AuditWindow::parse(Some(raw));
+            assert_eq!(w.bounds(), (0, DEFAULT_WINDOW as isize - 1), "{raw} should fall back");
+            assert!(w.notice.is_some(), "{raw} must say it was not honoured");
+        }
+    }
+
+    /// The guard that keeps a text field from pulling the whole log into one
+    /// page. Clamping keeps the requested start — a moderator asking for old
+    /// records gets old records, just fewer of them.
+    #[test]
+    fn oversized_ranges_clamp_from_the_requested_start() {
+        let w = AuditWindow::parse(Some("1-99999"));
+        assert_eq!(w.label(), format!("1-{MAX_WINDOW}"));
+        assert_eq!(w.bounds(), (0, MAX_WINDOW as isize - 1));
+        assert!(w.notice.is_some(), "a clamp must be visible, not silent");
+
+        let w = AuditWindow::parse(Some("1000-99999"));
+        assert_eq!(w.label(), format!("1000-{}", 1000 + MAX_WINDOW - 1));
+        assert_eq!(w.bounds().0, 999, "the requested start survives the clamp");
+
+        // Exactly at the cap is honoured as typed.
+        let exact = AuditWindow::parse(Some(&format!("1-{MAX_WINDOW}")));
+        assert!(exact.notice.is_none());
+    }
+
+    /// A position past `isize::MAX` must not wrap negative — Redis reads a
+    /// negative `LRANGE` bound as counting back from the end, so it would return
+    /// the *oldest* records to someone who asked for the newest.
+    #[test]
+    fn absurd_positions_saturate_instead_of_wrapping() {
+        let w = AuditWindow::parse(Some(&format!("{}-{}", usize::MAX, usize::MAX)));
+        let (start, stop) = w.bounds();
+        assert!(start >= 0 && stop >= 0, "bounds must never go negative: {start}..{stop}");
+    }
+
+    #[test]
+    fn the_label_reads_back_as_the_range_that_was_asked_for() {
+        assert_eq!(AuditWindow::parse(Some("100-200")).label(), "100-200");
+        assert_eq!(AuditWindow::parse(Some("200")).label(), "1-200");
+        assert_eq!(AuditWindow::default().label(), format!("1-{DEFAULT_WINDOW}"));
     }
 
     #[test]

@@ -11,6 +11,8 @@ fn audit_page_renders_table_and_snapshot_overlays() {
         None,
         crate::admin::AdminRole::Moderator,
         "modtester",
+        "",
+        None,
     );
     assert!(html.contains("Chat Audit Logs"));
     // A dropdown picks the category log; all four views are present.
@@ -104,6 +106,8 @@ fn audit_splits_bulk_action_per_player_and_allows_recurrence() {
         None,
         crate::admin::AdminRole::Moderator,
         "modtester",
+        "",
+        None,
     );
     // One bulk Ban press over two players → two entries sharing a timestamp,
     // one per target player. Counted within the Player view: a ban is also a
@@ -122,6 +126,103 @@ fn audit_splits_bulk_action_per_player_and_allows_recurrence() {
         html.matches(r#"data-copy="000000012""#).count() >= 3,
         "EldenFire should appear as the target of several distinct actions"
     );
+}
+
+fn audit_page(log: &crate::admin::templates::AuditLog, range: &str, cat: Option<&str>) -> String {
+    templates::chatmod_audit_page(
+        log,
+        &sample_sessions(),
+        None,
+        crate::admin::AdminRole::Moderator,
+        "modtester",
+        range,
+        cat,
+    )
+}
+
+fn empty_log(window_label: &str, notice: Option<&str>) -> crate::admin::templates::AuditLog {
+    crate::admin::templates::AuditLog {
+        players: vec![],
+        words: vec![],
+        lists: vec![],
+        system: vec![],
+        window_label: window_label.into(),
+        window_notice: notice.map(Into::into),
+    }
+}
+
+/// The range must survive the round trip into the field, or correcting a typo
+/// means retyping the whole thing — and the moderator cannot see what the page
+/// actually acted on.
+#[test]
+fn the_submitted_range_is_echoed_back_into_the_field() {
+    let html = audit_page(&sample_audit_log(), "100-200", None);
+    assert!(html.contains(r#"name="range" value="100-200""#));
+    // The form is a GET to the same page, so a range is shareable as a URL.
+    assert!(html.contains(r#"<form class="cm-audit-filter" method="get" action="/admin/chatmod/audit">"#));
+}
+
+/// Every table is a window, so the window is stated even when rows come back.
+#[test]
+fn the_active_window_is_always_on_the_page() {
+    let html = audit_page(&sample_audit_log(), "", None);
+    assert!(html.contains("Showing records <strong>1-100</strong>"));
+}
+
+/// An empty table must name the window it searched. "No list actions recorded
+/// yet" in front of someone who asked for records 400-500 is false — the actions
+/// exist and are simply older than the request.
+#[test]
+fn an_empty_table_names_the_window_rather_than_claiming_nothing_happened() {
+    let html = audit_page(&empty_log("400-500", None), "400-500", None);
+    for kind in ["player actions", "word actions", "list actions", "automated actions"] {
+        assert!(
+            html.contains(&format!("No {kind} in records 400-500.")),
+            "empty {kind} table should name the window"
+        );
+    }
+    assert!(!html.contains("recorded yet"), "the old unqualified wording must be gone");
+}
+
+/// A rejected or clamped range that applied silently would be read as the answer
+/// to the question that was asked.
+#[test]
+fn a_range_that_was_not_honoured_says_so() {
+    let html = audit_page(&empty_log("1-100", Some("That isn't a valid range")), "200-100", None);
+    assert!(html.contains(r#"<p class="cm-audit-window-notice">That isn't a valid range</p>"#));
+
+    // The rejected input is still echoed into the field so it can be corrected,
+    // and markup in it must not survive into the page.
+    let hostile = audit_page(&empty_log("1-100", Some("nope")), r#""><script>x</script>"#, None);
+    assert!(!hostile.contains("<script>x</script>"), "range input must be escaped");
+
+    // Matched on the element, not the bare class — the stylesheet is inlined
+    // into every page, so the class name alone is always present.
+    let clean = audit_page(&sample_audit_log(), "", None);
+    assert!(
+        !clean.contains(r#"<p class="cm-audit-window-notice">"#),
+        "an honoured range needs no notice"
+    );
+}
+
+/// Submitting a range from the List table must come back to the List table.
+/// Without this the form navigates and drops the moderator on Player, which is
+/// the same class of bug as the session poll wiping transcript ticks.
+#[test]
+fn the_submitted_tab_stays_open_across_the_round_trip() {
+    let html = audit_page(&sample_audit_log(), "1-50", Some("list"));
+    assert!(html.contains(r#"<option value="list" selected>List Actions</option>"#));
+    assert!(html.contains(r#"<div class="cm-audit-view" data-cat="list">"#));
+    // ...and the others are the hidden ones.
+    assert!(html.contains(r#"<div class="cm-audit-view" data-cat="player" hidden>"#));
+
+    // Each panel carries its own category, so the round trip knows where it came from.
+    assert!(html.contains(r#"<input type="hidden" name="cat" value="list">"#));
+
+    // An unknown category falls back to Player rather than hiding every view.
+    let junk = audit_page(&sample_audit_log(), "", Some("nonsense"));
+    assert!(junk.contains(r#"<option value="player" selected>Player Actions</option>"#));
+    assert!(junk.contains(r#"<div class="cm-audit-view" data-cat="player">"#));
 }
 
 /// The HTML of one category view, sliced out of the rendered page.
@@ -159,6 +260,8 @@ fn bans_and_unbans_appear_in_both_the_player_and_list_tables() {
         None,
         crate::admin::AdminRole::Moderator,
         "modtester",
+        "",
+        None,
     );
     let player_view = view_of(&html, "player");
     let list_view = view_of(&html, "list");
@@ -196,6 +299,8 @@ fn warnings_stay_out_of_the_list_table() {
         None,
         crate::admin::AdminRole::Moderator,
         "modtester",
+        "",
+        None,
     );
     let player_view = view_of(&html, "player");
     let list_view = view_of(&html, "list");
@@ -222,6 +327,8 @@ fn only_a_ban_snapshot_shows_what_happened_after_the_action() {
         None,
         crate::admin::AdminRole::Moderator,
         "modtester",
+        "",
+        None,
     );
     // The ban overlay runs past the action and marks where it fell.
     assert!(html.contains("everything below happened afterwards"));
@@ -247,6 +354,8 @@ fn audit_close_target_follows_session_context() {
         None,
         crate::admin::AdminRole::Moderator,
         "modtester",
+        "",
+        None,
     );
     assert!(landing.contains(r#"href="/admin/chatmod" class="cm-close""#));
     // Opened from inside a session, the X returns to that session view.
@@ -256,6 +365,8 @@ fn audit_close_target_follows_session_context() {
         Some("FJ5B3V"),
         crate::admin::AdminRole::Moderator,
         "modtester",
+        "",
+        None,
     );
     assert!(from_session.contains(r#"href="/admin/chatmod/session/FJ5B3V" class="cm-close""#));
     // ...and the Moderation Lists nav link forwards the same session context,

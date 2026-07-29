@@ -151,6 +151,16 @@ pub struct AuditLog {
     pub words: Vec<WordAuditEntry>,
     pub lists: Vec<ListAuditEntry>,
     pub system: Vec<SystemAuditEntry>,
+    /// Which slice of each log these rows came from, e.g. `100-200`.
+    ///
+    /// Rendered on the page even when rows come back, because every table here
+    /// is a *window* — an empty one means "nothing in the range you asked for",
+    /// which reads as "this never happened" unless the range is on screen.
+    pub window_label: String,
+    /// Set when the requested range could not be honoured as typed (rejected or
+    /// clamped), so a moderator is never silently shown a different slice than
+    /// the one they asked for.
+    pub window_notice: Option<String>,
 }
 
 /// **Player** category — an action taken on a player's chat privileges. One

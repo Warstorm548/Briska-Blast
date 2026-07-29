@@ -13,9 +13,11 @@
 //! censoring, the flagged red dot, the Blacklisted Words tab and its Quick Access
 //! twin, moderator chat, **Warn**, **Warn + Delete Chat Body**, **Ban** (from
 //! both the session view and the Banned Users list, with un-ban), and all four
-//! audit categories. **Not** wired: Suspend, Approve Word, the Suspensions and
-//! Whitelist lists, audit filters, and manual deletion of retained records. The
-//! contracts below describe the whole design, including the parts still to come.
+//! audit categories, plus the audit log's **Range** filter. **Not** wired:
+//! Suspend, Approve Word, the Suspensions and Whitelist lists, the remaining
+//! audit filters (date/moderator/action/reason), and manual deletion of retained
+//! records. The contracts below describe the whole design, including the parts
+//! still to come.
 //!
 //! Warning delivery is live-only and never queued: a player who is disconnected,
 //! or who is in a match (chat renders only in the lobby), does not receive it,

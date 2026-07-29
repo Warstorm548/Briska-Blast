@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use shared::types::player::PlayerId;
 
 use crate::chat::{
-    audit::{self, AuditCategory, AuditRecord},
+    audit::{self, AuditCategory, AuditRecord, AuditWindow},
     bans, blacklist,
     transcript::{self, DeletionMark, MessageKind, StoredMessage},
 };
@@ -34,8 +34,6 @@ use super::templates::{
 /// How many recent lines each session card previews.
 const PREVIEW_LINES: isize = 3;
 
-/// How many records per audit category a page load reads.
-const AUDIT_PAGE_LIMIT: isize = 100;
 
 /// Display name for a stored line, falling back to the same `Player <id>` shape
 /// the game client uses when no username is on file.
@@ -399,20 +397,22 @@ impl SnapshotCache {
 }
 
 /// All four audit category tables.
-pub async fn audit_log(state: &AppState) -> AuditLog {
+pub async fn audit_log(state: &AppState, window: &AuditWindow) -> AuditLog {
     let Ok(mut conn) = state.redis.get().await else {
         return AuditLog {
             players: Vec::new(),
             words: Vec::new(),
             lists: Vec::new(),
             system: Vec::new(),
+            window_label: window.label(),
+            window_notice: window.notice.clone(),
         };
     };
 
     let mut cache = SnapshotCache::default();
 
     let mut players = Vec::new();
-    for r in read(&mut conn, AuditCategory::Player).await {
+    for r in read(&mut conn, AuditCategory::Player, window).await {
         let snapshot = cache.snapshot(&mut conn, &r).await;
         let snapshot_cut = SnapshotCache::cut_marker(&r, snapshot.len());
         players.push(PlayerAuditEntry {
@@ -431,7 +431,7 @@ pub async fn audit_log(state: &AppState) -> AuditLog {
     }
 
     let mut words = Vec::new();
-    for r in read(&mut conn, AuditCategory::Word).await {
+    for r in read(&mut conn, AuditCategory::Word, window).await {
         let snapshot = cache.snapshot(&mut conn, &r).await;
         words.push(WordAuditEntry {
             timestamp: audit::format_timestamp(r.at_ms),
@@ -447,10 +447,10 @@ pub async fn audit_log(state: &AppState) -> AuditLog {
         });
     }
 
-    let lists = list_entries(read(&mut conn, AuditCategory::List).await);
+    let lists = list_entries(read(&mut conn, AuditCategory::List, window).await);
 
     let mut system = Vec::new();
-    for r in read(&mut conn, AuditCategory::System).await {
+    for r in read(&mut conn, AuditCategory::System, window).await {
         let snapshot = cache.snapshot(&mut conn, &r).await;
         system.push(SystemAuditEntry {
             timestamp: audit::format_timestamp(r.at_ms),
@@ -465,7 +465,14 @@ pub async fn audit_log(state: &AppState) -> AuditLog {
         });
     }
 
-    AuditLog { players, words, lists, system }
+    AuditLog {
+        players,
+        words,
+        lists,
+        system,
+        window_label: window.label(),
+        window_notice: window.notice.clone(),
+    }
 }
 
 /// Project audit records into List-table rows.
@@ -500,10 +507,12 @@ fn list_entries(records: Vec<AuditRecord>) -> Vec<ListAuditEntry> {
         .collect()
 }
 
-async fn read(conn: &mut deadpool_redis::Connection, category: AuditCategory) -> Vec<AuditRecord> {
-    audit::read(conn, category, 0, AUDIT_PAGE_LIMIT - 1)
-        .await
-        .unwrap_or_default()
+async fn read(
+    conn: &mut deadpool_redis::Connection,
+    category: AuditCategory,
+    window: &AuditWindow,
+) -> Vec<AuditRecord> {
+    audit::read(conn, category, window).await.unwrap_or_default()
 }
 
 #[cfg(test)]

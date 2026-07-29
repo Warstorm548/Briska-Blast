@@ -11,14 +11,29 @@ use super::super::super::common::escape;
 /// The From/To time pickers carry `lang="en-GB"` so the native control renders a
 /// 24-hour clock (matching the `… UTC` timestamps) despite the page's `en`
 /// (12-hour) locale. The eventual per-moderator setting owns 12/24h + timezone.
-pub(super) fn audit_filter_panel(actions: &[&str], specific: &str) -> String {
+pub(super) fn audit_filter_panel(
+    cat: &str,
+    actions: &[&str],
+    specific: &str,
+    range: &str,
+    from: Option<&str>,
+) -> String {
     let opts = actions
         .iter()
         .map(|a| format!("<option>{}</option>", escape(a)))
         .collect::<String>();
+    // Carried through the submit so the range round-trip does not lose the
+    // session a moderator arrived from — the X close and the Chat Nav links
+    // both depend on it.
+    let from_field = match from {
+        Some(code) => format!(r#"<input type="hidden" name="from" value="{}">"#, escape(code)),
+        None => String::new(),
+    };
     format!(
-        r#"<div class="cm-audit-filter">
+        r#"<form class="cm-audit-filter" method="get" action="/admin/chatmod/audit">
       <p class="cm-audit-filter-title">Advanced Filter</p>
+      {from_field}
+      <input type="hidden" name="cat" value="{cat}">
       <div class="cm-filter-grid">
         <fieldset class="cm-filter-group">
           <legend>Applies to all logs</legend>
@@ -30,14 +45,21 @@ pub(super) fn audit_filter_panel(actions: &[&str], specific: &str) -> String {
           <label>Group<select><option>Any</option><option>Admin</option><option>Moderator</option><option>Superadmin</option><option>System</option></select></label>
           <label>Action<select><option>Any</option>{opts}</select></label>
           <label>Reason<input type="text" placeholder="Search reason"></label>
+          <label>Range<input type="text" name="range" value="{range}" placeholder="e.g. 200 or 100-200"></label>
         </fieldset>
         <fieldset class="cm-filter-group">
           <legend>This table</legend>
           {specific}
         </fieldset>
       </div>
-      <p class="note">Preview only &mdash; filters are not wired up yet.</p>
-    </div>"#
+      <div class="cm-filter-actions">
+        <button type="submit" class="btn">Apply Range</button>
+        <a href="/admin/chatmod/audit" class="btn">Reset</a>
+      </div>
+      <p class="note">Range is live. The other filters are preview only &mdash; not wired up yet.</p>
+    </form>"#,
+        cat = escape(cat),
+        range = escape(range),
     )
 }
 

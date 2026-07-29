@@ -193,6 +193,8 @@ pub(super) fn snap(body_id: &str, username: &str, player_id: u64, body: &str, wo
 /// Body IDs use the 12-char alphanumeric shape the server will assign once wired.
 pub(super) fn sample_audit_log() -> AuditLog {
     AuditLog {
+        window_label: "1-100".into(),
+        window_notice: None,
         players: vec![
             // Lifting a ban is an action on a player, so it belongs here beside
             // the ban it reverses — the same record the List table shows. No
