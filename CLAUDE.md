@@ -41,6 +41,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Full package structure and module layout | [`docs/architecture/architecture.md`](docs/architecture/architecture.md) |
 | Dev environment setup and Docker instructions | [`docs/dev/setup.md`](docs/dev/setup.md) |
 | Manual testing with curl, admin panel tests | [`docs/dev/testing.md`](docs/dev/testing.md) |
+| Wiping chat-moderation data to start fresh (keeps player ids and sessions) | [`docs/dev/chat-data-reset.md`](docs/dev/chat-data-reset.md) |
 | Server endpoint design and WebRTC signaling flow | [`docs/architecture/protocol.md`](docs/architecture/protocol.md) |
 | Full networking, identity, and game design | [`docs/architecture/game-architecture-summary.md`](docs/architecture/game-architecture-summary.md) |
 | Extended game mode — rules, ball handoff, scoring | [`docs/architecture/extended-mode.md`](docs/architecture/extended-mode.md) |
