@@ -513,9 +513,18 @@ async fn apply(
             // "somebody is now banned", not "somebody was told". Reporting an
             // applied ban as a failure would invite a moderator to press again.
             let applied = !delivered_to.is_empty() || !undelivered.is_empty();
+            // A failed target is someone the moderator selected who is still not
+            // banned. That must not read as success on the strength of *other*
+            // targets having already been banned before this press — green beside
+            // "could not ban: X" invites the moderator to move on.
+            let ok = if failed.is_empty() {
+                applied || !already.is_empty()
+            } else {
+                applied
+            };
             reply(
                 StatusCode::OK,
-                applied || !already.is_empty(),
+                ok,
                 ban_summary(
                     delivered_to.len() + undelivered.len(),
                     &undelivered,

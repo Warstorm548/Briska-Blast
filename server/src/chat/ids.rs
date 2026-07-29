@@ -212,9 +212,12 @@ async fn advance_epoch(
     epoch_key: &str,
 ) {
     let Some(next) = next_epoch(observed) else {
+        // Named by key like the arms below: with two sequences, "body-id" here
+        // would misattribute an exhausted audit sequence to chat messages.
         tracing::error!(
+            key = %epoch_key,
             epoch = %observed,
-            "chat: body-id epochs exhausted — ids remain unique but the scheme is at its ceiling"
+            "chat: id epochs exhausted — ids remain unique but the scheme is at its ceiling"
         );
         return;
     };

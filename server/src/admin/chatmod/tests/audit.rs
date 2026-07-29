@@ -205,6 +205,27 @@ fn a_range_that_was_not_honoured_says_so() {
     );
 }
 
+/// Reset clears the range, not the moderator's context. Dropping `from` would
+/// leave the X close and the Chat Nav links pointing at the landing page instead
+/// of the session they came from.
+#[test]
+fn reset_keeps_the_session_context_and_the_open_log() {
+    let with_context = templates::chatmod_audit_page(
+        &sample_audit_log(),
+        &sample_sessions(),
+        Some("FJ5B3V"),
+        crate::admin::AdminRole::Moderator,
+        "modtester",
+        "100-200",
+        Some("list"),
+    );
+    assert!(with_context.contains(r#"href="/admin/chatmod/audit?cat=list&amp;from=FJ5B3V" class="btn">Reset</a>"#));
+
+    // With no session to preserve, Reset still returns to the same log.
+    let plain = audit_page(&sample_audit_log(), "100-200", Some("word"));
+    assert!(plain.contains(r#"href="/admin/chatmod/audit?cat=word" class="btn">Reset</a>"#));
+}
+
 /// Submitting a range from the List table must come back to the List table.
 /// Without this the form navigates and drops the moderator on Player, which is
 /// the same class of bug as the session poll wiping transcript ticks.

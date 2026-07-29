@@ -127,3 +127,43 @@ fn lists_close_target_follows_session_context() {
     // ...and the Chat Audit Logs nav link forwards the same session context.
     assert!(from_session.contains(r#"href="/admin/chatmod/audit?from=FJ5B3V""#));
 }
+
+/// A write that errored is not the same as a selection that was already banned.
+/// One needs the moderator to act again; the other needs nothing. Collapsing
+/// them would let a failed ban read as a finished one.
+#[test]
+fn a_failed_ban_is_named_apart_from_an_already_banned_one() {
+    let msg = super::super::bans::ban_summary(
+        &["000000007".into()],
+        &["000000012".into()],
+        &[],
+        &["000000042".into()],
+    );
+    assert!(msg.contains("Banned 1 player"));
+    assert!(msg.contains("Already banned: 000000012."));
+    assert!(msg.contains("Could not be banned — try again: 000000042."));
+
+    // With nothing failing, the message gains no failure clause.
+    let clean = super::super::bans::ban_summary(&["000000007".into()], &[], &[], &[]);
+    assert!(!clean.contains("try again"));
+}
+
+/// The count of "was not banned" must exclude selections that errored — those
+/// are still banned, and reporting them as no-ops hides that work remains.
+#[test]
+fn unban_failures_are_excluded_from_the_not_banned_count() {
+    // Three ticked: one lifted, one errored, one simply wasn't banned.
+    let msg = super::super::bans::unban_summary(1, 3, &["000000042".into()]);
+    assert!(msg.contains("Un-banned 1 user"));
+    assert!(msg.contains("1 was not banned"), "got: {msg}");
+    assert!(msg.contains("Could not be un-banned — try again: 000000042."));
+
+    // Everything ticked lifted cleanly — no trailing clauses at all.
+    let clean = super::super::bans::unban_summary(2, 2, &[]);
+    assert_eq!(clean, "Un-banned 2 users.");
+
+    // Nothing lifted because everything errored is not "none were banned":
+    // they are all still banned.
+    let all_failed = super::super::bans::unban_summary(0, 1, &["000000042".into()]);
+    assert!(all_failed.starts_with("No bans were lifted."), "got: {all_failed}");
+}

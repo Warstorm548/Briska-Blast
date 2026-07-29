@@ -86,6 +86,7 @@ pub async fn lists_ban(
     let mut banned = Vec::new();
     let mut already = Vec::new();
     let mut invalid = Vec::new();
+    let mut failed = Vec::new();
     for id in &ids {
         let username = usernames.get(id).cloned().unwrap_or_default();
         let entry = bans::BanEntry {
@@ -100,11 +101,16 @@ pub async fn lists_ban(
             sid: String::new(),
             cut_index: 0,
         };
+        // One id failing must not discard the ones already written. Returning
+        // here would report a blanket failure while some players were in fact
+        // banned — the moderator would press again, and the audit log would
+        // disagree with the notice they were shown.
         let outcome = match bans::ban(&mut conn, std::slice::from_ref(id), &entry).await {
             Ok(outcome) => outcome,
             Err(e) => {
                 tracing::warn!("chatmod: ban write failed for {}: {}", id, e);
-                return lists_redirect(from.as_deref(), "err", "Could not record those bans.");
+                failed.push(id.clone());
+                continue;
             }
         };
         invalid.extend(outcome.invalid);
@@ -139,12 +145,14 @@ pub async fn lists_ban(
     tracing::info!(
         moderator = %session.username,
         banned = banned.len(),
+        failed = failed.len(),
         "chatmod: ban from moderation lists"
     );
 
-    let msg = ban_summary(&banned, &already, &invalid);
-    // Nothing newly banned is not a success — the list is unchanged.
-    let key = if banned.is_empty() { "err" } else { "ok" };
+    let msg = ban_summary(&banned, &already, &invalid, &failed);
+    // Nothing newly banned is not a success — the list is unchanged. Neither is
+    // a partial write: someone the moderator selected is still not banned.
+    let key = if banned.is_empty() || !failed.is_empty() { "err" } else { "ok" };
     lists_redirect(from.as_deref(), key, &msg)
 }
 
@@ -196,13 +204,20 @@ pub async fn lists_unban(
     // username is markedly less useful than one that says who that was.
     let usernames = crate::api::fetch_usernames(&mut conn, &ids).await;
 
-    let lifted = match bans::unban(&mut conn, &ids).await {
-        Ok(lifted) => lifted,
-        Err(e) => {
-            tracing::warn!("chatmod: unban failed: {}", e);
-            return lists_redirect(from.as_deref(), "err", "Could not lift those bans.");
+    // Lifted one at a time, like the ban path above: a batched call whose loop
+    // errors partway discards the ids it had already removed, so the moderator
+    // would be told nothing was lifted while some bans were in fact gone.
+    let mut lifted = Vec::new();
+    let mut failed = Vec::new();
+    for id in &ids {
+        match bans::unban(&mut conn, std::slice::from_ref(id)).await {
+            Ok(done) => lifted.extend(done),
+            Err(e) => {
+                tracing::warn!("chatmod: unban failed for {}: {}", id, e);
+                failed.push(id.clone());
+            }
         }
-    };
+    }
 
     // Un-banning is an action on a player that happens to edit a list, so the
     // record lands in the Player category beside the ban it reverses, tagged so
@@ -235,19 +250,26 @@ pub async fn lists_unban(
     tracing::info!(
         moderator = %session.username,
         lifted = lifted.len(),
+        failed = failed.len(),
         "chatmod: unban from moderation lists"
     );
 
-    let msg = unban_summary(lifted.len(), ids.len());
-    // A no-op is not a success, same as an all-duplicate blacklist add.
-    let key = if lifted.is_empty() { "err" } else { "ok" };
+    let msg = unban_summary(lifted.len(), ids.len(), &failed);
+    // A no-op is not a success, same as an all-duplicate blacklist add. Neither
+    // is a partial lift: someone the moderator ticked is still banned.
+    let key = if lifted.is_empty() || !failed.is_empty() { "err" } else { "ok" };
     lists_redirect(from.as_deref(), key, &msg)
 }
 
 /// Human summary of a ban from this page, naming what it skipped rather than
 /// reporting a smaller count than the moderator submitted — the same principle
 /// as [`super::blacklist::add_summary`].
-pub(super) fn ban_summary(banned: &[String], already: &[String], invalid: &[String]) -> String {
+pub(super) fn ban_summary(
+    banned: &[String],
+    already: &[String],
+    invalid: &[String],
+    failed: &[String],
+) -> String {
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let mut msg = match banned.len() {
         0 => "Nobody was banned.".to_string(),
@@ -261,20 +283,39 @@ pub(super) fn ban_summary(banned: &[String], already: &[String], invalid: &[Stri
         // dropping it would let a moderator believe someone was banned.
         msg.push_str(&format!(" Not a player ID: {}.", invalid.join(", ")));
     }
+    if !failed.is_empty() {
+        // Named separately from "already banned": these are still unbanned, and
+        // the moderator has to act on them again.
+        msg.push_str(&format!(
+            " Could not be banned — try again: {}.",
+            failed.join(", ")
+        ));
+    }
     msg
 }
 
 /// Human summary of an un-ban. `selected` is what the moderator ticked, so a
 /// partial lift says so rather than reporting only the number that worked.
-pub(super) fn unban_summary(lifted: usize, selected: usize) -> String {
+pub(super) fn unban_summary(lifted: usize, selected: usize, failed: &[String]) -> String {
     let plural = |n: usize| if n == 1 { "" } else { "s" };
-    match (lifted, selected) {
+    // Selections that errored are not "were not banned" — they are still banned
+    // and need pressing again, so they are excluded from that count and named.
+    let unaccounted = selected.saturating_sub(lifted).saturating_sub(failed.len());
+    let mut msg = match (lifted, unaccounted) {
+        (0, _) if !failed.is_empty() => "No bans were lifted.".to_string(),
         (0, _) => "None of those users were banned.".to_string(),
-        (n, s) if n == s => format!("Un-banned {n} user{}.", plural(n)),
-        (n, s) => format!(
-            "Un-banned {n} of {s} selected — the other{} {} not banned.",
-            plural(s - n),
-            if s - n == 1 { "was" } else { "were" }
+        (n, 0) => format!("Un-banned {n} user{}.", plural(n)),
+        (n, rest) => format!(
+            "Un-banned {n} user{} — {rest} {} not banned.",
+            plural(n),
+            if rest == 1 { "was" } else { "were" }
         ),
+    };
+    if !failed.is_empty() {
+        msg.push_str(&format!(
+            " Could not be un-banned — try again: {}.",
+            failed.join(", ")
+        ));
     }
+    msg
 }

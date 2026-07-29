@@ -29,6 +29,14 @@ pub(super) fn audit_filter_panel(
         Some(code) => format!(r#"<input type="hidden" name="from" value="{}">"#, escape(code)),
         None => String::new(),
     };
+    // Reset clears the range, not the context. It must carry the same `from` the
+    // submit path does — otherwise resetting silently drops the session the
+    // moderator arrived from, and the X close and Chat Nav links lose their
+    // target. `cat` rides along so it lands back on the log they were reading.
+    let reset_href = match from {
+        Some(code) => format!("/admin/chatmod/audit?cat={}&amp;from={}", escape(cat), escape(code)),
+        None => format!("/admin/chatmod/audit?cat={}", escape(cat)),
+    };
     format!(
         r#"<form class="cm-audit-filter" method="get" action="/admin/chatmod/audit">
       <p class="cm-audit-filter-title">Advanced Filter</p>
@@ -54,7 +62,7 @@ pub(super) fn audit_filter_panel(
       </div>
       <div class="cm-filter-actions">
         <button type="submit" class="btn">Apply Range</button>
-        <a href="/admin/chatmod/audit" class="btn">Reset</a>
+        <a href="{reset_href}" class="btn">Reset</a>
       </div>
       <p class="note">Range is live. The other filters are preview only &mdash; not wired up yet.</p>
     </form>"#,

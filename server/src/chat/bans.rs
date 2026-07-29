@@ -243,12 +243,18 @@ pub async fn load(conn: &mut deadpool_redis::Connection) -> RedisResult<Vec<BanE
     let raw: std::collections::HashMap<String, String> = conn.hgetall(BANNED_KEY).await?;
     let mut entries: Vec<BanEntry> = raw
         .into_iter()
-        // A single corrupt field must not blank the whole ledger.
-        .filter_map(|(key, json)| match serde_json::from_str::<BanEntry>(&json) {
-            Ok(entry) => Some(entry),
+        // A corrupt field is kept as a placeholder, never dropped. [`lookup`]
+        // synthesizes one too, so the ban still *fires* — dropping the row here
+        // would leave that player muted and absent from the Banned Users list,
+        // with no way for a moderator to select them and lift it.
+        .map(|(key, json)| match serde_json::from_str::<BanEntry>(&json) {
+            Ok(entry) => entry,
             Err(e) => {
-                tracing::warn!(player = %key, "chat: skipping malformed ban entry: {}", e);
-                None
+                tracing::warn!(player = %key, "chat: malformed ban entry, listing a placeholder: {}", e);
+                BanEntry {
+                    player_id: numeric_id(&key).unwrap_or_default(),
+                    ..Default::default()
+                }
             }
         })
         .collect();
@@ -259,6 +265,29 @@ pub async fn load(conn: &mut deadpool_redis::Connection) -> RedisResult<Vec<BanE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A corrupt entry must stay visible in the ledger, because [`lookup`] keeps
+    /// enforcing it. Dropping the row would leave that player muted with no way
+    /// for a moderator to find and un-ban them — the ban would be permanent and
+    /// invisible at once.
+    #[test]
+    fn a_malformed_entry_still_shows_who_is_banned() {
+        // Mirrors what `load` synthesizes for a field that will not parse.
+        let placeholder = BanEntry {
+            player_id: numeric_id("000000042").unwrap_or_default(),
+            ..Default::default()
+        };
+        assert_eq!(placeholder.player_id, 42, "the id must survive to be un-bannable");
+        assert!(placeholder.reason.is_empty(), "there is no reason left to show");
+
+        // And `lookup` builds the same shape, so the list and enforcement agree
+        // about who is banned rather than contradicting each other.
+        let from_lookup = BanEntry {
+            player_id: numeric_id("42").unwrap_or_default(),
+            ..Default::default()
+        };
+        assert_eq!(placeholder.player_id, from_lookup.player_id);
+    }
 
     #[test]
     fn ids_normalize_to_one_canonical_field() {

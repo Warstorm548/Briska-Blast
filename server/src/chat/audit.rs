@@ -127,6 +127,9 @@ impl AuditCategory {
 /// Key prefix for the stored records themselves.
 const RECORD_PREFIX: &str = "chat:audit:rec:";
 
+/// How often [`migrate`] reports progress, in records.
+const MIGRATION_PROGRESS_EVERY: usize = 500;
+
 fn record_key(event_id: &str) -> String {
     format!("{RECORD_PREFIX}{event_id}")
 }
@@ -580,6 +583,17 @@ pub async fn migrate(conn: &mut deadpool_redis::Connection) -> RedisResult<()> {
             let encoded = serialize(&record)?;
             index_record(conn, home, &event_id, &encoded, &list, cursor).await?;
             moved += 1;
+
+            // A large legacy log makes this the slowest part of boot, and it
+            // runs before either listener binds — so it must not look hung.
+            if moved.is_multiple_of(MIGRATION_PROGRESS_EVERY) {
+                tracing::info!(
+                    from = %category.legacy_key(),
+                    moved,
+                    total = legacy.len(),
+                    "chat: audit import in progress"
+                );
+            }
         }
 
         tracing::info!(

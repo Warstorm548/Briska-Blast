@@ -338,12 +338,29 @@ pub async fn moderation_lists(state: &AppState) -> ModerationLists {
     }
 }
 
+/// How many distinct transcripts one page load will hydrate.
+///
+/// Snapshots are inlined into the response, and a ban's snapshot is an entire
+/// session transcript — so a wide range spanning many sessions could otherwise
+/// pull in hundreds of conversations for one page. The cap counts *distinct
+/// sessions*, not records, because the cache already collapses a page of records
+/// that all point at one conversation into a single read.
+///
+/// Deliberately independent of the record window: how many rows a moderator asks
+/// for and how much chat gets inlined are different costs, and tying them
+/// together is what made a 500-record range expensive.
+const MAX_SNAPSHOTS: usize = 40;
+
 /// Reads transcripts once per instance, so a page of records that all point at
 /// one session doesn't re-read it for every row.
 #[derive(Default)]
 struct SnapshotCache {
     by_sid: HashMap<String, Vec<StoredMessage>>,
     deleted_by_sid: HashMap<String, HashMap<String, DeletionMark>>,
+    /// Whether [`MAX_SNAPSHOTS`] was reached, so the page can say so. Without
+    /// this a withheld transcript renders as the same em-dash that means "there
+    /// was no chat here" — a distinction this panel takes care to preserve.
+    capped: bool,
 }
 
 impl SnapshotCache {
@@ -371,6 +388,10 @@ impl SnapshotCache {
             return Vec::new();
         }
         if !self.by_sid.contains_key(&record.sid) {
+            if self.by_sid.len() >= MAX_SNAPSHOTS {
+                self.capped = true;
+                return Vec::new();
+            }
             let lines = transcript::all(conn, &record.sid).await.unwrap_or_default();
             self.by_sid.insert(record.sid.clone(), lines);
             let deleted = transcript::deletions(conn, &record.sid)
@@ -471,8 +492,26 @@ pub async fn audit_log(state: &AppState, window: &AuditWindow) -> AuditLog {
         lists,
         system,
         window_label: window.label(),
-        window_notice: window.notice.clone(),
+        window_notice: cap_notice(window.notice.clone(), cache.capped),
     }
+}
+
+/// Fold a "transcripts withheld" warning into whatever the window already had to
+/// say. Both are the same kind of fact — the page is not showing everything it
+/// was asked for — so they share one banner rather than competing for attention.
+fn cap_notice(window_notice: Option<String>, capped: bool) -> Option<String> {
+    if !capped {
+        return window_notice;
+    }
+    let note = format!(
+        "Transcripts are shown for the first {MAX_SNAPSHOTS} conversations in this range; \
+         later rows show no Transcript button even where chat was captured. \
+         Narrow the range to see them."
+    );
+    Some(match window_notice {
+        Some(existing) => format!("{existing} {note}"),
+        None => note,
+    })
 }
 
 /// Project audit records into List-table rows.
@@ -718,6 +757,25 @@ mod tests {
         // Players received "##### you all"; the moderator must see what was typed.
         assert_eq!(view.body, "frick you all");
         assert_eq!(view.flagged_word.as_deref(), Some("frick"));
+    }
+
+    /// A withheld transcript renders as the same em-dash that means "there was
+    /// no chat here". The page must say which it is, or a reviewer reads an
+    /// absent Transcript button as evidence that none was captured.
+    #[test]
+    fn a_capped_page_says_transcripts_were_withheld() {
+        let note = cap_notice(None, true).expect("a cap must produce a notice");
+        assert!(note.contains(&MAX_SNAPSHOTS.to_string()));
+        assert!(note.contains("Narrow the range"));
+
+        // An uncapped page says nothing extra.
+        assert_eq!(cap_notice(None, false), None);
+        assert_eq!(cap_notice(Some("range clamped".into()), false).as_deref(), Some("range clamped"));
+
+        // Both facts share one banner rather than one hiding the other.
+        let both = cap_notice(Some("range clamped".into()), true).unwrap();
+        assert!(both.starts_with("range clamped"));
+        assert!(both.contains("Transcripts are shown"));
     }
 
     fn audit_record(action: &str, list: &str) -> AuditRecord {
