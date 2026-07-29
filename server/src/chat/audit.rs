@@ -1,14 +1,29 @@
 //! Chat moderation audit records.
 //!
-//! Four categories, each its own Redis list, matching the four tables the Chat
-//! Audit Logs page renders:
+//! # One record, many views
 //!
-//! | Category | What lands here |
+//! A record is stored **once**, under `chat:audit:rec:{event_id}`. The four
+//! category keys are *indexes* — lists of event ids, newest first — and the four
+//! tables on the Chat Audit Logs page each render one of them.
+//!
+//! | Index | What it points at |
 //! |---|---|
 //! | `player` | actions on a player's chat privileges — including **automated** enforcement, which carries `group = System` |
 //! | `word` | blacklist add/remove/toggle, and (later) Approve Word |
-//! | `list` | moderation-list edits: un-ban, lift suspension, whitelist |
+//! | `list` | **derived** — every record carrying a [`AuditRecord::list`] tag, whatever its home index |
 //! | `system` | automated events that are *not* enforcement — chiefly word flagging |
+//!
+//! The list index is what makes this worth doing. A ban is both an action on a
+//! player and an edit to the Ban List, and it belongs in both tables — but
+//! storing it twice would mean two rows that can disagree, and counting it twice
+//! in any per-player total. So it is stored once in the player index and *also
+//! pointed at* from the list index. Two views, one truth.
+//!
+//! This generalizes because **every list the List table covers is a list of
+//! players** — Ban List, Suspensions, Whitelisted Users. Each of their edits is
+//! a player action that happens to change a list, so [`write`] needs no
+//! per-action special cases: set [`AuditRecord::list`] and the row appears in
+//! both places.
 //!
 //! # Why one record type for four tables
 //!
@@ -29,15 +44,26 @@
 //! must write a tombstone rather than removing the entry, or every earlier
 //! snapshot silently changes.
 //!
+//! A record with [`AuditRecord::full`] set replays the *whole* transcript instead
+//! of stopping at the cut, which is how a ban shows the entire conversation
+//! rather than only what preceded it. Same storage, same pinning — only the
+//! range read differs, and `cut_index` becomes an action-point marker.
+//!
 //! # Growth
 //!
 //! Records have **no TTL and are never trimmed** — that is the deliberate
 //! retention policy (removal will be a manual admin action, not yet built). They
-//! are small, but the lists grow without bound; see the roadmap follow-up.
+//! are small, but the record store and the indexes both grow without bound; see
+//! the roadmap follow-up. Deletion, when it comes, must remove the record *and*
+//! its id from every index, or the leftover pointer renders as a missing row.
+//!
+//! Reads are windowed rather than capped: [`read`] takes index positions, so the
+//! cost of a page is the size of the window and not how far back it sits.
 
 use deadpool_redis::redis::{AsyncCommands, RedisResult};
 use serde::{Deserialize, Serialize};
 
+use super::ids;
 use crate::admin::AdminRole;
 
 /// Group label for automated, program-initiated records.
@@ -57,7 +83,23 @@ pub enum AuditCategory {
 }
 
 impl AuditCategory {
+    /// The index list for this category — event ids, newest first. Holds
+    /// pointers, never records.
     fn key(self) -> &'static str {
+        match self {
+            Self::Player => "chat:audit:idx:player",
+            Self::Word => "chat:audit:idx:word",
+            Self::List => "chat:audit:idx:list",
+            Self::System => "chat:audit:idx:system",
+        }
+    }
+
+    /// The pre-0.34.0 key, where whole records were stored inline.
+    ///
+    /// Read only by [`migrate`], and never written to again — leaving these
+    /// lists untouched is what keeps a rollback to an older server working
+    /// against a migrated Redis.
+    fn legacy_key(self) -> &'static str {
         match self {
             Self::Player => "chat:audit:player",
             Self::Word => "chat:audit:word",
@@ -65,12 +107,44 @@ impl AuditCategory {
             Self::System => "chat:audit:system",
         }
     }
+
+    /// Every category, for the migration and for tests that must cover all of
+    /// them rather than the ones someone remembered.
+    const ALL: [Self; 4] = [Self::Player, Self::Word, Self::List, Self::System];
+
+    /// How many of this category's legacy records [`migrate`] has already
+    /// imported. See that function for why the count is a safe cursor.
+    fn cursor_key(self) -> &'static str {
+        match self {
+            Self::Player => "chat:audit:migrated:player",
+            Self::Word => "chat:audit:migrated:word",
+            Self::List => "chat:audit:migrated:list",
+            Self::System => "chat:audit:migrated:system",
+        }
+    }
+}
+
+/// Key prefix for the stored records themselves.
+const RECORD_PREFIX: &str = "chat:audit:rec:";
+
+/// How often [`migrate`] reports progress, in records.
+const MIGRATION_PROGRESS_EVERY: usize = 500;
+
+fn record_key(event_id: &str) -> String {
+    format!("{RECORD_PREFIX}{event_id}")
 }
 
 /// One audit record. Fields not relevant to a category stay at their defaults and
 /// are simply not projected when that category renders.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuditRecord {
+    /// This record's own id, from the audit sequence in [`crate::chat::ids`].
+    ///
+    /// Assigned by [`write`] — callers never set it, and it is empty on a record
+    /// that has not been stored yet. It is what the category indexes hold, so a
+    /// record can be pointed at from more than one table without being copied.
+    #[serde(default)]
+    pub event_id: String,
     pub at_ms: i64,
     /// The acting moderator's display name, or the automated source (e.g.
     /// `Word Filter`) for System records.
@@ -115,6 +189,18 @@ pub struct AuditRecord {
     /// cover zero, one, or several bodies.
     #[serde(default)]
     pub body_ids: Vec<String>,
+    /// Render the **whole** transcript rather than truncating at `cut_index`.
+    ///
+    /// Set for bans only. A ban is permanent in a way no other tool is, so its
+    /// record is expected to answer "what else happened here", not just "what
+    /// prompted this" — `cut_index` stops being the end of the snapshot and
+    /// becomes a marker showing where in the conversation the ban fell.
+    ///
+    /// The pinning is unchanged: still one stored transcript, still replayed
+    /// rather than copied. Note this means the view keeps growing as the session
+    /// continues, which is the intent.
+    #[serde(default)]
+    pub full: bool,
 
     // --- outcome ---
     /// Whether the action reached the player, for the actions that send them
@@ -168,6 +254,13 @@ impl AuditRecord {
         self
     }
 
+    /// Keep the entire transcript, marking the action point instead of cutting
+    /// there. See [`AuditRecord::full`].
+    pub fn full(mut self) -> Self {
+        self.full = true;
+        self
+    }
+
     /// Attach the player this record is about.
     pub fn with_target(mut self, username: &str, player_id: Option<u64>) -> Self {
         self.target_username = username.to_string();
@@ -180,6 +273,12 @@ impl AuditRecord {
         self
     }
 
+    /// Name the moderation list this record edited (List category only).
+    pub fn with_list(mut self, list: &str) -> Self {
+        self.list = list.to_string();
+        self
+    }
+
     /// Record whether what this action sent actually reached the player.
     pub fn with_delivery(mut self, delivered: bool) -> Self {
         self.delivered = Some(delivered);
@@ -187,7 +286,26 @@ impl AuditRecord {
     }
 }
 
-/// Append a record. Newest first, so a plain `LRANGE 0 n` is the recent page.
+fn serialize(record: &AuditRecord) -> RedisResult<String> {
+    serde_json::to_string(record).map_err(|e| {
+        deadpool_redis::redis::RedisError::from((
+            deadpool_redis::redis::ErrorKind::TypeError,
+            "chat: audit serialize",
+            e.to_string(),
+        ))
+    })
+}
+
+/// Store a record once and index it under every table that should show it.
+///
+/// The record is written to its own key and only its **id** is pushed onto the
+/// category indexes — so an action that is both a player action and a list edit
+/// (a ban, an un-ban) appears in both tables while existing exactly once. That
+/// is the whole point: two views, one truth, nothing to keep in step.
+///
+/// `category` names the record's home index. It additionally joins the list
+/// index whenever [`AuditRecord::list`] is set; nothing writes to the list index
+/// directly, because a second writer is exactly how the two tables would drift.
 ///
 /// Failures are logged and swallowed by callers where the moderation action has
 /// already happened — losing the log line is bad, but failing the action the
@@ -197,33 +315,296 @@ pub async fn write(
     category: AuditCategory,
     record: &AuditRecord,
 ) -> RedisResult<()> {
-    let json = serde_json::to_string(record).map_err(|e| {
-        deadpool_redis::redis::RedisError::from((
-            deadpool_redis::redis::ErrorKind::TypeError,
-            "chat: audit serialize",
-            e.to_string(),
-        ))
-    })?;
-    conn.lpush(category.key(), json).await
+    debug_assert_ne!(
+        category,
+        AuditCategory::List,
+        "the list index is derived from the `list` tag — never a write target"
+    );
+
+    let event_id = ids::next_audit_id(conn).await?;
+    let mut stored = record.clone();
+    stored.event_id.clone_from(&event_id);
+    let json = serialize(&stored)?;
+
+    index_record(conn, category, &event_id, &json, &stored.list, None).await
 }
 
-/// Most recent `limit` records for a category, newest first.
+/// Write one record key and push its id onto the indexes it belongs in.
+///
+/// Atomic, so a failure can never leave an index pointing at a record that was
+/// not stored — a dangling pointer would render as a silently missing row.
+///
+/// `cursor` advances a migration cursor in the *same* transaction. Committing
+/// the record and the fact that it was migrated together is what makes
+/// [`migrate`] resumable: there is no window where a record is imported but not
+/// counted, so a crash never re-imports one it already wrote.
+async fn index_record(
+    conn: &mut deadpool_redis::Connection,
+    home: AuditCategory,
+    event_id: &str,
+    json: &str,
+    list: &str,
+    cursor: Option<(&str, usize)>,
+) -> RedisResult<()> {
+    let mut pipe = deadpool_redis::redis::pipe();
+    pipe.atomic();
+    pipe.set(record_key(event_id), json).ignore();
+    pipe.lpush(home.key(), event_id).ignore();
+    // Guarded on `home` as well as the tag so a list-tagged record whose home is
+    // somehow already List cannot be indexed onto it twice.
+    if !list.is_empty() && home != AuditCategory::List {
+        pipe.lpush(AuditCategory::List.key(), event_id).ignore();
+    }
+    if let Some((key, done)) = cursor {
+        pipe.set(key, done).ignore();
+    }
+    pipe.query_async(conn).await
+}
+
+/// How many records a page shows when no range is asked for.
+pub const DEFAULT_WINDOW: usize = 100;
+
+/// The most records one request may pull. A range is a free-text field reaching
+/// `LRANGE`, so this is the only thing standing between a typo and a query that
+/// loads the entire log into memory and renders it as one table.
+pub const MAX_WINDOW: usize = 500;
+
+/// A window into a category index, as 1-based inclusive record positions.
+///
+/// **Position 1 is the most recent record.** Indexes are built with `LPUSH`, so
+/// `1-100` is the newest hundred and larger numbers reach further back.
+///
+/// A window is not a search depth: filters apply *within* it, so a match outside
+/// the window will not appear. That is deliberate — "keep scanning until N
+/// matches" is unbounded work — but it means an empty result must name the
+/// window, or it reads as "this never happened" when it means "not in what you
+/// asked for". See [`AuditWindow::label`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditWindow {
+    first: usize,
+    last: usize,
+    /// Set when the request could not be honoured as typed.
+    pub notice: Option<String>,
+}
+
+impl Default for AuditWindow {
+    fn default() -> Self {
+        Self { first: 1, last: DEFAULT_WINDOW, notice: None }
+    }
+}
+
+impl AuditWindow {
+    /// Parse the Advanced Filter's Range field.
+    ///
+    /// | Input | Window |
+    /// |---|---|
+    /// | empty | `1-100` |
+    /// | `200` | `1-200` |
+    /// | `100-200` | `100-200` |
+    /// | reversed, zero, negative, junk | `1-100` with a notice |
+    /// | wider than [`MAX_WINDOW`] | clamped from `first`, with a notice |
+    ///
+    /// Never fails: an unusable range falls back to the default page rather than
+    /// erroring, because a moderator mistyping a filter should still see the log.
+    pub fn parse(raw: Option<&str>) -> Self {
+        let raw = raw.unwrap_or_default().trim();
+        if raw.is_empty() {
+            return Self::default();
+        }
+
+        let bounds = match raw.split_once('-') {
+            // A bare number reads as "the newest N".
+            None => raw.parse::<usize>().ok().map(|n| (1, n)),
+            Some((first, last)) => {
+                match (first.trim().parse::<usize>(), last.trim().parse::<usize>()) {
+                    (Ok(first), Ok(last)) => Some((first, last)),
+                    _ => None,
+                }
+            }
+        };
+
+        // Zero is rejected rather than treated as 1: positions are 1-based, so a
+        // `0-50` is a misunderstanding worth correcting rather than guessing at.
+        let Some((first, last)) = bounds.filter(|&(first, last)| first >= 1 && last >= first)
+        else {
+            return Self {
+                notice: Some(format!(
+                    "That isn't a valid range — showing the newest {DEFAULT_WINDOW} records. \
+                     Use a number like 200, or a span like 100-200."
+                )),
+                ..Self::default()
+            };
+        };
+
+        if last - first + 1 > MAX_WINDOW {
+            let capped = first.saturating_add(MAX_WINDOW - 1);
+            return Self {
+                first,
+                last: capped,
+                notice: Some(format!(
+                    "A range covers at most {MAX_WINDOW} records — showing {first}-{capped}."
+                )),
+            };
+        }
+
+        Self { first, last, notice: None }
+    }
+
+    /// 0-based inclusive `LRANGE` bounds.
+    ///
+    /// Saturating, because a position past `isize::MAX` would wrap to a negative
+    /// bound — which Redis reads as counting back from the end of the list, and
+    /// would silently return the wrong records rather than none.
+    fn bounds(&self) -> (isize, isize) {
+        let clamp = |v: usize| isize::try_from(v.saturating_sub(1)).unwrap_or(isize::MAX);
+        (clamp(self.first), clamp(self.last))
+    }
+
+    /// How the window is written for a moderator: `100-200`.
+    pub fn label(&self) -> String {
+        format!("{}-{}", self.first, self.last)
+    }
+}
+
+/// Records in `window` for a category, newest first.
+///
+/// Two round trips regardless of depth: `LRANGE` the index for the window, then
+/// one `MGET` for exactly those records. Paging deep costs the same as paging
+/// the first page, which is what makes an arbitrary range usable.
 pub async fn read(
     conn: &mut deadpool_redis::Connection,
     category: AuditCategory,
-    limit: isize,
+    window: &AuditWindow,
 ) -> RedisResult<Vec<AuditRecord>> {
-    let raw: Vec<String> = conn.lrange(category.key(), 0, limit - 1).await?;
+    let (start, stop) = window.bounds();
+    let ids: Vec<String> = conn.lrange(category.key(), start, stop).await?;
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let keys: Vec<String> = ids.iter().map(|id| record_key(id)).collect();
+    let raw: Vec<Option<String>> = conn.mget(&keys).await?;
+
     Ok(raw
         .into_iter()
-        .filter_map(|json| match serde_json::from_str::<AuditRecord>(&json) {
-            Ok(r) => Some(r),
-            Err(e) => {
-                tracing::warn!("chat: skipping malformed audit record: {}", e);
-                None
+        .zip(&ids)
+        .filter_map(|(json, event_id)| {
+            let Some(json) = json else {
+                // The index outlived the record it names. Skipping keeps the
+                // rest of the page readable, which matters more than the gap.
+                tracing::warn!(%event_id, "chat: audit index points at a missing record");
+                return None;
+            };
+            match serde_json::from_str::<AuditRecord>(&json) {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    tracing::warn!(%event_id, "chat: skipping malformed audit record: {}", e);
+                    None
+                }
             }
         })
         .collect())
+}
+
+/// Import pre-0.34.0 records into the record store and index them.
+///
+/// Runs at boot before either server binds, so no request can observe a
+/// half-migrated log.
+///
+/// # Resumable, never destructive
+///
+/// Each category keeps a cursor ([`AuditCategory::cursor_key`]) counting how many
+/// of its legacy records have been imported. Import replays the legacy list
+/// oldest-first and skips past the cursor, which is advanced **in the same
+/// transaction as the record it describes** — so there is no window where a
+/// record is written but not counted.
+///
+/// This is why nothing is ever deleted here. An earlier design rebuilt the
+/// indexes from scratch on every incomplete run, which made a crash self-healing
+/// but meant that clearing the marker on a live deployment silently orphaned
+/// every record written since the migration. A cursor makes the crash case
+/// resumable *and* leaves live data alone.
+///
+/// The cursor is only sound because the legacy lists are **immutable** — nothing
+/// writes to them after 0.34.0 — so a count taken from the oldest end always
+/// names the same records.
+///
+/// Failure modes, worst-case first:
+///
+/// | Situation | Result |
+/// |---|---|
+/// | Crash partway | Next boot resumes at the cursor; no duplicates, nothing lost |
+/// | Cursor cleared by hand | Legacy re-imports as **duplicate rows** — visible and fixable, never deletion |
+/// | Records written since | Untouched in every case |
+///
+/// The legacy lists are only ever read, so a rollback to an older server finds
+/// its data exactly as it left it.
+pub async fn migrate(conn: &mut deadpool_redis::Connection) -> RedisResult<()> {
+    for category in AuditCategory::ALL {
+        // Stored newest-first, so replay in reverse to preserve the original
+        // order in the rebuilt index.
+        let legacy: Vec<String> = conn.lrange(category.legacy_key(), 0, -1).await?;
+        let done: usize = conn.get(category.cursor_key()).await.unwrap_or(None).unwrap_or(0);
+        if done >= legacy.len() {
+            continue;
+        }
+
+        let mut moved = 0usize;
+        let mut skipped = 0usize;
+
+        for (position, json) in legacy.iter().rev().enumerate().skip(done) {
+            // The cursor counts records *considered*, not records written, so an
+            // unparseable one is stepped over permanently rather than retried on
+            // every boot forever.
+            let cursor = Some((category.cursor_key(), position + 1));
+
+            let Ok(mut record) = serde_json::from_str::<AuditRecord>(json) else {
+                // A record that will not parse cannot be rendered either, so it
+                // was already invisible. Counted, not fatal.
+                skipped += 1;
+                let _: () = conn.set(category.cursor_key(), position + 1).await?;
+                continue;
+            };
+
+            // Legacy List rows are un-bans — player actions that happen to edit
+            // a list. Under the new model their home is the player index, and
+            // the tag puts them back in the List view.
+            let home = match category {
+                AuditCategory::List => AuditCategory::Player,
+                other => other,
+            };
+            if category == AuditCategory::List && record.list.is_empty() {
+                // Keep it visible in the table it came from even if untagged.
+                record.list = crate::chat::bans::AUDIT_LIST_NAME.to_string();
+            }
+            let list = record.list.clone();
+
+            let event_id = ids::next_audit_id(conn).await?;
+            record.event_id.clone_from(&event_id);
+            let encoded = serialize(&record)?;
+            index_record(conn, home, &event_id, &encoded, &list, cursor).await?;
+            moved += 1;
+
+            // A large legacy log makes this the slowest part of boot, and it
+            // runs before either listener binds — so it must not look hung.
+            if moved.is_multiple_of(MIGRATION_PROGRESS_EVERY) {
+                tracing::info!(
+                    from = %category.legacy_key(),
+                    moved,
+                    total = legacy.len(),
+                    "chat: audit import in progress"
+                );
+            }
+        }
+
+        tracing::info!(
+            from = %category.legacy_key(),
+            moved,
+            skipped,
+            total = legacy.len(),
+            "chat: audit records imported"
+        );
+    }
+    Ok(())
 }
 
 /// Render a millisecond timestamp the way every audit table shows it:
@@ -240,22 +621,107 @@ mod tests {
 
     #[test]
     fn categories_map_to_distinct_keys() {
-        let keys = [
-            AuditCategory::Player.key(),
-            AuditCategory::Word.key(),
-            AuditCategory::List.key(),
-            AuditCategory::System.key(),
-        ];
+        let keys = AuditCategory::ALL.map(|c| c.key());
         assert_eq!(keys, [
+            "chat:audit:idx:player",
+            "chat:audit:idx:word",
+            "chat:audit:idx:list",
+            "chat:audit:idx:system",
+        ]);
+        // No index may shadow another's list.
+        let mut sorted = keys;
+        sorted.sort_unstable();
+        sorted.windows(2).for_each(|w| assert_ne!(w[0], w[1]));
+    }
+
+    /// The migration reads the legacy lists and writes the indexes. If any pair
+    /// collided it would be reading its own output — appending to a list it is
+    /// iterating, and duplicating every record it moved. Nothing else in the
+    /// code would catch that, so it is asserted directly.
+    #[test]
+    fn index_keys_never_collide_with_legacy_keys() {
+        for category in AuditCategory::ALL {
+            for other in AuditCategory::ALL {
+                assert_ne!(
+                    category.key(),
+                    other.legacy_key(),
+                    "index {:?} collides with legacy {:?}",
+                    category,
+                    other
+                );
+            }
+        }
+    }
+
+    /// The legacy names are the pre-0.34.0 on-disk contract. Changing one
+    /// silently strands a deployment's existing records: the migration would
+    /// find an empty list and report success.
+    #[test]
+    fn legacy_keys_are_the_pre_migration_names() {
+        assert_eq!(AuditCategory::ALL.map(|c| c.legacy_key()), [
             "chat:audit:player",
             "chat:audit:word",
             "chat:audit:list",
             "chat:audit:system",
         ]);
-        // No key may shadow another's list.
-        let mut sorted = keys;
+    }
+
+    /// Every key the migration touches must be distinct from every other. A
+    /// cursor sharing a name with an index would be overwritten by the very
+    /// import it is meant to track, and the migration would restart forever —
+    /// re-importing the whole legacy log on every boot.
+    #[test]
+    fn migration_cursors_collide_with_nothing() {
+        let cursors = AuditCategory::ALL.map(|c| c.cursor_key());
+        assert_eq!(cursors, [
+            "chat:audit:migrated:player",
+            "chat:audit:migrated:word",
+            "chat:audit:migrated:list",
+            "chat:audit:migrated:system",
+        ]);
+
+        let mut sorted = cursors;
         sorted.sort_unstable();
-        sorted.windows(2).for_each(|w| assert_ne!(w[0], w[1]));
+        sorted
+            .windows(2)
+            .for_each(|w| assert_ne!(w[0], w[1], "each category needs its own cursor"));
+
+        for cursor in cursors {
+            for category in AuditCategory::ALL {
+                assert_ne!(cursor, category.key());
+                assert_ne!(cursor, category.legacy_key());
+            }
+            assert!(!cursor.starts_with(RECORD_PREFIX));
+        }
+    }
+
+    /// Records live under their own prefix, distinct from every index — a record
+    /// key colliding with an index key would make one overwrite the other.
+    #[test]
+    fn record_keys_sit_outside_the_indexes() {
+        let key = record_key("a00000000001");
+        assert_eq!(key, "chat:audit:rec:a00000000001");
+        for category in AuditCategory::ALL {
+            assert_ne!(key, category.key());
+            assert_ne!(key, category.legacy_key());
+            assert!(!key.starts_with(category.key()));
+        }
+    }
+
+    /// `event_id` is assigned by `write`, so a freshly built record must not
+    /// carry one — a caller-set id would be overwritten and the mismatch would
+    /// only show up as an index pointing somewhere unexpected.
+    #[test]
+    fn a_fresh_record_has_no_event_id() {
+        let r = AuditRecord::by_moderator("jeanluc", "sub", AdminRole::Admin, "Ban", "Slurs");
+        assert!(r.event_id.is_empty());
+
+        // And it survives a round trip once set, since the indexes hold it.
+        let mut stored = r.clone();
+        stored.event_id = "a00000000007".into();
+        let back: AuditRecord =
+            serde_json::from_str(&serde_json::to_string(&stored).unwrap()).unwrap();
+        assert_eq!(back.event_id, "a00000000007");
     }
 
     #[test]
@@ -340,6 +806,25 @@ mod tests {
         assert_eq!(r.target_player_id, None);
         assert_eq!(r.cut_index, 0);
         assert_eq!(r.delivered, None, "records predating warnings must load");
+        assert!(!r.full, "records predating bans must still truncate at the cut");
+    }
+
+    /// The whole point of the flag: a ban keeps the conversation after it, every
+    /// other record stops at the cut.
+    #[test]
+    fn only_a_full_record_asks_for_the_whole_transcript() {
+        let ban = AuditRecord::by_moderator("jeanluc", "sub", AdminRole::Moderator, "Ban", "Slurs")
+            .with_snapshot("a00000000001", 3, vec!["a00000000002".into()])
+            .full();
+        assert!(ban.full);
+        assert_eq!(ban.cut_index, 3, "the cut survives as the action-point marker");
+
+        let warn = AuditRecord::by_moderator("jeanluc", "sub", AdminRole::Moderator, "Warn", "Spam")
+            .with_snapshot("a00000000001", 3, vec![]);
+        assert!(!warn.full);
+
+        let back: AuditRecord = serde_json::from_str(&serde_json::to_string(&ban).unwrap()).unwrap();
+        assert!(back.full, "the flag must survive a round trip");
     }
 
     /// Undelivered is a distinct state from not-applicable: a warning that never
@@ -361,6 +846,84 @@ mod tests {
             "Slur",
         );
         assert_eq!(word.delivered, None, "a word action sends nothing");
+    }
+
+    #[test]
+    fn a_missing_or_empty_range_is_the_newest_default_page() {
+        for raw in [None, Some(""), Some("   ")] {
+            let w = AuditWindow::parse(raw);
+            assert_eq!(w, AuditWindow::default(), "{raw:?}");
+            assert_eq!(w.bounds(), (0, DEFAULT_WINDOW as isize - 1));
+            assert!(w.notice.is_none(), "the default is not a correction");
+        }
+    }
+
+    /// Position 1 is the newest record, so a bare number reads as "the newest N"
+    /// and a span reaches further back. Getting this inverted would silently
+    /// serve the oldest records to someone asking for the latest.
+    #[test]
+    fn ranges_map_to_zero_based_lrange_bounds() {
+        assert_eq!(AuditWindow::parse(Some("200")).bounds(), (0, 199));
+        assert_eq!(AuditWindow::parse(Some("100-200")).bounds(), (99, 199));
+        assert_eq!(AuditWindow::parse(Some("1-1")).bounds(), (0, 0));
+        // Whitespace around the parts is a typo, not a rejection.
+        assert_eq!(AuditWindow::parse(Some(" 100 - 200 ")).bounds(), (99, 199));
+    }
+
+    #[test]
+    fn unusable_ranges_fall_back_to_the_default_with_a_notice() {
+        for raw in [
+            "200-100", // reversed
+            "0-50",    // positions are 1-based
+            "0",
+            "-5",
+            "5-",
+            "-",
+            "abc",
+            "100-abc",
+            "1.5",
+            "1-2-3",
+        ] {
+            let w = AuditWindow::parse(Some(raw));
+            assert_eq!(w.bounds(), (0, DEFAULT_WINDOW as isize - 1), "{raw} should fall back");
+            assert!(w.notice.is_some(), "{raw} must say it was not honoured");
+        }
+    }
+
+    /// The guard that keeps a text field from pulling the whole log into one
+    /// page. Clamping keeps the requested start — a moderator asking for old
+    /// records gets old records, just fewer of them.
+    #[test]
+    fn oversized_ranges_clamp_from_the_requested_start() {
+        let w = AuditWindow::parse(Some("1-99999"));
+        assert_eq!(w.label(), format!("1-{MAX_WINDOW}"));
+        assert_eq!(w.bounds(), (0, MAX_WINDOW as isize - 1));
+        assert!(w.notice.is_some(), "a clamp must be visible, not silent");
+
+        let w = AuditWindow::parse(Some("1000-99999"));
+        assert_eq!(w.label(), format!("1000-{}", 1000 + MAX_WINDOW - 1));
+        assert_eq!(w.bounds().0, 999, "the requested start survives the clamp");
+
+        // Exactly at the cap is honoured as typed.
+        let exact = AuditWindow::parse(Some(&format!("1-{MAX_WINDOW}")));
+        assert!(exact.notice.is_none());
+    }
+
+    /// A position past `isize::MAX` must not wrap negative — Redis reads a
+    /// negative `LRANGE` bound as counting back from the end, so it would return
+    /// the *oldest* records to someone who asked for the newest.
+    #[test]
+    fn absurd_positions_saturate_instead_of_wrapping() {
+        let w = AuditWindow::parse(Some(&format!("{}-{}", usize::MAX, usize::MAX)));
+        let (start, stop) = w.bounds();
+        assert!(start >= 0 && stop >= 0, "bounds must never go negative: {start}..{stop}");
+    }
+
+    #[test]
+    fn the_label_reads_back_as_the_range_that_was_asked_for() {
+        assert_eq!(AuditWindow::parse(Some("100-200")).label(), "100-200");
+        assert_eq!(AuditWindow::parse(Some("200")).label(), "1-200");
+        assert_eq!(AuditWindow::default().label(), format!("1-{DEFAULT_WINDOW}"));
     }
 
     #[test]

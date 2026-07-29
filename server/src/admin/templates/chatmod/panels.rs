@@ -138,16 +138,17 @@ pub(super) fn transcript_html(transcript: &[ChatMessage]) -> String {
                 MessageRole::Player => "",
                 MessageRole::Moderator => r#"<span class="cm-msg-mod">MOD</span> "#,
                 MessageRole::Warning => r#"<span class="cm-msg-warn">WARNED</span> "#,
+                MessageRole::Ban => r#"<span class="cm-msg-ban">BANNED</span> "#,
             };
             // A warning's header reads as an action on someone, not as something
             // they said — and says plainly when it never reached them, because
             // warnings are not queued and a moderator would otherwise assume it
             // landed.
             let sent_to = match (role, m.delivered) {
-                (MessageRole::Warning, Some(true)) => {
+                (MessageRole::Warning | MessageRole::Ban, Some(true)) => {
                     r#"<span class="cm-msg-sent">sent to player</span> "#.to_string()
                 }
-                (MessageRole::Warning, _) => {
+                (MessageRole::Warning | MessageRole::Ban, _) => {
                     r#"<span class="cm-msg-undelivered">not delivered</span> "#.to_string()
                 }
                 _ => String::new(),
@@ -170,6 +171,7 @@ pub(super) fn transcript_html(transcript: &[ChatMessage]) -> String {
             };
             let role_class = match role {
                 MessageRole::Warning => " cm-msg-warning",
+                MessageRole::Ban => " cm-msg-banned",
                 _ => "",
             };
             format!(

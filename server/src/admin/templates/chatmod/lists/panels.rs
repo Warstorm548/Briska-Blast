@@ -4,6 +4,7 @@
 use shared::types::player::PlayerId;
 
 use super::super::super::common::escape;
+use super::super::audit::modals::audit_modal_html;
 use super::super::model::{BannedUser, BlacklistWord, SuspendedUser};
 
 /// The **Backlisted Words** sub-tab: a three-column tools panel (add / remove /
@@ -94,21 +95,35 @@ pub(super) fn blacklist_panel_html(words: &[BlacklistWord], from: Option<&str>) 
 }
 
 /// The **Banned Users** sub-tab: a *To Ban* / *Banned User Tools* panel over the
-/// ban ledger. Ban and UnBan each open the shared confirm modal. Preview only.
-pub(super) fn banned_panel_html(banned: &[BannedUser]) -> String {
+/// ban ledger. Ban and UnBan each open the shared confirm modal, which is the
+/// only thing that submits — a permanent action never fires from one click.
+///
+/// A row's Transcript opens the audit page's snapshot overlay, showing the
+/// **whole** conversation the ban happened in with the action point marked. Bans
+/// applied from this page have no session context and show an em-dash instead.
+pub(super) fn banned_panel_html(banned: &[BannedUser], from: Option<&str>) -> String {
+    let from_field = match from {
+        Some(code) => format!(r#"<input type="hidden" name="from" value="{}">"#, escape(code)),
+        None => String::new(),
+    };
     let table = if banned.is_empty() {
         r#"<p class="cm-empty">No banned users.</p>"#.to_string()
     } else {
         let rows = banned
             .iter()
-            .map(|b| {
+            .enumerate()
+            .map(|(i, b)| {
                 let pid = PlayerId::from_counter(b.player_id);
-                let transcript = if b.has_transcript {
-                    r#"<button type="button" class="btn btn-sm">Transcript</button>"#.to_string()
+                let transcript = if b.has_transcript() {
+                    format!(
+                        r#"<button type="button" class="btn btn-sm" onclick="bbCmAuditOpen('banned-{i}')">Transcript</button>"#
+                    )
                 } else {
                     r#"<span class="cm-audit-none">&mdash;</span>"#.to_string()
                 };
                 let user = escape(&b.username);
+                // The checkbox carries the id UnBan acts on, so the confirm
+                // dialog never has to read it back out of the rendered row.
                 format!(
                     r#"<tr>
             <td class="cm-audit-ts mono">{ts}</td>
@@ -116,7 +131,7 @@ pub(super) fn banned_panel_html(banned: &[BannedUser]) -> String {
             <td><span class="cm-pid mono" data-copy="{pid}" role="button" tabindex="0" title="Copy player ID">{pid}</span></td>
             <td>{reason}</td>
             <td>{transcript}</td>
-            <td class="cm-lists-check"><input type="checkbox" aria-label="Select {user}"></td>
+            <td class="cm-lists-check"><input type="checkbox" class="cm-lists-ban-pick" data-pid="{pid}" aria-label="Select {user}"></td>
           </tr>"#,
                     ts = escape(&b.timestamp),
                     reason = escape(&b.reason),
@@ -134,28 +149,58 @@ pub(super) fn banned_panel_html(banned: &[BannedUser]) -> String {
       </table>"#
         )
     };
+    // Both forms are submitted by their confirm dialog, never by the visible
+    // button — a permanent action must not fire from a single click.
+    let modals = banned
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.has_transcript())
+        .map(|(i, b)| {
+            let subject = format!(
+                r#"{user} <span class="cm-pid mono">ID {pid}</span>"#,
+                user = escape(&b.username),
+                pid = PlayerId::from_counter(b.player_id),
+            );
+            audit_modal_html(
+                &format!("banned-{i}"),
+                "Ban",
+                &subject,
+                &[],
+                &b.snapshot,
+                b.snapshot_cut,
+            )
+        })
+        .collect::<String>();
     format!(
         r#"<div class="cm-lists-tools">
-  <div class="cm-lists-tool">
+  <form class="cm-lists-tool" method="post" action="/admin/chatmod/lists/ban" id="cm-lists-ban-form">
+    {from_field}
     <p class="cm-lists-tool-title">To Ban</p>
     <label for="cm-lists-ban-id">User ID</label>
-    <input type="text" id="cm-lists-ban-id" placeholder="Player ID" aria-label="User ID to ban">
+    <input type="text" id="cm-lists-ban-id" name="ids" placeholder="Player ID" aria-label="User ID to ban">
     <label for="cm-lists-ban-reason">Reason</label>
-    <input type="text" id="cm-lists-ban-reason" placeholder="Reason (logged)">
+    <input type="text" id="cm-lists-ban-reason" name="reason" placeholder="Reason (logged)">
     <label for="cm-lists-ban-words">Offensive Words</label>
-    <input type="text" id="cm-lists-ban-words" placeholder="Word or words &mdash; separate with ;">
-    <button type="button" class="btn btn-danger btn-sm" onclick="bbCmListsAsk('cm-lists-ban-modal')">Ban User</button>
-  </div>
+    <input type="text" id="cm-lists-ban-words" name="words" placeholder="Word or words &mdash; separate with ;">
+    <button type="button" class="btn btn-danger btn-sm" onclick="bbCmListsBanAsk()">Ban User</button>
+  </form>
   <div class="cm-lists-tool">
     <p class="cm-lists-tool-title">Banned User Tools</p>
     <p class="cm-lists-hint">To un-ban: tick the checkbox of each user you want to reinstate, then press UnBan. You'll confirm with a required reason.</p>
-    <button type="button" class="btn btn-sm" onclick="bbCmListsAsk('cm-lists-unban-modal')">UnBan</button>
+    <button type="button" class="btn btn-sm" onclick="bbCmListsUnbanAsk()">UnBan</button>
   </div>
 </div>
+<form method="post" action="/admin/chatmod/lists/unban" id="cm-lists-unban-form" hidden>
+  {from_field}
+  <input type="hidden" name="ids" id="cm-lists-unban-ids">
+  <input type="hidden" name="reason" id="cm-lists-unban-reason">
+</form>
+<p class="cm-lists-note">More than one player can be banned at once &mdash; separate each ID with a <span class="mono">;</span>. A ban removes chat privileges permanently and account-wide; the player keeps playing.</p>
 <p class="cm-lists-title">Banned Users</p>
 <div class="cm-audit-scroll">
   {table}
-</div>"#
+</div>
+{modals}"#
     )
 }
 

@@ -48,10 +48,10 @@ pub(super) fn chat_nav_html(lists_href: &str, audit_href: &str, current: ChatNav
 
 /// The session view's "Quick Access Tools" panel.
 ///
-/// Warn, Warn + Delete and Blacklist Words post through `fetch` (see
+/// Warn, Warn + Delete, Ban and Blacklist Words post through `fetch` (see
 /// `script.rs`) rather than as forms, because the page is polling a live
 /// transcript — a redirect would cost the moderator their place in the
-/// conversation. Suspend and Ban remain inert placeholders.
+/// conversation. Suspend remains an inert placeholder.
 ///
 /// Stays a `const` with no interpolation: the session code the handlers need is
 /// already page-wide on `<body data-cm-code>`, which is how `bbCmSay` reaches it.
@@ -116,7 +116,7 @@ pub(super) const TOOLS_HTML: &str = r#"<div class="cm-panel cm-tools">
         <p class="cm-tool-group-title">Moderator Chat Settings</p>
         <label class="cm-check"><input type="checkbox" id="cm-show-name"> Appear As Your Display Name</label>
       </div>
-      <p class="note">Suspend, Ban and Approve Word are not wired up yet.</p>
+      <p class="note">Suspend and Approve Word are not wired up yet.</p>
       </div>
     </div>
     <div id="cm-ban-modal" class="modal-backdrop" onclick="if(event.target===this)bbCmBanClose()">
@@ -125,7 +125,7 @@ pub(super) const TOOLS_HTML: &str = r#"<div class="cm-panel cm-tools">
         <p class="section-sub" id="cm-ban-desc">Permanently remove chat privileges for <span id="cm-ban-who" class="mono"></span>?<br>Reason: <span id="cm-ban-why"></span><br>The player keeps playing; reversible only via Moderation Lists.</p>
         <div class="modal-actions">
           <button type="button" class="btn btn-sm" id="cm-ban-cancel" onclick="bbCmBanClose()">Cancel</button>
-          <button type="button" class="btn btn-danger btn-sm" onclick="bbCmBanClose()">Confirm Chat Ban</button>
+          <button type="button" class="btn btn-danger btn-sm" onclick="bbCmBanConfirm()">Confirm Chat Ban</button>
         </div>
       </div>
     </div>"#;

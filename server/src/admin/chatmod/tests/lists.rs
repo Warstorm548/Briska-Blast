@@ -65,10 +65,29 @@ fn lists_page_renders_subtabs_and_tables() {
     for col in ["Timestamp", "Username", "User ID", "Reason For Ban", "Transcript", "CheckBox"] {
         assert!(html.contains(&format!("<th>{col}</th>")), "missing banned column {col}");
     }
-    assert!(html.contains(r#"onclick="bbCmListsAsk('cm-lists-ban-modal')""#));
-    assert!(html.contains(r#"onclick="bbCmListsAsk('cm-lists-unban-modal')""#));
-    // Banned rows show the canonical zero-padded player id, tap-to-copy.
+    // Ban and UnBan are real posts now, but only the confirm dialog submits —
+    // neither visible button may carry a form action of its own.
+    assert!(html.contains(r#"action="/admin/chatmod/lists/ban""#));
+    assert!(html.contains(r#"action="/admin/chatmod/lists/unban""#));
+    assert!(html.contains(r#"onclick="bbCmListsBanAsk()""#));
+    assert!(html.contains(r#"onclick="bbCmListsUnbanAsk()""#));
+    assert!(html.contains(r#"onclick="bbCmListsBanConfirm()""#));
+    assert!(html.contains(r#"onclick="bbCmListsUnbanConfirm()""#));
+    // Banned rows show the canonical zero-padded player id, tap-to-copy, and
+    // carry it on the checkbox so UnBan reads the selection from the ticks
+    // rather than parsing it back out of markup the poll rewrites.
     assert!(html.contains(r#"data-copy="000000012""#));
+    assert!(html.contains(r#"class="cm-lists-ban-pick" data-pid="000000012""#));
+
+    // A ban carries the whole conversation with the action point marked; the
+    // divider is the only thing separating evidence from what came after it.
+    assert!(html.contains(r#"id="cm-audit-back-banned-0""#));
+    assert!(html.contains(r#"onclick="bbCmAuditOpen('banned-0')""#));
+    assert!(html.contains("everything below happened afterwards"));
+    // The second fixture ban came from this page and has no session context, so
+    // it must offer no overlay at all rather than an empty one.
+    assert!(!html.contains(r#"id="cm-audit-back-banned-1""#));
+    assert!(html.contains(r#"<span class="cm-audit-none">&mdash;</span>"#));
     // Active Suspensions columns + the three duration fields.
     for col in ["TimeStamp", "Suspended For", "Remaining Time Left"] {
         assert!(html.contains(&format!("<th>{col}</th>")), "missing suspension column {col}");
@@ -107,4 +126,44 @@ fn lists_close_target_follows_session_context() {
     assert!(from_session.contains(r#"href="/admin/chatmod/session/FJ5B3V" class="cm-close""#));
     // ...and the Chat Audit Logs nav link forwards the same session context.
     assert!(from_session.contains(r#"href="/admin/chatmod/audit?from=FJ5B3V""#));
+}
+
+/// A write that errored is not the same as a selection that was already banned.
+/// One needs the moderator to act again; the other needs nothing. Collapsing
+/// them would let a failed ban read as a finished one.
+#[test]
+fn a_failed_ban_is_named_apart_from_an_already_banned_one() {
+    let msg = super::super::bans::ban_summary(
+        &["000000007".into()],
+        &["000000012".into()],
+        &[],
+        &["000000042".into()],
+    );
+    assert!(msg.contains("Banned 1 player"));
+    assert!(msg.contains("Already banned: 000000012."));
+    assert!(msg.contains("Could not be banned — try again: 000000042."));
+
+    // With nothing failing, the message gains no failure clause.
+    let clean = super::super::bans::ban_summary(&["000000007".into()], &[], &[], &[]);
+    assert!(!clean.contains("try again"));
+}
+
+/// The count of "was not banned" must exclude selections that errored — those
+/// are still banned, and reporting them as no-ops hides that work remains.
+#[test]
+fn unban_failures_are_excluded_from_the_not_banned_count() {
+    // Three ticked: one lifted, one errored, one simply wasn't banned.
+    let msg = super::super::bans::unban_summary(1, 3, &["000000042".into()]);
+    assert!(msg.contains("Un-banned 1 user"));
+    assert!(msg.contains("1 was not banned"), "got: {msg}");
+    assert!(msg.contains("Could not be un-banned — try again: 000000042."));
+
+    // Everything ticked lifted cleanly — no trailing clauses at all.
+    let clean = super::super::bans::unban_summary(2, 2, &[]);
+    assert_eq!(clean, "Un-banned 2 users.");
+
+    // Nothing lifted because everything errored is not "none were banned":
+    // they are all still banned.
+    let all_failed = super::super::bans::unban_summary(0, 1, &["000000042".into()]);
+    assert!(all_failed.starts_with("No bans were lifted."), "got: {all_failed}");
 }

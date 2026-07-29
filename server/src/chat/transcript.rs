@@ -22,7 +22,8 @@
 //!
 //! - **Nothing flagged, no moderator involvement** → deleted outright.
 //! - **A blacklisted word fired** → retained, and marked flagged (the red dot).
-//! - **A moderator acted, or typed a single message** → retained.
+//! - **A moderator acted, or typed a single message** → retained. "Acted" covers
+//!   every non-player line: a moderator post, a warning, a ban, a deletion mark.
 //!
 //! Retention is one `SADD`; nothing is copied or moved. [`on_session_end`] is the
 //! single decision point, called from every path that ends a session.
@@ -90,6 +91,15 @@ pub enum MessageKind {
     /// moderator. `mod_anonymous` does not apply — a warning names no moderator
     /// on the wire, and the panel always shows the real one.
     Warning,
+    /// A chat ban a moderator applied to one player. Same field roles as
+    /// [`MessageKind::Warning`] — `player_id`/`username` are the target, `text`
+    /// is the reason — and likewise never broadcast; only the banned player
+    /// received `ServerMsg::ChatBanned`.
+    ///
+    /// Recorded in the transcript so the intervention sits in the conversation
+    /// that prompted it, which is also what marks the point a reviewer is looking
+    /// for when reading the full-transcript view of a ban record.
+    Ban,
 }
 
 /// One captured chat line.
@@ -234,9 +244,13 @@ pub async fn append(
     if msg.is_flagged() {
         pipe.sadd(FLAGGED_KEY, &sid).ignore();
         pipe.sadd(RETAINED_KEY, &sid).ignore();
-    } else if msg.kind == MessageKind::Moderator {
-        // A deliberate intervention in a player-facing channel stays on the
-        // record even when it was posted anonymously.
+    } else if msg.kind != MessageKind::Player {
+        // Any moderator involvement retains — a posted message (even an
+        // anonymous one), a warning, or a ban. Testing for "not a player line"
+        // rather than listing the moderator kinds is deliberate: this branch
+        // previously named `Moderator` alone, so a warning in an otherwise-clean
+        // session left the transcript unretained and teardown deleted the very
+        // conversation the warning's audit record pinned a snapshot into.
         pipe.sadd(RETAINED_KEY, &sid).ignore();
     }
     let _: () = pipe.query_async(&mut *conn).await?;

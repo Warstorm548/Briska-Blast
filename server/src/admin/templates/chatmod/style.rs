@@ -121,7 +121,11 @@ body.cm-resizing { cursor: col-resize; user-select: none; }
 .cm-audit-filter-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #8b949e; margin-bottom: 6px; }
 .cm-audit-filter-note { font-size: 0.8rem; color: #6e7681; min-height: 34px; }
 /* category dropdown: picks which log table + filter renders */
-.cm-audit-select { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.cm-filter-actions { display: flex; gap: 8px; margin-top: 10px; }
+.cm-audit-window { font-size: 0.8rem; color: #8b949e; }
+.cm-audit-window strong { color: #c9d1d9; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.cm-audit-window-notice { background: #2d2100; border: 1px solid #d29922; border-radius: 6px; color: #e3b341; font-size: 0.85rem; padding: 8px 12px; margin-bottom: 14px; }
+.cm-audit-select { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
 .cm-audit-select label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #8b949e; }
 .cm-audit-select select { min-width: 180px; }
 /* per-table Advanced Filter: shared spine group beside the table-specific one */
@@ -151,6 +155,9 @@ body.cm-resizing { cursor: col-resize; user-select: none; }
 .cm-audit-words { white-space: normal; }
 .cm-audit-words .cm-flag { margin-right: 4px; }
 .cm-audit-none { color: #6e7681; }
+/* the action-point divider in a full-transcript snapshot (bans). Without it a
+   reviewer would read what came after the ban as the evidence that led to it */
+.cm-audit-cut { margin: 10px 0; padding: 3px 8px; border-top: 1px dashed #f85149; border-bottom: 1px dashed #f85149; color: #f85149; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; text-align: center; }
 /* multi-body cell: a ×N disclosure condensing one player's covered bodies */
 .cm-audit-bodies > summary { cursor: pointer; list-style: none; }
 .cm-audit-bodies > summary::-webkit-details-marker { display: none; }
@@ -168,8 +175,12 @@ body.cm-resizing { cursor: col-resize; user-select: none; }
 .cm-msg-warning { border-left: 3px solid #a371f7; }
 .cm-msg-warn { display: inline-block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1px; color: #a371f7; border: 1px solid #a371f7; border-radius: 10px; padding: 0 6px; margin-right: 4px; }
 .cm-msg-sent { color: #a371f7; font-size: 0.72rem; }
-/* undelivered is the state a moderator must not miss: warnings are never
-   queued, so this one never reached the player and never will */
+/* a chat ban: red, deliberately the same hue as a blacklisted word and the
+   client's own ban notice, because it is the panel's one permanent action */
+.cm-msg-banned { border-left: 3px solid #f85149; }
+.cm-msg-ban { display: inline-block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1px; color: #f85149; border: 1px solid #f85149; border-radius: 10px; padding: 0 6px; margin-right: 4px; }
+/* undelivered is the state a moderator must not miss: warnings and bans are
+   never queued, so this one never reached the player at the time */
 .cm-msg-undelivered { color: #f85149; font-size: 0.72rem; font-weight: 700; }
 /* deleted bodies stay on the moderation surface — the moderator's copy is the
    record — but read as withdrawn rather than live */

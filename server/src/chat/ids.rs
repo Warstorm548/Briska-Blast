@@ -1,9 +1,22 @@
-//! Server-assigned **message-body identifiers** — the 12-character handle every
-//! chat message carries so moderation tools have something stable to point at.
+//! Server-assigned **moderation identifiers** — the 12-character handles that
+//! give moderation tools something stable to point at.
+//!
+//! Two independent sequences, same scheme:
+//!
+//! | Sequence | Issued by | Identifies |
+//! |---|---|---|
+//! | body | [`next_body_id`] | a chat message, so a record can cite it |
+//! | audit | [`next_audit_id`] | an audit record, so a category index can point at one instead of storing a copy |
+//!
+//! They are deliberately **separate counters**. Sharing one would make body ids
+//! jump forward every time a moderator acted, which reads like lost messages
+//! when scanning a transcript, and would leave an id ambiguous about which store
+//! it addresses.
 //!
 //! Shape: one `epoch` character followed by an 11-character base62 `tail`, e.g.
 //! `a00000004Kx9`. The tail is a monotonic counter, so ids sort lexicographically
-//! in issue order — a useful property when reading a transcript or an audit log.
+//! in issue order — a useful property when reading a transcript or an audit log,
+//! and the reason a category index built by `LPUSH` is ordered by construction.
 //!
 //! # Why a plain counter
 //!
@@ -41,9 +54,11 @@
 //! be dead code — it exists so the scheme has no real ceiling rather than an
 //! arbitrary one.
 //!
-//! **Operational note:** `chat:body:counter` and `chat:body:epoch` must never be
-//! flushed. Resetting either would re-issue ids that already appear in retained
-//! transcripts and audit records.
+//! **Operational note:** `chat:body:counter`, `chat:body:epoch`,
+//! `chat:audit:counter` and `chat:audit:epoch` must never be flushed. Resetting
+//! any of them would re-issue ids that already appear in retained transcripts,
+//! in audit records, or — for the audit sequence — in the category indexes,
+//! where a repeated id silently makes two different records the same row.
 
 use deadpool_redis::redis::{RedisResult, Script};
 
@@ -61,11 +76,19 @@ const FIRST_EPOCH: char = 'a';
 /// Characters in the counter portion of an id.
 const TAIL_LEN: usize = 11;
 
-/// Total id width. Every moderation surface renders exactly this many chars.
-const BODY_ID_LEN: usize = TAIL_LEN + 1;
+/// Total id width, shared by every sequence. Every moderation surface renders
+/// exactly this many chars.
+const ID_LEN: usize = TAIL_LEN + 1;
 
-const COUNTER_KEY: &str = "chat:body:counter";
-const EPOCH_KEY: &str = "chat:body:epoch";
+const BODY_COUNTER_KEY: &str = "chat:body:counter";
+const BODY_EPOCH_KEY: &str = "chat:body:epoch";
+
+/// Audit-event ids run on their own counter rather than sharing the body
+/// sequence. Two reasons: audit volume would otherwise make body ids jump in
+/// ways that look like lost messages when reading a transcript, and an id can
+/// then never be ambiguous about which store it addresses.
+const AUDIT_COUNTER_KEY: &str = "chat:audit:counter";
+const AUDIT_EPOCH_KEY: &str = "chat:audit:epoch";
 
 /// Counter value past which the epoch advances. Set below `i64::MAX`
 /// (9_223_372_036_854_775_807) so there is ample slack between the trigger and an
@@ -107,11 +130,12 @@ fn encode_tail(n: i64) -> String {
 }
 
 /// Compose an id from an epoch character and a counter value.
-fn format_body_id(epoch: char, counter: i64) -> String {
+fn format_id(epoch: char, counter: i64) -> String {
     let id = format!("{epoch}{}", encode_tail(counter));
-    // Every moderation surface renders a fixed-width id, and audit records match
-    // bodies by string equality — a short id would silently fail to match.
-    debug_assert_eq!(id.len(), BODY_ID_LEN, "body id must be exactly {BODY_ID_LEN} chars");
+    // Every moderation surface renders a fixed-width id, and both audit records
+    // and the category indexes match by string equality — a short id would
+    // silently fail to match.
+    debug_assert_eq!(id.len(), ID_LEN, "id must be exactly {ID_LEN} chars");
     id
 }
 
@@ -135,55 +159,85 @@ fn parse_epoch(stored: Option<String>) -> char {
         .unwrap_or(FIRST_EPOCH)
 }
 
-/// Issue the next body id.
+/// Issue the next id on the sequence held by `counter_key` / `epoch_key`.
 ///
 /// One round trip: `INCR` the counter and `GET` the epoch in a single
 /// transaction. When the counter crosses [`EPOCH_LIMIT`] the id is still returned
 /// under the current epoch (see the module docs — it is unique and correctly
 /// sized), and the epoch is advanced afterwards for subsequent callers.
-pub async fn next_body_id(conn: &mut deadpool_redis::Connection) -> RedisResult<String> {
+///
+/// Sequences are independent: each keeps its own counter and epoch, so exhausting
+/// or advancing one has no effect on any other.
+async fn next_id(
+    conn: &mut deadpool_redis::Connection,
+    counter_key: &str,
+    epoch_key: &str,
+) -> RedisResult<String> {
     let (counter, epoch_raw): (i64, Option<String>) = deadpool_redis::redis::pipe()
         .atomic()
-        .incr(COUNTER_KEY, 1)
-        .get(EPOCH_KEY)
+        .incr(counter_key, 1)
+        .get(epoch_key)
         .query_async(conn)
         .await?;
 
     let epoch = parse_epoch(epoch_raw);
-    let id = format_body_id(epoch, counter);
+    let id = format_id(epoch, counter);
 
     if counter > EPOCH_LIMIT {
-        advance_epoch(conn, epoch).await;
+        advance_epoch(conn, epoch, counter_key, epoch_key).await;
     }
 
     Ok(id)
 }
 
-/// Move the epoch forward, guarded on `observed` so exactly one racing caller
-/// wins. Failures are logged and swallowed: the current epoch still has ~2e17
-/// counter values of slack before `INCR` could overflow, so a missed advance is
-/// recoverable on any later call.
-async fn advance_epoch(conn: &mut deadpool_redis::Connection, observed: char) {
+/// Issue the next **message-body** id — the handle a chat message carries.
+pub async fn next_body_id(conn: &mut deadpool_redis::Connection) -> RedisResult<String> {
+    next_id(conn, BODY_COUNTER_KEY, BODY_EPOCH_KEY).await
+}
+
+/// Issue the next **audit-event** id — the handle an audit record is stored
+/// under and referenced by from the category indexes.
+pub async fn next_audit_id(conn: &mut deadpool_redis::Connection) -> RedisResult<String> {
+    next_id(conn, AUDIT_COUNTER_KEY, AUDIT_EPOCH_KEY).await
+}
+
+/// Move a sequence's epoch forward, guarded on `observed` so exactly one racing
+/// caller wins. Failures are logged and swallowed: the current epoch still has
+/// ~2e17 counter values of slack before `INCR` could overflow, so a missed
+/// advance is recoverable on any later call.
+async fn advance_epoch(
+    conn: &mut deadpool_redis::Connection,
+    observed: char,
+    counter_key: &str,
+    epoch_key: &str,
+) {
     let Some(next) = next_epoch(observed) else {
+        // Named by key like the arms below: with two sequences, "body-id" here
+        // would misattribute an exhausted audit sequence to chat messages.
         tracing::error!(
+            key = %epoch_key,
             epoch = %observed,
-            "chat: body-id epochs exhausted — ids remain unique but the scheme is at its ceiling"
+            "chat: id epochs exhausted — ids remain unique but the scheme is at its ceiling"
         );
         return;
     };
 
     let result: RedisResult<i64> = Script::new(ADVANCE_EPOCH_SCRIPT)
-        .key(EPOCH_KEY)
-        .key(COUNTER_KEY)
+        .key(epoch_key)
+        .key(counter_key)
         .arg(observed.to_string())
         .arg(next.to_string())
         .invoke_async(&mut *conn)
         .await;
 
     match result {
-        Ok(1) => tracing::warn!(from = %observed, to = %next, "chat: body-id epoch advanced"),
-        Ok(_) => tracing::debug!("chat: body-id epoch already advanced by another caller"),
-        Err(e) => tracing::error!("chat: body-id epoch advance failed: {}", e),
+        Ok(1) => {
+            tracing::warn!(key = %epoch_key, from = %observed, to = %next, "chat: id epoch advanced")
+        }
+        Ok(_) => {
+            tracing::debug!(key = %epoch_key, "chat: id epoch already advanced by another caller")
+        }
+        Err(e) => tracing::error!(key = %epoch_key, "chat: id epoch advance failed: {}", e),
     }
 }
 
@@ -231,7 +285,7 @@ mod tests {
     fn ids_sort_in_issue_order() {
         let mut ids: Vec<String> = [1i64, 2, 61, 62, 1000, 999_999, i64::MAX / 2]
             .iter()
-            .map(|&n| format_body_id('a', n))
+            .map(|&n| format_id('a', n))
             .collect();
         let expected = ids.clone();
         ids.sort();
@@ -240,8 +294,8 @@ mod tests {
 
     #[test]
     fn ids_are_twelve_chars_with_a_letter_epoch() {
-        let id = format_body_id('a', 271_828);
-        assert_eq!(id.len(), BODY_ID_LEN);
+        let id = format_id('a', 271_828);
+        assert_eq!(id.len(), ID_LEN);
         assert!(id.starts_with('a'));
         assert!(
             id.chars().skip(1).all(|c| c.is_ascii_alphanumeric()),
@@ -265,8 +319,8 @@ mod tests {
     fn epoch_rollover_cannot_repeat_an_id() {
         // The last id of one epoch and the first of the next share no prefix, so
         // the counter reset is safe.
-        let last = format_body_id('a', EPOCH_LIMIT);
-        let first = format_body_id('b', 1);
+        let last = format_id('a', EPOCH_LIMIT);
+        let first = format_id('b', 1);
         assert_ne!(last, first);
         assert!(last < first, "epochs keep the global ordering: {last} < {first}");
     }
@@ -283,10 +337,45 @@ mod tests {
         assert_eq!(parse_epoch(Some("bcd".into())), 'b');
     }
 
+    /// The two sequences must not share storage. A typo collapsing them onto one
+    /// counter would still produce unique ids, so nothing would fail loudly —
+    /// body ids would just jump forward on every moderation action, and the bug
+    /// would only surface as transcripts that look like they lost messages.
+    #[test]
+    fn the_two_sequences_use_distinct_keys() {
+        let keys = [
+            BODY_COUNTER_KEY,
+            BODY_EPOCH_KEY,
+            AUDIT_COUNTER_KEY,
+            AUDIT_EPOCH_KEY,
+        ];
+        let mut sorted = keys;
+        sorted.sort_unstable();
+        sorted
+            .windows(2)
+            .for_each(|w| assert_ne!(w[0], w[1], "sequences must not share a key"));
+
+        // A counter must never be pointed at another sequence's epoch.
+        assert_ne!(BODY_COUNTER_KEY, AUDIT_EPOCH_KEY);
+        assert_ne!(AUDIT_COUNTER_KEY, BODY_EPOCH_KEY);
+    }
+
+    /// Both sequences issue the same shape, so an id is never distinguishable by
+    /// looking at it — which is exactly why they must never be compared across
+    /// stores. Guards the width both indexes and transcripts match on.
+    #[test]
+    fn every_sequence_issues_the_same_width() {
+        for counter in [0i64, 1, 61, 62, i64::MAX] {
+            for epoch in ['a', 'z', 'A', 'Z'] {
+                assert_eq!(format_id(epoch, counter).len(), ID_LEN);
+            }
+        }
+    }
+
     #[test]
     fn body_id_is_case_sensitive() {
         // Documented property: ids differing only in case are distinct messages.
-        assert_ne!(format_body_id('a', 10), format_body_id('A', 10));
+        assert_ne!(format_id('a', 10), format_id('A', 10));
         assert_ne!(encode_tail(10), encode_tail(36));
     }
 }

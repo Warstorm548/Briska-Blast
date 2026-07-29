@@ -121,6 +121,16 @@ public partial class SignalingClient : Node
     /// Deliberately carries no moderator identity: the reason is the whole
     /// message.</summary>
     public event Action<string>? ChatWarning;
+    /// <summary>This player's chat privileges were revoked. Carries the reason.
+    /// Sent to the banned player alone.
+    ///
+    /// Unlike a warning this can arrive more than once: when the ban is applied,
+    /// and again each time the server refuses a chat message from them. That
+    /// repeat is what makes the notice reach a player who was offline when the
+    /// ban landed, without the server queueing anything.
+    ///
+    /// Carries no moderator identity, same as <see cref="ChatWarning"/>.</summary>
+    public event Action<string>? ChatBanned;
     /// <summary>A moderator withdrew a chat line from every player in the
     /// session. Carries the <see cref="ChatLine.BodyId"/> of the line to remove.
     /// Fires for a message this client may never have seen (it may have joined
@@ -535,6 +545,9 @@ public partial class SignalingClient : Node
                     break;
                 case "chat_warning":
                     ChatWarning?.Invoke(Str(root, "reason"));
+                    break;
+                case "chat_banned":
+                    ChatBanned?.Invoke(Str(root, "reason"));
                     break;
                 case "chat_body_deleted":
                     ChatBodyDeleted?.Invoke(Str(root, "body_id"));

@@ -20,8 +20,8 @@ use std::collections::HashMap;
 use shared::types::player::PlayerId;
 
 use crate::chat::{
-    audit::{self, AuditCategory, AuditRecord},
-    blacklist,
+    audit::{self, AuditCategory, AuditRecord, AuditWindow},
+    bans, blacklist,
     transcript::{self, DeletionMark, MessageKind, StoredMessage},
 };
 use crate::state::AppState;
@@ -34,8 +34,6 @@ use super::templates::{
 /// How many recent lines each session card previews.
 const PREVIEW_LINES: isize = 3;
 
-/// How many records per audit category a page load reads.
-const AUDIT_PAGE_LIMIT: isize = 100;
 
 /// Display name for a stored line, falling back to the same `Player <id>` shape
 /// the game client uses when no username is on file.
@@ -104,6 +102,7 @@ fn to_view(msg: &StoredMessage, deleted: &HashMap<String, DeletionMark>) -> Chat
         is_moderator: msg.kind == MessageKind::Moderator,
         posted_as,
         is_warning: msg.kind == MessageKind::Warning,
+        is_ban: msg.kind == MessageKind::Ban,
         delivered: msg.delivered,
         deleted: deleted.get(&msg.body_id).map(|d| Deletion {
             mod_user: d.mod_user.clone(),
@@ -285,31 +284,72 @@ pub async fn session_view(state: &AppState, code: &str) -> (Vec<ChatSession>, Ve
 
 /// The Moderation Lists datasets.
 ///
-/// Only the blacklist is wired. Banned and suspended are empty because no tool
-/// writes them yet — showing invented rows in a panel that is otherwise live
-/// would read as real moderation history.
+/// Suspensions stay empty because no tool writes them yet — showing invented rows
+/// in a panel that is otherwise live would read as real moderation history.
 pub async fn moderation_lists(state: &AppState) -> ModerationLists {
-    let blacklist = match state.redis.get().await {
-        Ok(mut conn) => blacklist::load(&mut conn)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|e| BlacklistWord {
-                word: e.word,
-                reason: e.reason,
-                active_filter: e.active,
-            })
-            .collect(),
-        Err(_) => Vec::new(),
+    let Ok(mut conn) = state.redis.get().await else {
+        return ModerationLists {
+            blacklist: Vec::new(),
+            banned: Vec::new(),
+            suspended: Vec::new(),
+        };
     };
+
+    let blacklist = blacklist::load(&mut conn)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| BlacklistWord {
+            word: e.word,
+            reason: e.reason,
+            active_filter: e.active,
+        })
+        .collect();
+
+    // Ban rows replay their transcript through the same cache the audit page
+    // uses, so several bans from one session read it once. A ban stores the whole
+    // conversation rather than a cut, which is what `full` asks for here.
+    let mut cache = SnapshotCache::default();
+    let mut banned = Vec::new();
+    for entry in bans::load(&mut conn).await.unwrap_or_default() {
+        let pinned = AuditRecord {
+            sid: entry.sid.clone(),
+            cut_index: entry.cut_index,
+            full: true,
+            ..Default::default()
+        };
+        let snapshot = cache.snapshot(&mut conn, &pinned).await;
+        banned.push(BannedUser {
+            timestamp: audit::format_timestamp(entry.at_ms),
+            username: entry.username,
+            player_id: entry.player_id,
+            reason: entry.reason,
+            snapshot_cut: SnapshotCache::cut_marker(&pinned, snapshot.len()),
+            snapshot,
+        });
+    }
+
     ModerationLists {
         blacklist,
-        // Named explicitly rather than inferred: these stay empty until a ban or
-        // suspend tool exists to write them, and the types say what will fill them.
-        banned: Vec::<BannedUser>::new(),
+        banned,
+        // Named explicitly rather than inferred: this stays empty until a suspend
+        // tool exists to write it, and the type says what will fill it.
         suspended: Vec::<SuspendedUser>::new(),
     }
 }
+
+/// How many distinct transcripts one page load will hydrate.
+///
+/// Snapshots are inlined into the response, and a ban's snapshot is an entire
+/// session transcript — so a wide range spanning many sessions could otherwise
+/// pull in hundreds of conversations for one page. The cap counts *distinct
+/// sessions*, not records, because the cache already collapses a page of records
+/// that all point at one conversation into a single read.
+///
+/// Deliberately independent of the record window: how many rows a moderator asks
+/// for and how much chat gets inlined are different costs, and tying them
+/// together is what made a 500-record range expensive.
+const MAX_SNAPSHOTS: usize = 40;
 
 /// Reads transcripts once per instance, so a page of records that all point at
 /// one session doesn't re-read it for every row.
@@ -317,12 +357,21 @@ pub async fn moderation_lists(state: &AppState) -> ModerationLists {
 struct SnapshotCache {
     by_sid: HashMap<String, Vec<StoredMessage>>,
     deleted_by_sid: HashMap<String, HashMap<String, DeletionMark>>,
+    /// Whether [`MAX_SNAPSHOTS`] was reached, so the page can say so. Without
+    /// this a withheld transcript renders as the same em-dash that means "there
+    /// was no chat here" — a distinction this panel takes care to preserve.
+    capped: bool,
 }
 
 impl SnapshotCache {
     /// The chat as it stood when a record was written: the first `cut_index`
     /// lines of its transcript. This is what "a snapshot of the entire chat"
     /// resolves to — pinned, not copied.
+    ///
+    /// A record with `full` set (bans) reads the **whole** transcript instead,
+    /// including anything said after the action. `cut_index` then marks where the
+    /// action fell rather than ending the view. Same storage either way — only
+    /// the range differs.
     ///
     /// Deletion marks are applied as they stand *now*, not as of the cut. A body
     /// withdrawn after this record was written therefore shows as deleted here
@@ -339,6 +388,10 @@ impl SnapshotCache {
             return Vec::new();
         }
         if !self.by_sid.contains_key(&record.sid) {
+            if self.by_sid.len() >= MAX_SNAPSHOTS {
+                self.capped = true;
+                return Vec::new();
+            }
             let lines = transcript::all(conn, &record.sid).await.unwrap_or_default();
             self.by_sid.insert(record.sid.clone(), lines);
             let deleted = transcript::deletions(conn, &record.sid)
@@ -348,28 +401,43 @@ impl SnapshotCache {
         }
         let lines = &self.by_sid[&record.sid];
         let deleted = &self.deleted_by_sid[&record.sid];
-        let cut = record.cut_index.min(lines.len());
+        let cut = if record.full {
+            lines.len()
+        } else {
+            record.cut_index.min(lines.len())
+        };
         lines[..cut].iter().map(|m| to_view(m, deleted)).collect()
+    }
+
+    /// Where in a rendered snapshot the action fell, for the records that show
+    /// the whole transcript. `None` when the snapshot already ends at the action,
+    /// which is every other record — there is nothing after it to divide off.
+    fn cut_marker(record: &AuditRecord, snapshot_len: usize) -> Option<usize> {
+        (record.full && record.cut_index < snapshot_len).then_some(record.cut_index)
     }
 }
 
 /// All four audit category tables.
-pub async fn audit_log(state: &AppState) -> AuditLog {
+pub async fn audit_log(state: &AppState, window: &AuditWindow) -> AuditLog {
     let Ok(mut conn) = state.redis.get().await else {
         return AuditLog {
             players: Vec::new(),
             words: Vec::new(),
             lists: Vec::new(),
             system: Vec::new(),
+            window_label: window.label(),
+            window_notice: window.notice.clone(),
         };
     };
 
     let mut cache = SnapshotCache::default();
 
     let mut players = Vec::new();
-    for r in read(&mut conn, AuditCategory::Player).await {
+    for r in read(&mut conn, AuditCategory::Player, window).await {
         let snapshot = cache.snapshot(&mut conn, &r).await;
+        let snapshot_cut = SnapshotCache::cut_marker(&r, snapshot.len());
         players.push(PlayerAuditEntry {
+            snapshot_cut,
             timestamp: audit::format_timestamp(r.at_ms),
             moderator_display: r.actor.clone(),
             moderator_group: r.group.clone(),
@@ -384,7 +452,7 @@ pub async fn audit_log(state: &AppState) -> AuditLog {
     }
 
     let mut words = Vec::new();
-    for r in read(&mut conn, AuditCategory::Word).await {
+    for r in read(&mut conn, AuditCategory::Word, window).await {
         let snapshot = cache.snapshot(&mut conn, &r).await;
         words.push(WordAuditEntry {
             timestamp: audit::format_timestamp(r.at_ms),
@@ -400,23 +468,10 @@ pub async fn audit_log(state: &AppState) -> AuditLog {
         });
     }
 
-    let lists = read(&mut conn, AuditCategory::List)
-        .await
-        .into_iter()
-        .map(|r| ListAuditEntry {
-            timestamp: audit::format_timestamp(r.at_ms),
-            moderator_display: r.actor,
-            moderator_group: r.group,
-            action: r.action,
-            reason: r.reason,
-            target_username: r.target_username,
-            target_player_id: r.target_player_id.unwrap_or_default(),
-            list: r.list,
-        })
-        .collect();
+    let lists = list_entries(read(&mut conn, AuditCategory::List, window).await);
 
     let mut system = Vec::new();
-    for r in read(&mut conn, AuditCategory::System).await {
+    for r in read(&mut conn, AuditCategory::System, window).await {
         let snapshot = cache.snapshot(&mut conn, &r).await;
         system.push(SystemAuditEntry {
             timestamp: audit::format_timestamp(r.at_ms),
@@ -431,13 +486,72 @@ pub async fn audit_log(state: &AppState) -> AuditLog {
         });
     }
 
-    AuditLog { players, words, lists, system }
+    AuditLog {
+        players,
+        words,
+        lists,
+        system,
+        window_label: window.label(),
+        window_notice: cap_notice(window.notice.clone(), cache.capped),
+    }
 }
 
-async fn read(conn: &mut deadpool_redis::Connection, category: AuditCategory) -> Vec<AuditRecord> {
-    audit::read(conn, category, AUDIT_PAGE_LIMIT)
-        .await
-        .unwrap_or_default()
+/// Fold a "transcripts withheld" warning into whatever the window already had to
+/// say. Both are the same kind of fact — the page is not showing everything it
+/// was asked for — so they share one banner rather than competing for attention.
+fn cap_notice(window_notice: Option<String>, capped: bool) -> Option<String> {
+    if !capped {
+        return window_notice;
+    }
+    let note = format!(
+        "Transcripts are shown for the first {MAX_SNAPSHOTS} conversations in this range; \
+         later rows show no Transcript button even where chat was captured. \
+         Narrow the range to see them."
+    );
+    Some(match window_notice {
+        Some(existing) => format!("{existing} {note}"),
+        None => note,
+    })
+}
+
+/// Project audit records into List-table rows.
+///
+/// The List table is a **view**, not a store: a record belongs in it when it
+/// carries a [`AuditRecord::list`] tag, whatever category it is filed under. A
+/// ban is filed under Player and shows here too; a warning is filed under Player
+/// and does not.
+///
+/// The tag is re-checked even though the list index is built from it. The index
+/// is only as correct as whatever wrote it, and an untagged row reaching the
+/// table would render with an empty List column — a row that looks like it
+/// edited nothing. Filtering here means the rendered table always matches the
+/// stated rule.
+///
+/// Kept free of Redis so the rule itself is unit-testable; every other audit
+/// projection is exercised only through the rendered page.
+fn list_entries(records: Vec<AuditRecord>) -> Vec<ListAuditEntry> {
+    records
+        .into_iter()
+        .filter(|r| !r.list.is_empty())
+        .map(|r| ListAuditEntry {
+            timestamp: audit::format_timestamp(r.at_ms),
+            moderator_display: r.actor,
+            moderator_group: r.group,
+            action: r.action,
+            reason: r.reason,
+            target_username: r.target_username,
+            target_player_id: r.target_player_id.unwrap_or_default(),
+            list: r.list,
+        })
+        .collect()
+}
+
+async fn read(
+    conn: &mut deadpool_redis::Connection,
+    category: AuditCategory,
+    window: &AuditWindow,
+) -> Vec<AuditRecord> {
+    audit::read(conn, category, window).await.unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -643,5 +757,79 @@ mod tests {
         // Players received "##### you all"; the moderator must see what was typed.
         assert_eq!(view.body, "frick you all");
         assert_eq!(view.flagged_word.as_deref(), Some("frick"));
+    }
+
+    /// A withheld transcript renders as the same em-dash that means "there was
+    /// no chat here". The page must say which it is, or a reviewer reads an
+    /// absent Transcript button as evidence that none was captured.
+    #[test]
+    fn a_capped_page_says_transcripts_were_withheld() {
+        let note = cap_notice(None, true).expect("a cap must produce a notice");
+        assert!(note.contains(&MAX_SNAPSHOTS.to_string()));
+        assert!(note.contains("Narrow the range"));
+
+        // An uncapped page says nothing extra.
+        assert_eq!(cap_notice(None, false), None);
+        assert_eq!(cap_notice(Some("range clamped".into()), false).as_deref(), Some("range clamped"));
+
+        // Both facts share one banner rather than one hiding the other.
+        let both = cap_notice(Some("range clamped".into()), true).unwrap();
+        assert!(both.starts_with("range clamped"));
+        assert!(both.contains("Transcripts are shown"));
+    }
+
+    fn audit_record(action: &str, list: &str) -> AuditRecord {
+        let mut r = AuditRecord::by_moderator(
+            "modtester",
+            "sub",
+            crate::admin::AdminRole::Moderator,
+            action,
+            "Slur spam",
+        );
+        r.list = list.to_string();
+        r.target_username = "EldenFire".into();
+        r.target_player_id = Some(12);
+        r
+    }
+
+    /// The rule the whole single-record model rests on: the tag decides whether
+    /// a record is a list edit, not which table it was filed under. A ban and an
+    /// un-ban are both Player records, and both belong in the List view.
+    #[test]
+    fn the_list_tag_decides_what_the_list_view_shows() {
+        let entries = list_entries(vec![
+            audit_record("Ban", "Ban List"),
+            audit_record("Warn", ""),
+            audit_record("Remove Ban", "Ban List"),
+        ]);
+
+        let actions: Vec<&str> = entries.iter().map(|e| e.action.as_str()).collect();
+        assert_eq!(
+            actions,
+            ["Ban", "Remove Ban"],
+            "an untagged warning edits no list and must not appear"
+        );
+        assert!(entries.iter().all(|e| e.list == "Ban List"));
+    }
+
+    /// A row whose List column would render empty is a row claiming to have
+    /// edited nothing. The index is built from the tag, so this can only happen
+    /// via a bug or a legacy row — either way the table must not show it.
+    #[test]
+    fn untagged_records_never_reach_the_list_table() {
+        assert!(list_entries(vec![audit_record("Warn + Delete", "")]).is_empty());
+    }
+
+    /// Lists other than the ban list project identically — the projection is
+    /// driven by the tag being present, never by its value. Suspensions and
+    /// Whitelisted Users therefore need no code here when they are built.
+    #[test]
+    fn any_tagged_list_projects_the_same_way() {
+        for name in ["Ban List", "Suspensions", "Whitelist"] {
+            let entries = list_entries(vec![audit_record("Suspend", name)]);
+            assert_eq!(entries.len(), 1, "{name} should project");
+            assert_eq!(entries[0].list, name);
+            assert_eq!(entries[0].target_player_id, 12);
+        }
     }
 }

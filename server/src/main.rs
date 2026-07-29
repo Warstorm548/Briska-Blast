@@ -47,6 +47,7 @@ async fn main() {
         .expect("failed to create Redis pool");
 
     seed_defaults(&redis_pool, &cfg).await;
+    migrate_audit_log(&redis_pool).await;
 
     // One-time visibility: without TURN credentials the game still works on
     // friendly NATs (clients fall back to STUN-only), but symmetric-NAT peer
@@ -170,6 +171,10 @@ async fn main() {
             post(admin::chatmod::chatmod_warn),
         )
         .route(
+            "/admin/chatmod/session/:code/ban",
+            post(admin::chatmod::chatmod_ban),
+        )
+        .route(
             "/admin/chatmod/session/:code/blacklist",
             post(admin::chatmod::chatmod_quick_blacklist),
         )
@@ -184,6 +189,11 @@ async fn main() {
         .route(
             "/admin/chatmod/lists/blacklist/toggle",
             post(admin::chatmod::blacklist_toggle),
+        )
+        .route("/admin/chatmod/lists/ban", post(admin::chatmod::lists_ban))
+        .route(
+            "/admin/chatmod/lists/unban",
+            post(admin::chatmod::lists_unban),
         )
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -251,6 +261,25 @@ async fn main() {
     .with_graceful_shutdown(async move { rx_admin.recv().await.ok(); });
 
     tokio::try_join!(game_serve, admin_serve).unwrap();
+}
+
+/// Import pre-0.34.0 audit records into the record store and index them. Runs
+/// before either server binds so no request sees a half-migrated log; a no-op on
+/// every boot after the first.
+///
+/// Deliberately **not fatal**. A partial import leaves the audit page thin until
+/// the next boot resumes it, which is bad — but refusing to start the game server
+/// over it would take chat and matchmaking down for an admin-panel concern. The
+/// per-category cursors mean the retry picks up exactly where it stopped rather
+/// than starting over.
+async fn migrate_audit_log(pool: &deadpool_redis::Pool) {
+    let Ok(mut conn) = pool.get().await else {
+        tracing::error!("chat: audit migration skipped — no Redis connection; retries next boot");
+        return;
+    };
+    if let Err(e) = chat::audit::migrate(&mut conn).await {
+        tracing::error!("chat: audit log migration failed — retries next boot: {}", e);
+    }
 }
 
 async fn seed_defaults(pool: &deadpool_redis::Pool, cfg: &config::Config) {

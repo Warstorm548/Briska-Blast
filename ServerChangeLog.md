@@ -5,6 +5,153 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.34.0] — 2026-07-29
+
+**One audit record, shown in every table it belongs to — plus a Range filter for
+reaching past the newest 100 records.**
+
+> **Deploying from 0.32.0?** This release carries 0.33.0's requirement too:
+> set **`min_game_version` to 0.31.0** in the admin panel as part of the deploy.
+> Skipping it reproduces a silent false positive — an older client ignores the
+> `chat_banned` frame outright, so a banned player sees nothing at all while the
+> panel reports the ban applied.
+
+### One record, many views
+
+An action that is both an action on a player and an edit to a moderation list —
+a ban, an un-ban — had no correct home. Ban was recorded only in the Player log
+and un-ban only in the List log, so a player's reversals were missing from the
+log any per-player total has to be counted from, and neither table told the whole
+story.
+
+A record is now stored **once** and pointed at from every table that should show
+it. A ban appears in both the Player and List tables as the same record, so the
+two views cannot disagree and nothing is counted twice.
+
+The rule needs no per-action cases because every list the List table covers is a
+list of players — Ban List, Suspensions, Whitelisted Users. Suspend and the
+whitelist will appear in both tables with no further work.
+
+- Un-ban records moved from the List category to Player, tagged `Ban List`.
+- Ban records gained the same tag; a warning edits no list and stays out.
+- The List filter now offers `Ban`, since bans appear there.
+- Audit records carry an `event_id` from the same base62 sequence body ids use,
+  on its own counter.
+
+### Deep access
+
+- **Range** field in each Advanced Filter: `200` for the newest 200, `100-200`
+  for a span. Position 1 is the most recent record.
+- Reads are windowed rather than capped, so page 40 costs the same as page 1.
+- Bad input is corrected visibly, never silently: reversed, zero, negative and
+  junk ranges fall back to the newest 100 with a notice, and a span wider than
+  500 clamps from the requested start.
+- A window is not a search depth, so the active window is stated above the
+  tables, and an empty table names the window it searched rather than reporting
+  that nothing was recorded.
+- The open log survives submitting the form.
+
+The remaining filters (date, moderator, group, action, reason) are still preview
+only.
+
+### Migration
+
+Runs at boot, before either server binds. Pre-0.34.0 records are imported into
+the record store and indexed.
+
+- **Resumable, and never destructive.** Each category keeps a cursor
+  (`chat:audit:migrated:{category}`) counting how many of its legacy records have
+  been imported, advanced in the same transaction as the record it describes. A
+  run that dies partway picks up exactly where it stopped — no duplicates, and
+  nothing is ever deleted to achieve it.
+- **Non-fatal.** A partial import leaves the audit page thin until the next boot
+  resumes it, rather than keeping the game server down over an admin-panel
+  concern.
+- **Additive.** The pre-0.34.0 keys are only ever read, never modified, so
+  rolling back to an older server finds its data exactly as it left it.
+- Clearing a cursor by hand re-imports that category's legacy records as
+  **duplicate rows**. Untidy and fixable — it never removes anything, and records
+  written since the migration are untouched in every case.
+
+## [0.33.0] — 2026-07-28
+
+**Chat bans wired end to end: the Ban quick tool, the Banned Users list, un-ban,
+and enforcement.** A chat ban is permanent and account-wide, governs chat
+privileges only, and never touches game access — a banned player keeps playing
+and simply cannot speak. This release **requires `min_game_version` ≥ 0.31.0**;
+set it in the admin panel as part of the deploy. An older client ignores the new
+`chat_banned` frame outright, so the player sees nothing at all while the panel
+reports the ban applied — the same silent false positive the 0.32.0 warning
+release had.
+
+### Enforcement
+
+The ban is enforced in the `SendChat` handler and nowhere else, before censoring
+and capture, so a refused message never becomes a body id, a broadcast, or a
+transcript line — a banned player leaves no trace in the conversation they were
+removed from.
+
+- The check **fails open**. An unreachable ban list allows the message through;
+  treating an outage as "everyone is banned" would silence chat for the entire
+  deployment, which is far worse than a banned player getting a line out until
+  Redis returns.
+- The notice is re-sent on every refused message. That is what makes delivery
+  durable without a queue: a player who was offline when the ban landed learns of
+  it the moment it first affects them, which is the only moment it matters.
+
+### Storage
+
+`chat:banned`, a hash keyed by the **normalized** player id (zero-padded through
+`PlayerId::from_counter`). Normalization is load-bearing, not tidiness — the
+panel renders ids padded and a moderator may type the bare number, so a ban
+stored in one shape would silently never match chat arriving in the other. No
+TTL, like every other chat key: a ban ends when a moderator ends it.
+
+Deleting a user now clears their ban. Bans key on the player number and
+`delete_user` returns that number to `player:freelist` for reissue, so one left
+behind would mute whoever inherited it, under a record naming someone else.
+
+### Ban from the session view
+
+`POST /admin/chatmod/session/:code/ban`, sharing one path with the two warn
+buttons rather than duplicating it — target resolution, the transcript echo and
+the audit write are identical between them, and two copies of an audit path
+drift. Writes one Player record per target with `action = "Ban"`, the cited
+flagged words, and the covered bodies. Only the confirm dialog submits.
+
+### Ban / UnBan from Moderation Lists
+
+`POST /admin/chatmod/lists/ban` and `/lists/unban`, following the blacklist
+handlers' redirect-with-notice pattern. Reasons here stay logging-only per the
+0.30.0 lists contract. UnBan writes one **List** record per lifted id
+(`action = "Remove Ban"`, `list = "Banned Users"`) and needs no player frame — an
+un-banned player simply starts passing the chat gate again.
+
+### Evidence: the whole transcript, not a cut
+
+A ban's audit record sets a new `full` flag, and rendering replays the **entire**
+transcript instead of stopping at `cut_index`. A ban is permanent in a way no
+other tool is, so its record answers "what else happened here", not only "what
+prompted this". Storage and pinning are unchanged — still one transcript,
+replayed rather than copied; only the range read differs.
+
+`cut_index` survives as an **action-point marker**: the overlay draws a divider
+there. Without it a reviewer would read messages sent after the ban as the
+evidence that led to it. The Banned Users ledger opens the same overlay as the
+audit page rather than a second renderer.
+
+### Fixed
+
+- **Warning echoes did not retain their transcript.** Retention tested for
+  `MessageKind::Moderator`, and a warning echo is neither flagged nor a moderator
+  line — so a Warn Only in an otherwise-clean session left the transcript
+  unretained, teardown deleted it, and that warning's audit record then rendered
+  "No chat captured for this action". The conversation it pinned a snapshot into
+  was gone. Retention now covers any non-player line, matching the rule the
+  module doc always stated.
+
+---
+
 ## [0.32.0] — 2026-07-27
 
 **Three Quick Access Tools wired: Warn, Warn + Delete Chat Body, and Blacklist

@@ -80,8 +80,12 @@ pub struct ChatMessage {
     ///
     /// `username`/`player_id` name the **target**, and `body` is the reason.
     pub is_warning: bool,
-    /// For a warning: whether it actually reached the target's client. `None` on
-    /// every other kind, where delivery is not a concept.
+    /// True when this line is a chat ban a moderator applied to one player. Same
+    /// field roles as `is_warning` — target in `username`/`player_id`, reason in
+    /// `body` — and likewise decided only through [`message_role`].
+    pub is_ban: bool,
+    /// For a warning or a ban: whether it actually reached the target's client.
+    /// `None` on every other kind, where delivery is not a concept.
     pub delivered: Option<bool>,
     /// Set when this body has been withdrawn from players' view. The message
     /// still renders — the moderator's copy is the record — but greyed, with a
@@ -109,12 +113,17 @@ pub enum MessageRole {
     Player,
     Moderator,
     Warning,
+    Ban,
 }
 
-/// Resolve a line's role. A warning wins over the moderator flag: it is sent
-/// *by* a moderator, so both are true of it, but only one describes it.
+/// Resolve a line's role. A ban or a warning wins over the moderator flag: both
+/// are sent *by* a moderator, so both facts are true of them, but only one
+/// describes the line. Ban is checked first — it is the stronger action, and the
+/// two are never set together.
 pub fn message_role(m: &ChatMessage) -> MessageRole {
-    if m.is_warning {
+    if m.is_ban {
+        MessageRole::Ban
+    } else if m.is_warning {
         MessageRole::Warning
     } else if m.is_moderator {
         MessageRole::Moderator
@@ -142,6 +151,16 @@ pub struct AuditLog {
     pub words: Vec<WordAuditEntry>,
     pub lists: Vec<ListAuditEntry>,
     pub system: Vec<SystemAuditEntry>,
+    /// Which slice of each log these rows came from, e.g. `100-200`.
+    ///
+    /// Rendered on the page even when rows come back, because every table here
+    /// is a *window* — an empty one means "nothing in the range you asked for",
+    /// which reads as "this never happened" unless the range is on screen.
+    pub window_label: String,
+    /// Set when the requested range could not be honoured as typed (rejected or
+    /// clamped), so a moderator is never silently shown a different slice than
+    /// the one they asked for.
+    pub window_notice: Option<String>,
 }
 
 /// **Player** category — an action taken on a player's chat privileges. One
@@ -174,6 +193,11 @@ pub struct PlayerAuditEntry {
     /// Snapshot of the chat as it stood when the action was taken — surfaced
     /// read-only in the Transcript overlay.
     pub snapshot: Vec<ChatMessage>,
+    /// For a ban, whose snapshot is the *whole* transcript: how many lines
+    /// preceded the action, so the overlay can divide what prompted it from what
+    /// followed. `None` on every record whose snapshot already ends at the
+    /// action — there is nothing after it to mark off.
+    pub snapshot_cut: Option<usize>,
 }
 
 /// **Word** category — blacklist/approve actions on a word. Approve targets a
@@ -254,8 +278,22 @@ pub struct BannedUser {
     /// [`PlayerId::from_counter`]. Moderation surfaces only.
     pub player_id: u64,
     pub reason: String,
-    /// Whether a chat snapshot exists to open from the Transcript cell.
-    pub has_transcript: bool,
+    /// The conversation the ban happened in, in **full** — a ban is the one
+    /// action whose record keeps the whole transcript rather than cutting at the
+    /// moment it was taken. Empty for a ban applied from this page, which has no
+    /// session context; the Transcript cell then shows an em-dash.
+    pub snapshot: Vec<ChatMessage>,
+    /// How many lines preceded the ban, dividing what prompted it from what
+    /// followed. See [`PlayerAuditEntry::snapshot_cut`].
+    pub snapshot_cut: Option<usize>,
+}
+
+impl BannedUser {
+    /// Whether there is a chat to open from the Transcript cell. Derived rather
+    /// than stored so the cell can never advertise an overlay that renders empty.
+    pub fn has_transcript(&self) -> bool {
+        !self.snapshot.is_empty()
+    }
 }
 
 /// One row in the **Active Suspensions** sub-tab table: a temporary chat mute.

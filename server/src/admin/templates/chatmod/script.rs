@@ -224,6 +224,54 @@ window.bbCmListsDelete=function(word){
   if(why)why.value='';
   bbCmListsAsk('cm-lists-del-modal');
 };
+// Banning from the lists page. The dialog echoes what is about to happen before
+// it can be confirmed, and validation runs here rather than only server-side so
+// an obvious mistake never becomes a redirect and a page reload.
+window.bbCmListsBanAsk=function(){
+  var id=document.getElementById('cm-lists-ban-id');
+  var why=document.getElementById('cm-lists-ban-reason');
+  if(!id||!id.value.trim()){alert('Enter at least one player ID.');return;}
+  if(!why||!why.value.trim()){alert('Enter a reason — it is logged.');return;}
+  var who=document.getElementById('cm-lists-ban-who');
+  var shown=document.getElementById('cm-lists-ban-why');
+  if(who)who.textContent=id.value.trim();
+  if(shown)shown.textContent=why.value.trim();
+  bbCmListsAsk('cm-lists-ban-modal');
+};
+window.bbCmListsBanConfirm=function(){
+  var f=document.getElementById('cm-lists-ban-form');
+  if(f)f.submit();
+};
+// Un-banning acts on the ticked rows. Each checkbox carries its own player id,
+// so the selection is read from the boxes rather than parsed back out of the
+// rendered table — the 2s poll rewrites that markup and would drop a tick.
+window.bbCmListsUnbanPicked=function(){
+  return Array.prototype.slice
+    .call(document.querySelectorAll('.cm-lists-ban-pick:checked'))
+    .map(function(c){return c.getAttribute('data-pid');});
+};
+window.bbCmListsUnbanAsk=function(){
+  var picked=bbCmListsUnbanPicked();
+  if(!picked.length){alert('Tick at least one user to un-ban.');return;}
+  var who=document.getElementById('cm-lists-unban-who');
+  var why=document.getElementById('cm-lists-unban-why');
+  if(who)who.textContent=picked.join('; ');
+  if(why)why.value='';
+  bbCmListsAsk('cm-lists-unban-modal');
+};
+window.bbCmListsUnbanConfirm=function(){
+  var f=document.getElementById('cm-lists-unban-form');
+  var ids=document.getElementById('cm-lists-unban-ids');
+  var reason=document.getElementById('cm-lists-unban-reason');
+  var why=document.getElementById('cm-lists-unban-why');
+  if(!f)return;
+  if(!why||!why.value.trim()){alert('Enter a reason — it is logged.');return;}
+  // Re-read the ticks at confirm time, not at open time: the dialog is not
+  // modal to the page underneath it.
+  if(ids)ids.value=bbCmListsUnbanPicked().join(';');
+  if(reason)reason.value=why.value;
+  f.submit();
+};
 window.bbCmListsDeleteConfirm=function(){
   var f=document.getElementById('cm-lists-del-form');
   var why=document.getElementById('cm-lists-del-why');
@@ -394,6 +442,26 @@ window.bbCmWarn=function(del){
   body.set('body_ids',bbCmPicked.ids().join(';'));
   body.set('delete',del?'1':'0');
   bbCmPost('/warn',body,function(){
+    if(r)r.value='';
+    if(t)t.value='';
+    bbCmPicked.clear();
+  });
+};
+// Confirmed chat ban. Only reachable through the confirm dialog — cancelling,
+// Escape or a backdrop click send nothing and write no audit record.
+//
+// The dialog closes before the post so the notice it produces is not hidden
+// behind the modal that triggered it. Ticked messages are cleared only on
+// success, so a rejected attempt keeps the moderator's selection.
+window.bbCmBanConfirm=function(){
+  var t=document.getElementById('cm-target');
+  var r=document.getElementById('cm-ban-reason');
+  var body=new URLSearchParams();
+  body.set('targets',t?t.value:'');
+  body.set('reason',r?r.value:'');
+  body.set('body_ids',bbCmPicked.ids().join(';'));
+  bbCmBanClose();
+  bbCmPost('/ban',body,function(){
     if(r)r.value='';
     if(t)t.value='';
     bbCmPicked.clear();

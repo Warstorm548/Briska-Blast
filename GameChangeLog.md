@@ -9,6 +9,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.31.0] — 2026-07-28
+
+**Chat ban notices** (server 0.33.0). A moderator can now permanently revoke a
+player's chat privileges; this is what that player sees. Chat still exists only
+in the lobby, so that is where the notice lands.
+
+The notice is **red**, against the amber of a warning — the colour is the only
+thing distinguishing a one-off notice from a permanent one, and both otherwise
+render identically: a `[CHAT BANNED]` line where the conversation is, and a
+dismissible banner pinned above the chat carrying the moderator's reason. A ban
+arriving after a warning recolours the banner rather than stacking a second one,
+which would push the chat itself off screen.
+
+Unlike a warning, this can arrive more than once: when the ban is applied, and
+again every time the server refuses a message from them. That repeat is
+deliberate — it is how a player who was offline when the ban landed finds out,
+and it is a direct answer to what they just did rather than a duplicate. Like a
+warning, the frame carries no moderator identity; the reason is the whole
+message.
+
+A banned player keeps playing. The ban governs chat only.
+
+---
+
 ## [0.30.0] — 2026-07-27
 
 **Moderator warnings, and chat messages a moderator can delete** (server

@@ -22,6 +22,11 @@ public partial class SessionLobby : Control
     // not someone talking, it is an action taken against them.
     private static readonly Color WarningChatColor = new("d29922");
 
+    // A chat ban aimed at this player. Red rather than the warning's amber — the
+    // colour is the only thing that distinguishes a one-off notice from a
+    // permanent loss of chat, and the two frames are otherwise identical.
+    private static readonly Color BanChatColor = new("f85149");
+
     /// <summary>
     /// One line this client received, kept so the log can be rebuilt.
     ///
@@ -36,6 +41,10 @@ public partial class SessionLobby : Control
         public string Text = "";
         public bool IsModerator;
         public bool IsWarning;
+        /// <summary>A chat ban. Rendered like a warning but red; kept as its own
+        /// flag rather than a severity on <see cref="IsWarning"/> so a future
+        /// third notice type does not have to reinterpret either.</summary>
+        public bool IsBan;
         /// <summary>Deleted by a moderator: the text is wiped and rendering skips
         /// it, but the entry stays in place. Holding the position means a future
         /// restore could refill it where it belongs without the server having to
@@ -51,7 +60,9 @@ public partial class SessionLobby : Control
     private HBoxContainer[] _slots = null!;
     private Label _status = null!;
 
-    // Built on first use — a player who is never warned never gets one.
+    // Built on first use — a player who is never warned or banned never gets one.
+    // Shared by both notice types: a ban replaces a warning in place rather than
+    // stacking a second banner over the chat.
     private Control? _warnBanner;
     private Label? _warnText;
 
@@ -104,6 +115,7 @@ public partial class SessionLobby : Control
         {
             _signaling.ChatMessage += OnChatMessage;
             _signaling.ChatWarning += OnChatWarning;
+            _signaling.ChatBanned += OnChatBanned;
             _signaling.ChatBodyDeleted += OnChatBodyDeleted;
             _signaling.Reconnecting += OnReconnecting;
             _signaling.Reconnected += OnReconnected;
@@ -122,6 +134,7 @@ public partial class SessionLobby : Control
         {
             _signaling.ChatMessage -= OnChatMessage;
             _signaling.ChatWarning -= OnChatWarning;
+            _signaling.ChatBanned -= OnChatBanned;
             _signaling.ChatBodyDeleted -= OnChatBodyDeleted;
             _signaling.Reconnecting -= OnReconnecting;
             _signaling.Reconnected -= OnReconnected;
@@ -193,7 +206,20 @@ public partial class SessionLobby : Control
     private void OnChatWarning(string reason)
     {
         Append(new LogEntry { Text = reason, IsWarning = true });
-        ShowWarningBanner(reason);
+        ShowNoticeBanner($"⚠ Warning from a moderator: {reason}", WarningChatColor);
+    }
+
+    // This player's chat privileges were revoked. Shown the same two ways as a
+    // warning but in red, because it is permanent rather than a one-off.
+    //
+    // Arrives when the ban lands and again on every send the server refuses, so a
+    // player who was offline at the time still finds out the moment they try to
+    // speak. Re-showing the same banner is the point — it is the answer to what
+    // they just did, not a duplicate.
+    private void OnChatBanned(string reason)
+    {
+        Append(new LogEntry { Text = reason, IsBan = true });
+        ShowNoticeBanner($"⛔ Chat banned by a moderator: {reason}", BanChatColor);
     }
 
     // A moderator withdrew a message from everyone in the session.
@@ -249,11 +275,13 @@ public partial class SessionLobby : Control
         if (entry.Deleted)
             return;
 
-        if (entry.IsWarning)
+        // Both notice types read identically apart from their tag and colour, so
+        // they share one branch rather than two near-copies.
+        if (entry.IsWarning || entry.IsBan)
         {
-            log.PushColor(WarningChatColor);
+            log.PushColor(entry.IsBan ? BanChatColor : WarningChatColor);
             log.PushBold();
-            log.AddText("[WARNING]");
+            log.AddText(entry.IsBan ? "[CHAT BANNED]" : "[WARNING]");
             log.Pop();
             log.AddText($" {entry.Text}\n");
             log.Pop();
@@ -279,10 +307,13 @@ public partial class SessionLobby : Control
         log.AddText($": {entry.Text}\n");
     }
 
-    // A dismissible banner pinned at the top of the chat panel. A warning that
+    // A dismissible banner pinned at the top of the chat panel. A notice that
     // only appeared in the log would scroll away behind the next few messages,
-    // and there is no second copy — the server does not resend it.
-    private void ShowWarningBanner(string reason)
+    // and the server does not resend a warning.
+    //
+    // Shared by warnings and bans: the wording and the colour are all that
+    // differ, and a second banner type would push the chat itself off screen.
+    private void ShowNoticeBanner(string message, Color colour)
     {
         if (_warnBanner == null)
         {
@@ -294,7 +325,6 @@ public partial class SessionLobby : Control
                 AutowrapMode = TextServer.AutowrapMode.WordSmart,
                 SizeFlagsHorizontal = SizeFlags.ExpandFill,
             };
-            _warnText.AddThemeColorOverride("font_color", WarningChatColor);
             var dismiss = new Button { Text = "✕" };
             dismiss.Pressed += () => row.Visible = false;
             row.AddChild(_warnText);
@@ -304,9 +334,12 @@ public partial class SessionLobby : Control
             _warnBanner = row;
         }
 
-        // Replace rather than stack: a second warning is the current one, and a
-        // growing pile of banners would push the chat itself off screen.
-        _warnText!.Text = $"⚠ Warning from a moderator: {reason}";
+        // Replace rather than stack: the newest notice is the current one, and a
+        // growing pile of banners would push the chat itself off screen. The
+        // colour is re-applied every time so a ban landing after a warning
+        // recolours the banner it inherits.
+        _warnText!.AddThemeColorOverride("font_color", colour);
+        _warnText.Text = message;
         _warnBanner.Visible = true;
     }
 

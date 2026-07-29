@@ -73,6 +73,15 @@ pub struct FromQuery {
     ok: Option<String>,
     #[serde(default)]
     err: Option<String>,
+    /// Audit-log Range field, e.g. `100-200`. Free text: parsed and clamped by
+    /// [`crate::chat::audit::AuditWindow::parse`], never trusted as positions.
+    #[serde(default)]
+    range: Option<String>,
+    /// Which audit category was open when the filter was submitted. Carried so a
+    /// range submitted from the List table comes back to the List table rather
+    /// than dropping the moderator on Player.
+    #[serde(default)]
+    cat: Option<String>,
 }
 
 impl FromQuery {
@@ -100,12 +109,16 @@ pub async fn chatmod_audit_page(
         None => None,
     };
 
+    let window = crate::chat::audit::AuditWindow::parse(query.range.as_deref());
+
     Html(templates::chatmod_audit_page(
-        &chatmod_data::audit_log(&state).await,
+        &chatmod_data::audit_log(&state, &window).await,
         &chatmod_data::live_sessions(&state).await,
         from.as_deref(),
         session.role,
         &session.username,
+        query.range.as_deref().unwrap_or_default(),
+        query.cat.as_deref(),
     ))
     .into_response()
 }
