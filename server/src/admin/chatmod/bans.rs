@@ -30,8 +30,9 @@ use super::blacklist::{lists_redirect, split_words};
 use crate::chat::{audit, bans};
 use crate::state::AppState;
 
-/// The moderation list these records name, matching the sub-tab's title.
-const LIST_NAME: &str = "Banned Users";
+/// The moderation list these records name. Defined in [`crate::chat::bans`] so
+/// this page and the session view cannot drift apart.
+use crate::chat::bans::AUDIT_LIST_NAME as LIST_NAME;
 
 /// Form body for the To Ban tool. `ids` and `words` are `;`-separated, matching
 /// the separator convention the panel uses everywhere.
@@ -124,7 +125,11 @@ pub async fn lists_ban(
             reason,
         )
         .with_target(&username, bans::numeric_id(id))
-        .with_words(words.clone());
+        .with_words(words.clone())
+        // A ban is an action on a player *and* an addition to the ban list. The
+        // tag is what surfaces this one record in the List table too, rather
+        // than writing a second record that could disagree with it.
+        .with_list(LIST_NAME);
         if let Err(e) = audit::write(&mut conn, audit::AuditCategory::Player, &record).await {
             tracing::warn!("chatmod: ban audit write failed: {}", e);
         }
@@ -199,9 +204,11 @@ pub async fn lists_unban(
         }
     };
 
-    // Un-banning is a moderation-list edit, so it lands in the List category
-    // rather than beside the ban that it reverses. The two are found together by
-    // filtering on the player, which is what that table's filter is for.
+    // Un-banning is an action on a player that happens to edit a list, so the
+    // record lands in the Player category beside the ban it reverses, tagged so
+    // the List table shows the same record. A player's enforcement history and
+    // its reversals are then in one log — which is the log any per-player total
+    // has to be counted from.
     for id in &lifted {
         let username = usernames
             .get(id)
@@ -219,7 +226,7 @@ pub async fn lists_unban(
         )
         .with_target(&username, bans::numeric_id(id))
         .with_list(LIST_NAME);
-        if let Err(e) = audit::write(&mut conn, audit::AuditCategory::List, &record).await {
+        if let Err(e) = audit::write(&mut conn, audit::AuditCategory::Player, &record).await {
             tracing::warn!("chatmod: unban audit write failed: {}", e);
         }
     }

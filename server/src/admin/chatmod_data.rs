@@ -447,20 +447,7 @@ pub async fn audit_log(state: &AppState) -> AuditLog {
         });
     }
 
-    let lists = read(&mut conn, AuditCategory::List)
-        .await
-        .into_iter()
-        .map(|r| ListAuditEntry {
-            timestamp: audit::format_timestamp(r.at_ms),
-            moderator_display: r.actor,
-            moderator_group: r.group,
-            action: r.action,
-            reason: r.reason,
-            target_username: r.target_username,
-            target_player_id: r.target_player_id.unwrap_or_default(),
-            list: r.list,
-        })
-        .collect();
+    let lists = list_entries(read(&mut conn, AuditCategory::List).await);
 
     let mut system = Vec::new();
     for r in read(&mut conn, AuditCategory::System).await {
@@ -481,8 +468,40 @@ pub async fn audit_log(state: &AppState) -> AuditLog {
     AuditLog { players, words, lists, system }
 }
 
+/// Project audit records into List-table rows.
+///
+/// The List table is a **view**, not a store: a record belongs in it when it
+/// carries a [`AuditRecord::list`] tag, whatever category it is filed under. A
+/// ban is filed under Player and shows here too; a warning is filed under Player
+/// and does not.
+///
+/// The tag is re-checked even though the list index is built from it. The index
+/// is only as correct as whatever wrote it, and an untagged row reaching the
+/// table would render with an empty List column — a row that looks like it
+/// edited nothing. Filtering here means the rendered table always matches the
+/// stated rule.
+///
+/// Kept free of Redis so the rule itself is unit-testable; every other audit
+/// projection is exercised only through the rendered page.
+fn list_entries(records: Vec<AuditRecord>) -> Vec<ListAuditEntry> {
+    records
+        .into_iter()
+        .filter(|r| !r.list.is_empty())
+        .map(|r| ListAuditEntry {
+            timestamp: audit::format_timestamp(r.at_ms),
+            moderator_display: r.actor,
+            moderator_group: r.group,
+            action: r.action,
+            reason: r.reason,
+            target_username: r.target_username,
+            target_player_id: r.target_player_id.unwrap_or_default(),
+            list: r.list,
+        })
+        .collect()
+}
+
 async fn read(conn: &mut deadpool_redis::Connection, category: AuditCategory) -> Vec<AuditRecord> {
-    audit::read(conn, category, AUDIT_PAGE_LIMIT)
+    audit::read(conn, category, 0, AUDIT_PAGE_LIMIT - 1)
         .await
         .unwrap_or_default()
 }
@@ -690,5 +709,60 @@ mod tests {
         // Players received "##### you all"; the moderator must see what was typed.
         assert_eq!(view.body, "frick you all");
         assert_eq!(view.flagged_word.as_deref(), Some("frick"));
+    }
+
+    fn audit_record(action: &str, list: &str) -> AuditRecord {
+        let mut r = AuditRecord::by_moderator(
+            "modtester",
+            "sub",
+            crate::admin::AdminRole::Moderator,
+            action,
+            "Slur spam",
+        );
+        r.list = list.to_string();
+        r.target_username = "EldenFire".into();
+        r.target_player_id = Some(12);
+        r
+    }
+
+    /// The rule the whole single-record model rests on: the tag decides whether
+    /// a record is a list edit, not which table it was filed under. A ban and an
+    /// un-ban are both Player records, and both belong in the List view.
+    #[test]
+    fn the_list_tag_decides_what_the_list_view_shows() {
+        let entries = list_entries(vec![
+            audit_record("Ban", "Ban List"),
+            audit_record("Warn", ""),
+            audit_record("Remove Ban", "Ban List"),
+        ]);
+
+        let actions: Vec<&str> = entries.iter().map(|e| e.action.as_str()).collect();
+        assert_eq!(
+            actions,
+            ["Ban", "Remove Ban"],
+            "an untagged warning edits no list and must not appear"
+        );
+        assert!(entries.iter().all(|e| e.list == "Ban List"));
+    }
+
+    /// A row whose List column would render empty is a row claiming to have
+    /// edited nothing. The index is built from the tag, so this can only happen
+    /// via a bug or a legacy row — either way the table must not show it.
+    #[test]
+    fn untagged_records_never_reach_the_list_table() {
+        assert!(list_entries(vec![audit_record("Warn + Delete", "")]).is_empty());
+    }
+
+    /// Lists other than the ban list project identically — the projection is
+    /// driven by the tag being present, never by its value. Suspensions and
+    /// Whitelisted Users therefore need no code here when they are built.
+    #[test]
+    fn any_tagged_list_projects_the_same_way() {
+        for name in ["Ban List", "Suspensions", "Whitelist"] {
+            let entries = list_entries(vec![audit_record("Suspend", name)]);
+            assert_eq!(entries.len(), 1, "{name} should project");
+            assert_eq!(entries[0].list, name);
+            assert_eq!(entries[0].target_player_id, 12);
+        }
     }
 }

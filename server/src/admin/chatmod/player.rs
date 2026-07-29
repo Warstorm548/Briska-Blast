@@ -458,6 +458,11 @@ async fn apply(
         .with_target(&username, player_id.parse::<u64>().ok())
         .with_words(words)
         .with_delivery(delivered);
+        // A ban also edits the ban list, so the same record is tagged to appear
+        // in the List table. A warning edits no list and stays out of it.
+        if action == Action::Ban {
+            record = record.with_list(crate::chat::bans::AUDIT_LIST_NAME);
+        }
         if !sid.is_empty() {
             record = record.with_snapshot(&sid, cut_index, covered);
             // A ban keeps the whole conversation, not just what preceded it —

@@ -47,6 +47,7 @@ async fn main() {
         .expect("failed to create Redis pool");
 
     seed_defaults(&redis_pool, &cfg).await;
+    migrate_audit_log(&redis_pool).await;
 
     // One-time visibility: without TURN credentials the game still works on
     // friendly NATs (clients fall back to STUN-only), but symmetric-NAT peer
@@ -260,6 +261,24 @@ async fn main() {
     .with_graceful_shutdown(async move { rx_admin.recv().await.ok(); });
 
     tokio::try_join!(game_serve, admin_serve).unwrap();
+}
+
+/// Move pre-0.34.0 audit records into the record store and build the category
+/// indexes. Runs before either server binds so no request sees a half-migrated
+/// log; a no-op on every boot after the first.
+///
+/// Deliberately **not fatal**. A failed migration leaves the audit page thin
+/// until the next boot retries, which is bad — but refusing to start the game
+/// server over it would take chat and matchmaking down for an admin-panel
+/// concern. The marker stays unset, so the retry is automatic.
+async fn migrate_audit_log(pool: &deadpool_redis::Pool) {
+    let Ok(mut conn) = pool.get().await else {
+        tracing::error!("chat: audit migration skipped — no Redis connection; retries next boot");
+        return;
+    };
+    if let Err(e) = chat::audit::migrate(&mut conn).await {
+        tracing::error!("chat: audit log migration failed — retries next boot: {}", e);
+    }
 }
 
 async fn seed_defaults(pool: &deadpool_redis::Pool, cfg: &config::Config) {

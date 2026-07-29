@@ -183,13 +183,33 @@ pub(super) fn snap(body_id: &str, username: &str, player_id: u64, body: &str, wo
 /// Delete (mirrors `Example Imgs/ChatAuditLog.png`), a bulk Ban split across two
 /// players into same-timestamp rows, and EldenFire recurring across the session.
 /// **Word** covers a global Blacklist (no player/body) and an Approve occurrence
-/// (with sender + body + snapshot). **List** covers un-ban / lift-suspension /
-/// whitelist edits (targeted at a player, no chat snapshot).
+/// (with sender + body + snapshot).
+///
+/// **List** is a *view*, not a fifth store: its rows are the same records as the
+/// Player rows they duplicate here, reached through the list index because they
+/// carry a `list` tag. The bans and the un-ban therefore appear in both vectors
+/// on purpose — that is the behaviour under test, not a fixture mistake.
 ///
 /// Body IDs use the 12-char alphanumeric shape the server will assign once wired.
 pub(super) fn sample_audit_log() -> AuditLog {
     AuditLog {
         players: vec![
+            // Lifting a ban is an action on a player, so it belongs here beside
+            // the ban it reverses — the same record the List table shows. No
+            // snapshot: an un-ban has no conversation that prompted it.
+            PlayerAuditEntry {
+                timestamp: "2026-07-24 15:10:33 UTC".into(),
+                moderator_display: "Warstorm".into(),
+                moderator_group: "Admin".into(),
+                action: "Remove Ban".into(),
+                reason: "Appeal granted".into(),
+                target_username: "MossyOak".into(),
+                target_player_id: 3,
+                body_ids: vec![],
+                snapshot_cut: None,
+                flagged_words: vec![],
+                snapshot: vec![],
+            },
             // System auto-enforcement lands in the Player log too — filled like a
             // moderator row, but Group=System and Reason names the rule that fired.
             PlayerAuditEntry {
@@ -328,6 +348,30 @@ pub(super) fn sample_audit_log() -> AuditLog {
             },
         ],
         lists: vec![
+            // The two Ban rows above, seen from the List table. Not copies —
+            // the same two records, reached through the list index because they
+            // carry a `list` tag. Present here so the render tests can assert a
+            // ban shows in both tables.
+            ListAuditEntry {
+                timestamp: "2026-07-24 13:58:20 UTC".into(),
+                moderator_display: "Nova".into(),
+                moderator_group: "Moderator".into(),
+                action: "Ban".into(),
+                reason: "Slur spam".into(),
+                target_username: "EldenFire".into(),
+                target_player_id: 12,
+                list: "Ban List".into(),
+            },
+            ListAuditEntry {
+                timestamp: "2026-07-24 13:58:20 UTC".into(),
+                moderator_display: "Nova".into(),
+                moderator_group: "Moderator".into(),
+                action: "Ban".into(),
+                reason: "Slur spam".into(),
+                target_username: "MossyOak".into(),
+                target_player_id: 3,
+                list: "Ban List".into(),
+            },
             ListAuditEntry {
                 timestamp: "2026-07-24 15:10:33 UTC".into(),
                 moderator_display: "Warstorm".into(),
@@ -336,10 +380,10 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 reason: "Appeal granted".into(),
                 target_username: "MossyOak".into(),
                 target_player_id: 3,
-                // Matches what `chatmod::bans::lists_unban` actually writes —
-                // the sub-tab's own title, so the chip names a list a moderator
-                // can go and open.
-                list: "Banned Users".into(),
+                // Matches `chat::bans::AUDIT_LIST_NAME`, which both ban paths and
+                // the un-ban path tag their records with — and the `List` filter
+                // dropdown's option text, so filtering on it will find these.
+                list: "Ban List".into(),
             },
             ListAuditEntry {
                 timestamp: "2026-07-24 10:02:57 UTC".into(),

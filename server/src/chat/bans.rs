@@ -42,6 +42,19 @@ use crate::state::AppState;
 /// JSON [`BanEntry`]. No TTL — see the module docs.
 const BANNED_KEY: &str = "chat:banned";
 
+/// What an audit record calls this list.
+///
+/// Every action that adds to or removes from the ban list tags its record with
+/// this, which is what puts the row in the List table alongside the Player table
+/// (see [`crate::chat::audit`]). Shared rather than repeated because the ban
+/// paths are in two different modules — the session view and the Moderation
+/// Lists page — and a tag that differed between them would quietly file the same
+/// action under two different lists.
+///
+/// Matches the `List` filter dropdown's option text, not the Banned Users
+/// sub-tab title: the tab names a page, this names the list a record edited.
+pub const AUDIT_LIST_NAME: &str = "Ban List";
+
 /// One banned player, as stored.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BanEntry {

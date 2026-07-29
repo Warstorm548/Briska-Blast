@@ -65,9 +65,11 @@ fn audit_page_renders_table_and_snapshot_overlays() {
     assert!(html.contains("&times;2 bodies"));
     assert!(html.contains(r#"data-copy="L88KD3F1QA72""#));
     // Player Transcript opens that row's namespaced overlay; acted-on bodies
-    // are tagged in the frozen snapshot.
-    assert!(html.contains(r#"onclick="bbCmAuditOpen('player-0')""#));
-    assert!(html.contains(r#"id="cm-audit-back-player-0""#));
+    // are tagged in the frozen snapshot. Row 0 is the un-ban, which has no
+    // conversation behind it — so the overlay belongs to row 1, and the index
+    // being addressed per-row rather than assumed at 0 is the point.
+    assert!(html.contains(r#"onclick="bbCmAuditOpen('player-1')""#));
+    assert!(html.contains(r#"id="cm-audit-back-player-1""#));
     assert!(html.contains(r#"class="modal-card cm-audit-modal""#));
     assert!(html.contains(r#"<span class="cm-msg-tag">acted on</span>"#));
     // Word table: a global Blacklist (no snapshot) + an Approve occurrence
@@ -78,7 +80,7 @@ fn audit_page_renders_table_and_snapshot_overlays() {
     assert!(html.contains(r#"id="cm-audit-back-word-1""#));
     // List table: list-edit actions carry the list chip and no snapshot.
     assert!(html.contains("Remove Ban"));
-    assert!(html.contains(r#"<span class="cm-audit-list">Banned Users</span>"#));
+    assert!(html.contains(r#"<span class="cm-audit-list">Ban List</span>"#));
     // System (automated) actions carry the distinct Group=System badge.
     assert!(html.contains(r#"<span class="cm-audit-sys">System</span>"#));
     // Auto-enforcement on a player lands in the PLAYER log (Group=System),
@@ -104,9 +106,12 @@ fn audit_splits_bulk_action_per_player_and_allows_recurrence() {
         "modtester",
     );
     // One bulk Ban press over two players → two entries sharing a timestamp,
-    // one per target player.
+    // one per target player. Counted within the Player view: a ban is also a
+    // list edit, so the same two records appear again in the List view and a
+    // whole-page count would find four.
+    let player_view = view_of(&html, "player");
     assert_eq!(
-        html.matches("2026-07-24 13:58:20 UTC").count(),
+        player_view.matches("2026-07-24 13:58:20 UTC").count(),
         2,
         "bulk ban should split into two same-timestamp rows"
     );
@@ -136,12 +141,18 @@ fn view_of(html: &str, cat: &str) -> String {
     rest[..end].to_string()
 }
 
-/// A record filed under the wrong category is invisible to a reviewer looking in
-/// the obvious place, and nothing else in the page would reveal it — the tables
-/// render whatever they are handed. So the split itself is asserted: a ban is a
-/// player action, lifting one is a list edit, and neither leaks into the other.
+/// A ban and an un-ban are each **one record shown in two tables** — an action
+/// on a player that also edits the ban list. Asserted at the render boundary
+/// because that is where the model is either honoured or lost: the tables render
+/// whatever they are handed, so a record missing from a view is invisible to a
+/// reviewer looking in the obvious place and nothing else on the page reveals
+/// it.
+///
+/// The previous invariant was the opposite — ban in Player only, un-ban in List
+/// only — which left a player's reversals out of the log any per-player total
+/// has to be counted from. That is the gap this replaces.
 #[test]
-fn ban_and_unban_land_in_their_own_category_tables() {
+fn bans_and_unbans_appear_in_both_the_player_and_list_tables() {
     let html = templates::chatmod_audit_page(
         &sample_audit_log(),
         &sample_sessions(),
@@ -152,16 +163,19 @@ fn ban_and_unban_land_in_their_own_category_tables() {
     let player_view = view_of(&html, "player");
     let list_view = view_of(&html, "list");
 
-    assert!(player_view.contains("<td>Ban</td>"), "a ban is a player action");
-    assert!(
-        !player_view.contains("<td>Remove Ban</td>"),
-        "lifting a ban is a list edit, not a player action"
-    );
-    assert!(list_view.contains("<td>Remove Ban</td>"));
-    assert!(
-        !list_view.contains("<td>Ban</td>"),
-        "the ban itself must not also appear in the list log"
-    );
+    for view in [&player_view, &list_view] {
+        assert!(view.contains("<td>Ban</td>"), "a ban is both a player action and a list edit");
+        assert!(
+            view.contains("<td>Remove Ban</td>"),
+            "lifting a ban is both a player action and a list edit"
+        );
+    }
+
+    // Only the List table names which list was touched; the Player table has no
+    // such column, which is what lets one record serve both without either view
+    // showing a field that means nothing to it.
+    assert!(list_view.contains(r#"<span class="cm-audit-list">Ban List</span>"#));
+    assert!(!player_view.contains("cm-audit-list"));
 
     // A ban row carries everything a reviewer needs without opening anything:
     // why, the target, the cited words, and a way into the transcript.
@@ -169,6 +183,32 @@ fn ban_and_unban_land_in_their_own_category_tables() {
     assert!(player_view.contains(r#"<span class="cm-flag">frick</span>"#));
     assert!(player_view.contains(r#"data-copy="000000012""#));
     assert!(player_view.contains("Transcript"));
+}
+
+/// The tag is what puts a row in the List view, so an action that edits no list
+/// must stay out of it. Without this, "everything lands in both tables" would
+/// pass the test above just as well as the actual rule does.
+#[test]
+fn warnings_stay_out_of_the_list_table() {
+    let html = templates::chatmod_audit_page(
+        &sample_audit_log(),
+        &sample_sessions(),
+        None,
+        crate::admin::AdminRole::Moderator,
+        "modtester",
+    );
+    let player_view = view_of(&html, "player");
+    let list_view = view_of(&html, "list");
+
+    assert!(player_view.contains("<td>Warn + Delete</td>"));
+    assert!(
+        !list_view.contains("<td>Warn + Delete</td>"),
+        "a warning edits no list and must not appear in the list log"
+    );
+    assert!(
+        !list_view.contains("<td>Auto-Delete</td>"),
+        "automated enforcement edits no list either"
+    );
 }
 
 /// The `full` flag is the whole difference between a ban's evidence and every
