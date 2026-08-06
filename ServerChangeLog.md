@@ -5,6 +5,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.34.1] — 2026-08-05
+
+**Fix: the Chat-Mod panel marked only the first blacklisted word in a message,
+and only when it was typed in lowercase.** Moderation-surface rendering only —
+no storage, protocol, route, or client change. Nothing to do on deploy, and
+`min_game_version` stays where it is.
+
+Censoring was never affected: players always received every blacklisted word
+masked. The panel disagreed with it, so a message the filter had caught twice
+could reach a moderator with one word marked red — or, if the sender had
+capitalised it, with nothing marked at all.
+
+Two causes, both in the render path:
+
+- Every projection into the view models collapsed the stored `flagged_words`
+  list to `.first()`, so only the earliest word in a message could ever
+  highlight. The transcript had been recording all of them since 0.30.0.
+- `templates::chatmod::highlight` carried its own matcher, which searched
+  case-sensitively against a word list that is stored ASCII-lowercased. It was
+  written as a placeholder before the filter existed, with a comment saying the
+  flagging engine would take over matching; that handover never happened.
+
+The template no longer matches for itself. Highlighting now runs through
+`chat::blacklist::find_matches` — the same call that masks the word before
+broadcast — so what a moderator sees marked and what a player saw replaced by
+`#` agree by construction rather than by two implementations staying in step.
+That also brings the panel the matcher's boundary rules, multi-byte safety, and
+overlap resolution, so `bad` inside `badword` no longer opens a nested span.
+
+Highlights keep the sender's original casing on screen, while the transcript's
+tappable chips group under the normalized word — so "Select all matching words"
+now widens across `Frick` and `frick` instead of treating them as two words.
+
+Unchanged by design: highlighting still comes from what fired when the message
+was sent, not a re-match against the current blacklist. Removing a word must not
+retroactively un-highlight the evidence in an audit snapshot.
+
 ## [0.34.0] — 2026-07-29
 
 **One audit record, shown in every table it belongs to — plus a Range filter for

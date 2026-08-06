@@ -2,12 +2,14 @@
 //! (`admin::chatmod_data`) projects Redis onto, and the renderers in the
 //! sibling modules turn into HTML. No rendering logic lives here.
 
-/// One preview line in a session card. `flagged_word` gets the red highlight
+/// One preview line in a session card. `flagged_words` get the red highlight
 /// so flags stay visible from every view — a moderator inside one session
 /// still spots blacklisted words surfacing in the other sessions' previews.
 pub struct PreviewLine {
     pub text: String,
-    pub flagged_word: Option<String>,
+    /// Every blacklisted word that fired on this line, not just the first —
+    /// a line censored twice in-game must read as censored twice here.
+    pub flagged_words: Vec<String>,
 }
 
 /// One entry in the left "Active Game Sessions" panel.
@@ -32,8 +34,8 @@ pub struct FlaggedBody {
     /// only — never rendered game-side.
     pub player_id: u64,
     pub body: String,
-    /// The blacklisted word that tripped the flag (highlighted red).
-    pub word: String,
+    /// The blacklisted words that tripped the flag (highlighted red).
+    pub words: Vec<String>,
 }
 
 /// One session's flagged messages, shown as a card on the landing page.
@@ -61,8 +63,9 @@ pub struct ChatMessage {
     /// Rendering a zero-padded `000000000` would assert a player that isn't there.
     pub player_id: Option<u64>,
     pub body: String,
-    /// Present when the body contains a blacklisted word to highlight.
-    pub flagged_word: Option<String>,
+    /// Every blacklisted word the body contains, to highlight. Empty when the
+    /// line never tripped the filter.
+    pub flagged_words: Vec<String>,
     /// True when a moderator spoke into the session rather than a player. Drives
     /// the `MOD` tag so their line is never mistaken for a player's.
     pub is_moderator: bool,

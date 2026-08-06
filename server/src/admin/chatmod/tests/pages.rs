@@ -62,7 +62,7 @@ fn moderator_line_renders_without_a_player_id() {
             username: "Warstorm".into(),
             player_id: Some(7),
             body: "nice shot".into(),
-            flagged_word: None,
+            flagged_words: Vec::new(),
             ..Default::default()
         },
         ChatMessage {
@@ -70,7 +70,7 @@ fn moderator_line_renders_without_a_player_id() {
             username: "jeanluc".into(),
             player_id: None,
             body: "keep it civil".into(),
-            flagged_word: None,
+            flagged_words: Vec::new(),
             is_moderator: true,
             posted_as: Some("Mod".into()),
             ..Default::default()
@@ -99,6 +99,47 @@ fn moderator_line_renders_without_a_player_id() {
     // The player's line still shows theirs.
     assert!(html.contains(r#"data-copy="000000007""#));
     assert!(!html.contains("ID 000000000"), "a moderator must never render a zero id");
+}
+
+/// Regression: the panel used to mark only the *first* flagged word, and only
+/// when it was typed in lowercase — so a message the filter had censored twice
+/// could reach a moderator with one word marked, or none at all. Highlighting
+/// now runs through the same matcher that masks, end to end through the page.
+#[test]
+fn every_flagged_word_is_marked_whatever_its_casing() {
+    let transcript = vec![ChatMessage {
+        body_id: "a00000000001".into(),
+        username: "Warstorm".into(),
+        player_id: Some(7),
+        // Players saw "##### you #####" — both words must be red here too.
+        body: "FRICK you scrub".into(),
+        flagged_words: vec!["frick".into(), "scrub".into()],
+        ..Default::default()
+    }];
+    let html = templates::chatmod_session_page(
+        "FJ5B3V",
+        &transcript,
+        &sample_sessions(),
+        crate::admin::AdminRole::Moderator,
+        "modtester",
+    );
+    // Just the one message body — the tools panel's script also names
+    // `cm-flag-btn`, and would otherwise be counted as a third match.
+    let row = html
+        .split(r#"<div class="cm-msg-body">"#)
+        .nth(1)
+        .and_then(|rest| rest.split("</div>").next())
+        .expect("the transcript row should render");
+    assert_eq!(
+        row.matches("cm-flag-btn").count(),
+        2,
+        "both flagged words should be tappable, not just the first: {row}"
+    );
+    // The capitalised occurrence keeps the sender's casing on screen while
+    // grouping under the normalized word for "select all matching words".
+    assert!(row.contains(r#"data-word="frick""#));
+    assert!(row.contains(">FRICK</button>"));
+    assert!(row.contains(r#"data-word="scrub""#));
 }
 
 // Session resolution now hits Redis, so the half that can be unit-tested is

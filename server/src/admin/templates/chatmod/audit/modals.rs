@@ -62,10 +62,7 @@ pub(in crate::admin::templates::chatmod) fn audit_snapshot_html(
 
 /// One message card inside a snapshot overlay.
 fn snapshot_row_html(m: &ChatMessage, targeted: &[String]) -> String {
-    let body = match &m.flagged_word {
-        Some(word) => highlight(&m.body, word),
-        None => escape(&m.body),
-    };
+    let body = highlight(&m.body, &m.flagged_words);
     let acted = targeted.iter().any(|id| id == &m.body_id);
     let cls = if acted { " cm-msg-targeted" } else { "" };
     let tag = if acted {

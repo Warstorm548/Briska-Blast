@@ -98,7 +98,7 @@ fn to_view(msg: &StoredMessage, deleted: &HashMap<String, DeletionMark>) -> Chat
         // The transcript keeps the uncensored original — that is the whole point
         // of capturing it. Players received the masked form.
         body: msg.text.clone(),
-        flagged_word: msg.flagged_words.first().cloned(),
+        flagged_words: msg.flagged_words.clone(),
         is_moderator: msg.kind == MessageKind::Moderator,
         posted_as,
         is_warning: msg.kind == MessageKind::Warning,
@@ -173,7 +173,7 @@ async fn collect_sessions(
                     .iter()
                     .map(|m| PreviewLine {
                         text: format!("{}: {}", display_name(m), m.text),
-                        flagged_word: m.flagged_words.first().cloned(),
+                        flagged_words: m.flagged_words.clone(),
                     })
                     .collect();
                 let flagged = transcript::is_flagged(conn, &sid).await.unwrap_or(false);
@@ -213,7 +213,7 @@ async fn collect_flagged(
                     username: display_name(m),
                     player_id: numeric_player_id(m)?,
                     body: m.text.clone(),
-                    word: m.flagged_words.first().cloned().unwrap_or_default(),
+                    words: m.flagged_words.clone(),
                 })
             })
             .collect();
@@ -756,7 +756,7 @@ mod tests {
         let view = view(&msg);
         // Players received "##### you all"; the moderator must see what was typed.
         assert_eq!(view.body, "frick you all");
-        assert_eq!(view.flagged_word.as_deref(), Some("frick"));
+        assert_eq!(view.flagged_words, vec!["frick"]);
     }
 
     /// A withheld transcript renders as the same em-dash that means "there was
