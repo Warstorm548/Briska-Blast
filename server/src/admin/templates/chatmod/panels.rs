@@ -32,10 +32,7 @@ pub(super) fn session_list_html(sessions: &[ChatSession], active_code: Option<&s
             let preview = s
                 .preview
                 .iter()
-                .map(|line| match &line.flagged_word {
-                    Some(word) => highlight(&line.text, word),
-                    None => escape(&line.text),
-                })
+                .map(|line| highlight(&line.text, &line.flagged_words))
                 .collect::<Vec<_>>()
                 .join("<br>");
             format!(
@@ -67,7 +64,7 @@ pub(super) fn flagged_list_html(flagged: &[FlaggedSession]) -> String {
           <div class="cm-flag-body">{body}</div>"#,
                         user = escape(&b.username),
                         pid = PlayerId::from_counter(b.player_id),
-                        body = highlight(&b.body, &b.word),
+                        body = highlight(&b.body, &b.words),
                         id = escape(&b.body_id),
                     )
                 })
@@ -107,10 +104,7 @@ pub(super) fn transcript_html(transcript: &[ChatMessage]) -> String {
     transcript
         .iter()
         .map(|m| {
-            let body = match &m.flagged_word {
-                Some(word) => highlight_toggle(&m.body, word),
-                None => escape(&m.body),
-            };
+            let body = highlight_toggle(&m.body, &m.flagged_words);
             let id = escape(&m.body_id);
             let role = message_role(m);
             // Neither a moderator line nor a warning takes a select checkbox. The

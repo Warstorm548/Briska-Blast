@@ -22,15 +22,15 @@ use crate::admin::templates::{
 pub(super) fn line(text: &str) -> PreviewLine {
     PreviewLine {
         text: text.into(),
-        flagged_word: None,
+        flagged_words: Vec::new(),
     }
 }
 
-/// Fixture shorthand: for a preview line carrying a blacklisted word to highlight.
-pub(super) fn flagged_line(text: &str, word: &str) -> PreviewLine {
+/// Fixture shorthand: for a preview line carrying blacklisted words to highlight.
+pub(super) fn flagged_line(text: &str, words: &[&str]) -> PreviewLine {
     PreviewLine {
         text: text.into(),
-        flagged_word: Some(word.into()),
+        flagged_words: words.iter().map(|w| (*w).into()).collect(),
     }
 }
 
@@ -43,7 +43,7 @@ pub(super) fn sample_sessions() -> Vec<ChatSession> {
             preview: vec![
                 line("Warstorm: nice shot"),
                 line("PixelPirate: that portal save tho"),
-                flagged_line("Warstorm: frick you all", "frick"),
+                flagged_line("Warstorm: frick you all", &["frick"]),
             ],
             flagged: true,
         },
@@ -52,7 +52,7 @@ pub(super) fn sample_sessions() -> Vec<ChatSession> {
             preview: vec![
                 line("MossyOak: who took my ball"),
                 line("TinCanTam: speed boost is up"),
-                flagged_line("MossyOak: get rekt scrub", "scrub"),
+                flagged_line("MossyOak: get rekt scrub", &["scrub"]),
             ],
             flagged: true,
         },
@@ -80,14 +80,14 @@ pub(super) fn sample_flagged() -> Vec<FlaggedSession> {
                     username: "Warstorm".into(),
                     player_id: 7,
                     body: "frick you all".into(),
-                    word: "frick".into(),
+                    words: vec!["frick".into()],
                 },
                 FlaggedBody {
                     body_id: "Q71ZT8C3VB55".into(),
                     username: "Warstorm".into(),
                     player_id: 7,
                     body: "no frick this whole game".into(),
-                    word: "frick".into(),
+                    words: vec!["frick".into()],
                 },
             ],
         },
@@ -98,7 +98,7 @@ pub(super) fn sample_flagged() -> Vec<FlaggedSession> {
                 username: "MossyOak".into(),
                 player_id: 3,
                 body: "get rekt scrub".into(),
-                word: "scrub".into(),
+                words: vec!["scrub".into()],
             }],
         },
     ]
@@ -115,7 +115,7 @@ pub(super) fn sample_transcript(code: &str) -> Vec<ChatMessage> {
                 username: "PixelPirate".into(),
                 player_id: Some(12),
                 body: "that portal save tho".into(),
-                flagged_word: None,
+                flagged_words: Vec::new(),
                 ..Default::default()
             },
             ChatMessage {
@@ -123,7 +123,7 @@ pub(super) fn sample_transcript(code: &str) -> Vec<ChatMessage> {
                 username: "Warstorm".into(),
                 player_id: Some(7),
                 body: "frick you all".into(),
-                flagged_word: Some("frick".into()),
+                flagged_words: vec!["frick".into()],
                 ..Default::default()
             },
             ChatMessage {
@@ -131,7 +131,7 @@ pub(super) fn sample_transcript(code: &str) -> Vec<ChatMessage> {
                 username: "PixelPirate".into(),
                 player_id: Some(12),
                 body: "chill, it is one point".into(),
-                flagged_word: None,
+                flagged_words: Vec::new(),
                 ..Default::default()
             },
             ChatMessage {
@@ -139,7 +139,7 @@ pub(super) fn sample_transcript(code: &str) -> Vec<ChatMessage> {
                 username: "Warstorm".into(),
                 player_id: Some(7),
                 body: "no frick this whole game".into(),
-                flagged_word: Some("frick".into()),
+                flagged_words: vec!["frick".into()],
                 ..Default::default()
             },
         ]
@@ -150,7 +150,7 @@ pub(super) fn sample_transcript(code: &str) -> Vec<ChatMessage> {
                 username: "PlayerOne".into(),
                 player_id: Some(101),
                 body: "good game so far".into(),
-                flagged_word: None,
+                flagged_words: Vec::new(),
                 ..Default::default()
             },
             ChatMessage {
@@ -158,7 +158,7 @@ pub(super) fn sample_transcript(code: &str) -> Vec<ChatMessage> {
                 username: "PlayerTwo".into(),
                 player_id: Some(102),
                 body: "watch the corner barrier".into(),
-                flagged_word: None,
+                flagged_words: Vec::new(),
                 ..Default::default()
             },
         ]
@@ -166,13 +166,13 @@ pub(super) fn sample_transcript(code: &str) -> Vec<ChatMessage> {
 }
 
 /// A snapshot message, shorthand for the sample data below.
-pub(super) fn snap(body_id: &str, username: &str, player_id: u64, body: &str, word: Option<&str>) -> ChatMessage {
+pub(super) fn snap(body_id: &str, username: &str, player_id: u64, body: &str, words: &[&str]) -> ChatMessage {
     ChatMessage {
         body_id: body_id.into(),
         username: username.into(),
         player_id: Some(player_id),
         body: body.into(),
-        flagged_word: word.map(Into::into),
+        flagged_words: words.iter().map(|w| (*w).into()).collect(),
         ..Default::default()
     }
 }
@@ -226,8 +226,8 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 snapshot_cut: None,
                 flagged_words: vec!["frick".into()],
                 snapshot: vec![
-                    snap("Q71ZT8C3VB55", "EldenFire", 12, "frick the mods", Some("frick")),
-                    snap("N44QW8T1RB29", "EldenFire", 12, "you all need to hit harder", None),
+                    snap("Q71ZT8C3VB55", "EldenFire", 12, "frick the mods", &["frick"]),
+                    snap("N44QW8T1RB29", "EldenFire", 12, "you all need to hit harder", &[]),
                 ],
             },
             PlayerAuditEntry {
@@ -242,8 +242,8 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 snapshot_cut: None,
                 flagged_words: vec![],
                 snapshot: vec![
-                    snap("N44QW8T1RB29", "EldenFire", 12, "you all need to hit harder", None),
-                    snap("P07LM2K9XC53", "RallyKnight", 34, "we are up two, relax", None),
+                    snap("N44QW8T1RB29", "EldenFire", 12, "you all need to hit harder", &[]),
+                    snap("P07LM2K9XC53", "RallyKnight", 34, "we are up two, relax", &[]),
                 ],
             },
             PlayerAuditEntry {
@@ -258,10 +258,10 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 snapshot_cut: None,
                 flagged_words: vec!["frick".into()],
                 snapshot: vec![
-                    snap("R21WQ7H4NM08", "RallyKnight", 34, "nice portal defense", None),
-                    snap("L88KD3F1QA72", "EldenFire", 12, "frick that was my ball", Some("frick")),
-                    snap("M04TC9V2HG61", "RallyKnight", 34, "easy, it is one point", None),
-                    snap("T09XB4N6QW22", "EldenFire", 12, "frick this whole match", Some("frick")),
+                    snap("R21WQ7H4NM08", "RallyKnight", 34, "nice portal defense", &[]),
+                    snap("L88KD3F1QA72", "EldenFire", 12, "frick that was my ball", &["frick"]),
+                    snap("M04TC9V2HG61", "RallyKnight", 34, "easy, it is one point", &[]),
+                    snap("T09XB4N6QW22", "EldenFire", 12, "frick this whole match", &["frick"]),
                 ],
             },
             // One bulk Ban press over two players → two entries, same timestamp.
@@ -279,9 +279,9 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 snapshot_cut: Some(2),
                 flagged_words: vec!["frick".into()],
                 snapshot: vec![
-                    snap("Q71ZT8C3VB55", "EldenFire", 12, "frick the mods", Some("frick")),
-                    snap("B19HN5J8WD30", "MossyOak", 3, "get rekt scrub", Some("scrub")),
-                    snap("Z66GT1Y5CV18", "RallyKnight", 34, "well that escalated", None),
+                    snap("Q71ZT8C3VB55", "EldenFire", 12, "frick the mods", &["frick"]),
+                    snap("B19HN5J8WD30", "MossyOak", 3, "get rekt scrub", &["scrub"]),
+                    snap("Z66GT1Y5CV18", "RallyKnight", 34, "well that escalated", &[]),
                 ],
             },
             PlayerAuditEntry {
@@ -296,8 +296,8 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 snapshot_cut: None,
                 flagged_words: vec!["scrub".into()],
                 snapshot: vec![
-                    snap("B19HN5J8WD30", "MossyOak", 3, "get rekt scrub", Some("scrub")),
-                    snap("K82PQ4R7M2X9", "MossyOak", 3, "scrub scrub scrub", Some("scrub")),
+                    snap("B19HN5J8WD30", "MossyOak", 3, "get rekt scrub", &["scrub"]),
+                    snap("K82PQ4R7M2X9", "MossyOak", 3, "scrub scrub scrub", &["scrub"]),
                 ],
             },
             PlayerAuditEntry {
@@ -316,7 +316,7 @@ pub(super) fn sample_audit_log() -> AuditLog {
                     "TinCanTam",
                     88,
                     "buy my stream buy my stream buy my stream",
-                    None,
+                    &[],
                 )],
             },
         ],
@@ -344,8 +344,8 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 target_player_id: Some(34),
                 body_ids: vec!["W71MK3P8QB20".into()],
                 snapshot: vec![
-                    snap("W71MK3P8QB20", "RallyKnight", 34, "gg from the scrub squad", Some("scrub")),
-                    snap("Z04HD9V2LC88", "MossyOak", 3, "nice one", None),
+                    snap("W71MK3P8QB20", "RallyKnight", 34, "gg from the scrub squad", &["scrub"]),
+                    snap("Z04HD9V2LC88", "MossyOak", 3, "nice one", &[]),
                 ],
             },
         ],
@@ -409,8 +409,8 @@ pub(super) fn sample_audit_log() -> AuditLog {
                 target_player_id: 12,
                 body_ids: vec!["T09XB4N6QW22".into()],
                 snapshot: vec![
-                    snap("R21WQ7H4NM08", "RallyKnight", 34, "nice portal defense", None),
-                    snap("T09XB4N6QW22", "EldenFire", 12, "frick this whole match", Some("frick")),
+                    snap("R21WQ7H4NM08", "RallyKnight", 34, "nice portal defense", &[]),
+                    snap("T09XB4N6QW22", "EldenFire", 12, "frick this whole match", &["frick"]),
                 ],
             },
             SystemAuditEntry {
@@ -427,7 +427,7 @@ pub(super) fn sample_audit_log() -> AuditLog {
                     "MossyOak",
                     3,
                     "scrub scrub scrub",
-                    Some("scrub"),
+                    &["scrub"],
                 )],
             },
         ],
@@ -466,10 +466,10 @@ pub(super) fn sample_moderation_lists() -> ModerationLists {
                 player_id: 12,
                 reason: "Slur spam".into(),
                 snapshot: vec![
-                    snap("R21WQ7H4NM08", "RallyKnight", 34, "nice portal defense", None),
-                    snap("L88KD3F1QA72", "EldenFire", 12, "frick that was my ball", Some("frick")),
-                    snap("T09XB4N6QW22", "EldenFire", 12, "frick this whole match", Some("frick")),
-                    snap("M04TC9V2HG61", "RallyKnight", 34, "well that escalated", None),
+                    snap("R21WQ7H4NM08", "RallyKnight", 34, "nice portal defense", &[]),
+                    snap("L88KD3F1QA72", "EldenFire", 12, "frick that was my ball", &["frick"]),
+                    snap("T09XB4N6QW22", "EldenFire", 12, "frick this whole match", &["frick"]),
+                    snap("M04TC9V2HG61", "RallyKnight", 34, "well that escalated", &[]),
                 ],
                 snapshot_cut: Some(3),
             },
