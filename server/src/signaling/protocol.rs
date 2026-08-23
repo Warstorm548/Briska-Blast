@@ -291,9 +291,10 @@ pub enum ServerMsg {
     ///
     /// # Two send sites
     ///
-    /// 1. When the ban is applied, if the target is live in a lobby. Best-effort
-    ///    and never queued, exactly like a warning: an offline or in-match player
-    ///    does not receive it and the attempt is recorded as undelivered.
+    /// 1. When the ban is applied, if the target has a live socket. Best-effort
+    ///    and never queued, exactly like a warning: an offline player does not
+    ///    receive it and the attempt is recorded as undelivered. Being in a match
+    ///    is not a barrier — chat renders there as well as in the lobby.
     /// 2. Whenever a banned player attempts to send chat — the frame handler
     ///    refuses the message and answers with this instead of broadcasting.
     ///
@@ -312,8 +313,9 @@ pub enum ServerMsg {
     /// ordered chat list, rendering skips it so the visible log closes up with no
     /// gap. That preserves the line's original position for a possible future
     /// restore, which could then refill the hole in place without the server
-    /// having to describe where it went. The placeholder lives only as long as
-    /// the client's lobby chat does — leaving the session discards it.
+    /// having to describe where it went. The placeholder lives as long as the
+    /// client's session transcript does — it spans the lobby, the connecting
+    /// phase and the match, and leaving the session discards it.
     ///
     /// Server-side nothing is removed. The transcript is append-only because
     /// audit records pin a cut index into it, so a deletion is recorded as a mark
