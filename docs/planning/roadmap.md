@@ -212,3 +212,12 @@ Two findings from the review of the `signaling/ws.rs` → `ws/` module split (PR
 
 Ball-loss watchdog — if the single ball died with the crashed process, the rejoined match has no ball until a watchdog re-serves it. Designed in the plan: ball holder broadcasts a BallAlive heartbeat; lowest-id connected player serves after a gap. Fast-follow.
 Grace windows remain consts (runtime config later).
+
+### Live viewport resize during a match (game 0.32.0)
+
+- **What**: Reflow the in-match UI when the window is resized. Today nothing does: `GameScene._Ready` resolves the arena from the viewport **once**, `HotbarView` sizes its strip once, and `InGameChat` derives both its resting height and its width from the action bar the same way. Resize the window mid-match and every one of them keeps its launch-time geometry. There is no `SizeChanged` subscriber anywhere in `client/src/`.
+- **Why deferred**: The arena being frozen is **deliberate, not an oversight**. Ball handoffs normalize speed and entry position by arena height ([`extended-mode.md`](../architecture/extended-mode.md)), so every client in a match must agree on it — recomputing on one player's resize would desync that player's handoffs from everyone else's. The chat panel and the action bar inherit the freeze on purpose, and they must stay consistent with each other: making chat alone re-derive its size would leave it misaligned with the strip it sits in, which is worse than the current uniform staleness.
+- **Trap**: this is not a per-widget fix. Anything that reflows must move together — arena, action bar, chat — and the arena half needs a story for peers who did *not* resize (renegotiate the agreed height, or normalize handoffs against something other than live viewport height).
+- **Source**: Flagged in review of PR #108 (in-match chat window) against `InGameChat`; skipped there because the isolated fix would introduce the misalignment described above.
+- **Trigger to start**: Players actually resize mid-match and complain, OR a windowed/borderless mode ships that makes resizing routine, OR the handoff normalization stops keying on arena height (which removes the constraint entirely).
+- **Related**: `client/src/game/GameScene.cs` (`_Ready` arena resolve), `client/src/ui/HotbarView.cs` (`HeightHFrac`, `SlotSizeHFrac`), `client/src/ui/chat/InGameChat.cs` (`ApplyHeight`, `PanelWidth`), [`extended-mode.md`](../architecture/extended-mode.md) (why the height is shared).
