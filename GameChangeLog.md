@@ -9,6 +9,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.32.0] — 2026-08-22
+
+**Chat in the match** (server 0.35.0). Chat is no longer a lobby-only feature.
+A chat window now sits in the bottom-left of the play screen, in the strip the
+action bar already occupies, and the conversation players were having in the
+lobby is already on screen when the match opens.
+
+**The window is always visible.** `T` and `/` do not show or hide it — they move
+keyboard focus into it. `/` opens with the slash already typed, command-style,
+so a future dev-tools parser has its prefix; there is no command parser yet, and
+a `/…` line posts as ordinary chat exactly as it would in the lobby. `Enter`
+sends and keeps you in the input. **`Enter` on an empty box is the way out**: it
+hands the keyboard back to the game. A lone `/` counts as empty, so backing out
+of a half-typed command never posts a stray slash to the session.
+
+While chat holds the keyboard, player controls are suspended — the paddle, the
+serve and the hotbar keys all stop, and `Escape` leaves chat instead of opening
+the pause menu. This is a latch rather than a consequence of focus, because
+every input in the match is polled from the device and polling ignores GUI focus
+entirely: without it, typing "1"–"5" would fire hotbar slots, `Space` would
+serve, and the arrow keys moving the caret would also slide the paddle.
+
+**The match does not pause for chat.** It keeps running while you type, and a
+player who chats mid-rally can be scored on. That is deliberate; the risk is
+theirs to take.
+
+At rest the panel sits entirely inside the action-bar strip and covers nothing,
+showing a line or two — enough to notice someone talking. Focusing the input
+grows the log **upward over the play field** to about ten lines, and it
+collapses again when focus leaves. The arena is unchanged — its
+height is derived from the action-bar strip and every client in a match must
+agree on it, so growing the strip would be a protocol change in all but name.
+Growing *over* it costs nothing. Because the expanded panel covers live play its
+background is translucent: the ball, the paddle and the barriers stay readable
+through it, so the window never hides what it is costing you.
+
+**History carries over from the lobby, never from the server.** The transcript
+moved out of the lobby scene and onto `MatchFlow`, so it now spans the whole
+session, and the handoff is an explicit step in the match lifecycle — run as the
+flow enters `Preparing`, capped at 100 lines, and logged under `match.flow`.
+This also closes a gap that had been documented as deliberate: nothing used to
+be listening to chat during `Preparing`, so a line sent while players stared at
+the connecting screen was dropped. It now lands in the match log. Nothing is
+re-fetched from the server, so a player rejoining after a process death starts
+with an empty transcript by design.
+
+Moderation behaves identically in the match and in the lobby — the same message
+ids, the same tombstone deletes, the same warning and ban banners — because both
+places now render through one shared `ChatPanel` rather than two copies that
+could drift. Warnings and bans reaching an in-match player required the server
+change in 0.35.0.
+
+---
+
 ## [0.31.0] — 2026-07-28
 
 **Chat ban notices** (server 0.33.0). A moderator can now permanently revoke a

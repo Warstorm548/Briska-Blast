@@ -277,10 +277,9 @@ pub enum ServerMsg {
     ///
     /// Delivery is best-effort and never queued. `SignalHub::send_to` reports
     /// whether the frame reached a live socket, and that outcome is recorded on
-    /// the audit record. Note that a live socket is necessary but not sufficient:
-    /// chat is rendered only in the lobby, so a player already in a match has a
-    /// healthy socket and no surface to show this on. Callers must treat
-    /// in-match players as undeliverable rather than trusting `send_to` alone.
+    /// the audit record. A live socket is the whole test: chat is rendered in the
+    /// match as well as the lobby, so a connected player always has somewhere to
+    /// show this.
     ChatWarning { reason: String },
     /// A player's chat privileges have been revoked, carrying the reason the
     /// moderator gave. Sent to **one player only**, and rendered red rather than

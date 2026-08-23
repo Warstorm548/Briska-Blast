@@ -1,9 +1,10 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://src/ui/menus/SessionLobby.cs" id="1_script"]
 [ext_resource type="Texture2D" path="res://src/assets/sprites/backgrounds/BackgroundDefault.png" id="2_bg"]
 [ext_resource type="Theme" path="res://src/ui/theme/MenuTheme.tres" id="3_theme"]
 [ext_resource type="Texture2D" path="res://src/assets/sprites/ui/CopyIcon.png" id="4_copyicon"]
+[ext_resource type="PackedScene" path="res://src/ui/chat/ChatPanel.tscn" id="5_chatpanel"]
 
 [node name="SessionLobby" type="Control"]
 layout_mode = 3
@@ -317,41 +318,13 @@ visible = false
 text = "Promote to Host"
 
 ; ---- Chat ----
+; The panel itself is shared with the in-match overlay (src/ui/chat/ChatPanel.tscn)
+; so the renderer, the moderation paths and the input behave identically in both.
 
-[node name="ChatBox" type="PanelContainer" parent="RightPanel/RightMargins/RightContent"]
+[node name="ChatBox" parent="RightPanel/RightMargins/RightContent" instance=ExtResource("5_chatpanel")]
 custom_minimum_size = Vector2(0, 160)
 layout_mode = 2
 size_flags_vertical = 3
-theme_type_variation = &"InnerPanel"
-
-[node name="ChatMargins" type="MarginContainer" parent="RightPanel/RightMargins/RightContent/ChatBox"]
-layout_mode = 2
-theme_override_constants/margin_left = 16
-theme_override_constants/margin_top = 12
-theme_override_constants/margin_right = 16
-theme_override_constants/margin_bottom = 12
-
-[node name="ChatVBox" type="VBoxContainer" parent="RightPanel/RightMargins/RightContent/ChatBox/ChatMargins"]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="ChatHeader" type="Label" parent="RightPanel/RightMargins/RightContent/ChatBox/ChatMargins/ChatVBox"]
-layout_mode = 2
-text = "Chat"
-theme_override_font_sizes/font_size = 22
-
-[node name="ChatLog" type="RichTextLabel" parent="RightPanel/RightMargins/RightContent/ChatBox/ChatMargins/ChatVBox"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_vertical = 3
-bbcode_enabled = true
-scroll_following = true
-autowrap_mode = 3
-
-[node name="ChatInput" type="LineEdit" parent="RightPanel/RightMargins/RightContent/ChatBox/ChatMargins/ChatVBox"]
-unique_name_in_owner = true
-layout_mode = 2
-placeholder_text = "Chat message field"
 
 ; ============ BOTTOM BUTTONS ============
 

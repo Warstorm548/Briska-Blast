@@ -62,10 +62,13 @@ while still in the lobby) is logged and ignored. There are no per-scene
   `HostChanged` (the only code that mutates the `SessionContext` roster),
   `StartSignaling`, `SessionEnded`, `Kicked`, `Closed`, `GameOver`,
   `MatchStarted`, `MatchPaused`/`MatchResumed` (plus `Reconnected`, for the
-  ready re-send below — views may also subscribe to that one). Views
-  subscribe directly (via `MatchFlow.Signaling`) only to **pure-UI** events:
-  `ChatMessage`, `Reconnecting`/`Reconnected`, the `Host/PeerReconnecting`
-  overlays, and `ScoreUpdate` + the offer/answer/ICE relays consumed by
+  ready re-send below — views may also subscribe to that one). It is also the
+  sole subscriber of the four **chat** frames — `ChatMessage`, `ChatWarning`,
+  `ChatBanned`, `ChatBodyDeleted` — which are not lifecycle events but must
+  outlive every scene; see the chat transcript below. Views subscribe directly
+  (via `MatchFlow.Signaling`) only to **pure-UI** events:
+  `Reconnecting`/`Reconnected`, the `Host/PeerReconnecting` overlays, and
+  `ScoreUpdate` + the offer/answer/ICE relays consumed by
   `NetGameController`/the transport (net glue, not lifecycle).
 - **MatchFlow's typed surface for views:** `StateChanged`, `RosterChanged`
   (re-render the lobby), `PreparingProgress` (+ the pull-on-entry
@@ -124,8 +127,32 @@ while still in the lobby) is logged and ignored. There are no per-scene
   first-identify mesh bring-up keys on "in `Preparing` with no transport yet"
   (the normal start path builds its transport synchronously in
   `start_signaling`, so it never lands there).
-- Chat has no subscriber during Preparing; lines broadcast in that window are
-  simply not shown to that client (deliberate — not worth buffering).
+- **The chat handoff.** Entering Preparing is where the lobby's conversation
+  becomes the match's — `MatchFlow.CarryChatIntoMatch()`, called from all three
+  convergent entry points, logging `chat carried into match: kept X of Y` under
+  `match.flow`.
+
+  The transcript itself (`ChatLog`, on MatchFlow) is not moved by that call: it
+  already lives on the orchestrator, from `OpenSignaling` to teardown. That is
+  the point. Chat used to be owned by the lobby scene and died with it, so a
+  match began with no history *and* nothing was listening during Preparing —
+  lines broadcast in that window were dropped outright. A snapshot handed over
+  at the boundary would have fixed only the first half. What the handoff call
+  actually does is **bound** the transcript to `ChatLog.CarryLimit` (100), so a
+  long lobby session neither drags an unbounded list into the match nor makes
+  the first in-game redraw proportional to it. A delete targeting a line that
+  fell outside the window is the already-handled "not found" case.
+
+  Carryover is strictly local — what this client already heard. The server is
+  never asked to replay a transcript, so a process-death rejoiner legitimately
+  starts empty (the call logs 0).
+
+  Views are pure renderers over the shared log: the lobby's `ChatPanel` and the
+  match's `InGameChat` both `Bind(MatchFlow.Instance.Chat)` and pull-then-
+  subscribe, the same ordering `PreparingScreen` uses for `PreparingStatus`.
+  The transcript is cleared in `Teardown` and deliberately **not** in
+  `CloseSignaling` — the missed-start recovery swaps sockets without ending the
+  session, and the conversation has to survive that swap.
 
 ## The one teardown
 

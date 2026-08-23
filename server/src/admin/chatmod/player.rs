@@ -18,11 +18,14 @@
 //! It is not a privilege change: unlike Suspend and Ban, nothing about the
 //! player's account changes, so there is no state to lift later.
 //!
-//! Delivery is **live-only and never queued**. A player who has disconnected, or
-//! who is in a match (chat renders only in the lobby), simply does not receive
-//! it; the attempt is recorded as undelivered on both the audit record and the
-//! transcript echo, and the moderator is told. Holding warnings for later would
-//! deliver them detached from the conversation that prompted them.
+//! Delivery is **live-only and never queued**. A player who has disconnected
+//! simply does not receive it; the attempt is recorded as undelivered on both the
+//! audit record and the transcript echo, and the moderator is told. Holding
+//! warnings for later would deliver them detached from the conversation that
+//! prompted them.
+//!
+//! Being in a match is no longer a barrier — chat renders there too, so a
+//! connected player is a reachable one wherever they are.
 //!
 //! # What a ban is
 //!
@@ -139,7 +142,6 @@ fn bad(msg: impl Into<String>) -> Response {
 
 /// Why a notice did not reach someone. Phrased for a moderator reading a notice.
 const OFFLINE: &str = "not connected";
-const IN_MATCH: &str = "in an active match";
 const NOT_HERE: &str = "not in this session";
 
 /// POST /admin/chatmod/session/:code/warn
@@ -321,10 +323,6 @@ async fn apply(
         }
     }
 
-    // Chat renders only in the lobby, so an in-match player has a healthy socket
-    // and nowhere to show this. Checked once — the whole room shares a match.
-    let in_match = state.signal_hub.match_started(&canon).await;
-
     let usernames = crate::api::fetch_usernames(&mut conn, &targets).await;
 
     // Kept as separate lists rather than one pre-formatted "missed" pile: the
@@ -404,22 +402,18 @@ async fn apply(
             }
         }
 
-        let delivered = if in_match {
-            false
-        } else {
-            state
-                .signal_hub
-                .send_to(&canon, player_id, action.frame(reason.clone()))
-                .await
-        };
+        // A live socket is the whole test: chat renders in the match as well as
+        // the lobby, so there is no longer a state in which a connected player
+        // has nowhere to show this.
+        let delivered = state
+            .signal_hub
+            .send_to(&canon, player_id, action.frame(reason.clone()))
+            .await;
 
         if delivered {
             delivered_to.push(label);
         } else {
-            undelivered.push(format!(
-                "{label} — {}",
-                if in_match { IN_MATCH } else { OFFLINE }
-            ));
+            undelivered.push(format!("{label} — {OFFLINE}"));
         }
 
         // The mod-side echo: the intervention sits in the conversation where it

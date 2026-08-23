@@ -1,0 +1,233 @@
+using System;
+using Godot;
+using BriskaBlast.Core;
+
+namespace BriskaBlast.UI.Chat;
+
+/// <summary>
+/// Reusable chat panel: a notice banner, an optional header, the log, and the
+/// input. Used by the lobby at full size and by the match as a bottom-left
+/// overlay, so a moderation change lands in both places at once.
+///
+/// A pure view over <see cref="ChatLog"/>. It never holds the transcript — that
+/// belongs to <see cref="MatchFlow"/> so it can outlive every scene — and it
+/// never touches the socket to receive. Sending goes through
+/// <see cref="MatchFlow.SendChat"/>, and nothing is echoed locally: the server
+/// broadcasts the line back to the sender too, which is what keeps every
+/// client's transcript identical.
+/// </summary>
+public partial class ChatPanel : PanelContainer
+{
+    // Moderator chat lines are tinted so staff never read as another player.
+    // The admin panel's own MOD badge uses the same blue (#58a6ff).
+    private static readonly Color ModeratorChatColor = new("58a6ff");
+
+    // A warning aimed at this player. Amber rather than the moderator blue: it is
+    // not someone talking, it is an action taken against them.
+    private static readonly Color WarningChatColor = new("d29922");
+
+    // A chat ban aimed at this player. Red rather than the warning's amber — the
+    // colour is the only thing that distinguishes a one-off notice from a
+    // permanent loss of chat, and the two frames are otherwise identical.
+    private static readonly Color BanChatColor = new("f85149");
+
+    /// <summary>The input took or lost keyboard focus. The match uses this to
+    /// suspend and restore player controls; the lobby ignores it.</summary>
+    public event Action<bool>? InputFocusChanged;
+
+    /// <summary>True while the input holds keyboard focus.</summary>
+    public bool InputFocused { get; private set; }
+
+    private ChatLog? _log;
+
+    public override void _Ready()
+    {
+        var input = GetNode<LineEdit>("%ChatInput");
+        input.TextSubmitted += OnSubmitted;
+        input.FocusEntered += () => SetFocused(true);
+        input.FocusExited += () => SetFocused(false);
+
+        GetNode<Button>("%NoticeDismiss").Pressed += () =>
+            GetNode<Control>("%NoticeRow").Visible = false;
+
+        // Drop the scene's sample line: the log fills only from server-broadcast
+        // frames, so every client shows the same transcript.
+        GetNode<RichTextLabel>("%ChatLog").Clear();
+    }
+
+    public override void _ExitTree() => Unbind();
+
+    /// <summary>Show or hide the "Chat" caption (the in-match overlay hides it —
+    /// the strip is too short to spend a line naming itself).</summary>
+    public void ShowHeader(bool visible) => GetNode<Label>("%ChatHeader").Visible = visible;
+
+    /// <summary>
+    /// Tighten the padding. The in-match panel rests inside a strip one action-bar
+    /// slot tall, where the input alone claims about half the height — every pixel
+    /// not spent on chrome is a line of history instead. The lobby keeps the
+    /// roomier spacing, where there is no such pressure.
+    /// </summary>
+    public void SetCompact(bool compact)
+    {
+        var margins = GetNode<MarginContainer>("Margins");
+        margins.AddThemeConstantOverride("margin_top", compact ? 6 : 12);
+        margins.AddThemeConstantOverride("margin_bottom", compact ? 6 : 12);
+        margins.AddThemeConstantOverride("margin_left", compact ? 10 : 16);
+        margins.AddThemeConstantOverride("margin_right", compact ? 10 : 16);
+        GetNode<VBoxContainer>("Margins/Content")
+            .AddThemeConstantOverride("separation", compact ? 4 : 8);
+    }
+
+    /// <summary>
+    /// Render <paramref name="log"/> and follow it from here on.
+    ///
+    /// Draws the existing entries BEFORE subscribing, the same pull-then-subscribe
+    /// ordering <c>PreparingScreen</c> uses: entries added between the scene change
+    /// and this call would otherwise be lost.
+    /// </summary>
+    public void Bind(ChatLog log)
+    {
+        Unbind();
+        _log = log;
+        // Backlog only — deliberately not through OnEntryAdded, or entering the
+        // match would re-raise a banner for every warning already dealt with in
+        // the lobby.
+        Redraw();
+        log.EntryAdded += OnEntryAdded;
+        log.Redrawn += Redraw;
+    }
+
+    private void Unbind()
+    {
+        if (_log == null)
+            return;
+        _log.EntryAdded -= OnEntryAdded;
+        _log.Redrawn -= Redraw;
+        _log = null;
+    }
+
+    /// <summary>Give the input keyboard focus, optionally seeded with
+    /// <paramref name="prefill"/> (the "/" that command-style opening leaves in
+    /// place for a future command parser).</summary>
+    public void FocusInput(string prefill = "")
+    {
+        var input = GetNode<LineEdit>("%ChatInput");
+        input.Text = prefill;
+        input.CaretColumn = prefill.Length;
+        input.GrabFocus();
+    }
+
+    /// <summary>Drop keyboard focus, handing control back to whatever owns it.</summary>
+    public void ReleaseInput() => GetNode<LineEdit>("%ChatInput").ReleaseFocus();
+
+    private void SetFocused(bool focused)
+    {
+        if (InputFocused == focused)
+            return;
+        InputFocused = focused;
+        InputFocusChanged?.Invoke(focused);
+    }
+
+    // Enter in the input. Trim, send through the orchestrator, then clear the
+    // field — focus is deliberately KEPT, because sending is not leaving.
+    private void OnSubmitted(string text)
+    {
+        var input = GetNode<LineEdit>("%ChatInput");
+        var trimmed = text.Trim();
+
+        // Enter on an empty box is the way out, and a bare "/" counts as empty:
+        // opening in command style puts it there, so backing out of a command
+        // must not post a lone slash to the session.
+        if (trimmed.Length == 0 || trimmed == "/")
+        {
+            input.Clear();
+            ReleaseInput();
+            return;
+        }
+
+        MatchFlow.Instance.SendChat(trimmed);
+        input.Clear();
+    }
+
+    // A line was appended. Drawing just this one keeps the common case cheap and
+    // leaves RichTextLabel's scroll_following to do its job.
+    private void OnEntryAdded(ChatEntry entry)
+    {
+        DrawEntry(GetNode<RichTextLabel>("%ChatLog"), entry);
+
+        // A notice aimed at this player is shown twice over: in the log where the
+        // conversation is, and on a banner that cannot scroll away. The server
+        // never resends a warning, so the log alone would let it slip past.
+        if (entry.IsBan)
+            ShowNotice($"⛔ Chat banned by a moderator: {entry.Text}", BanChatColor);
+        else if (entry.IsWarning)
+            ShowNotice($"⚠ Warning from a moderator: {entry.Text}", WarningChatColor);
+    }
+
+    // Rebuild from the transcript. Only a deletion or the handoff trim needs
+    // this — every other change is an append.
+    private void Redraw()
+    {
+        var log = GetNode<RichTextLabel>("%ChatLog");
+        log.Clear();
+        if (_log == null)
+            return;
+        foreach (var entry in _log.Entries)
+            DrawEntry(log, entry);
+    }
+
+    // Draw one entry. Every server- and user-supplied string goes through AddText
+    // (never AppendText), and colour/bold come from the Push*/Pop API rather than
+    // interpolated BBCode — the label has bbcode_enabled, so building tags into a
+    // string would be a tag-injection hole.
+    private static void DrawEntry(RichTextLabel log, ChatEntry entry)
+    {
+        // A deleted line leaves no trace in the log: the placeholder exists to
+        // hold its position in the list, not to show a gap on screen.
+        if (entry.Deleted)
+            return;
+
+        // Both notice types read identically apart from their tag and colour, so
+        // they share one branch rather than two near-copies.
+        if (entry.IsWarning || entry.IsBan)
+        {
+            log.PushColor(entry.IsBan ? BanChatColor : WarningChatColor);
+            log.PushBold();
+            log.AddText(entry.IsBan ? "[CHAT BANNED]" : "[WARNING]");
+            log.Pop();
+            log.AddText($" {entry.Text}\n");
+            log.Pop();
+            return;
+        }
+
+        if (entry.IsModerator)
+        {
+            // The name is whatever the moderator chose to appear as; the client
+            // is deliberately not told who is behind an anonymous "Mod".
+            log.PushColor(ModeratorChatColor);
+            log.PushBold();
+            log.AddText($"[MOD] {entry.Name}");
+            log.Pop();
+            log.AddText($": {entry.Text}\n");
+            log.Pop();
+            return;
+        }
+
+        log.PushBold();
+        log.AddText(entry.Name);
+        log.Pop();
+        log.AddText($": {entry.Text}\n");
+    }
+
+    // Replace rather than stack: the newest notice is the current one, and a
+    // growing pile of banners would push the chat itself off screen. The colour
+    // is re-applied every time so a ban landing after a warning recolours the
+    // banner it inherits.
+    private void ShowNotice(string message, Color colour)
+    {
+        var label = GetNode<Label>("%NoticeLabel");
+        label.AddThemeColorOverride("font_color", colour);
+        label.Text = message;
+        GetNode<Control>("%NoticeRow").Visible = true;
+    }
+}
