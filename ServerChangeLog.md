@@ -5,6 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.35.0] — 2026-08-22
+
+**Moderator warnings and chat bans now reach players who are in a match.** One
+condition removed; no protocol change, no new frames, no storage change.
+
+`chatmod::player::apply` — the shared path behind Warn Only, Warn + Delete and
+Ban — asked `SignalHub::match_started` before sending, and treated every player
+in a started match as undeliverable. That was correct when it was written: chat
+rendered only in the lobby, so an in-match player had a healthy socket and
+nowhere to display a notice, and reporting it as delivered would have been a
+lie. Game 0.32.0 puts chat on the play screen, so the premise is gone. A live
+socket is now the whole test, and delivery is decided by `send_to` alone.
+
+Deletes and ordinary chat were never gated and already worked mid-match — this
+only ever affected the two notice frames. The now-unused `IN_MATCH` reason
+string and the `SignalHub::match_started` accessor are removed with it; the
+room's `match_started` latch itself is untouched and still drives the ready
+barrier. Stale comments in `chatmod/player.rs` and `signaling/protocol.rs`
+claiming chat is lobby-only are corrected.
+
+**On deploy: raise `min_game_version` to 0.32.0.** Nothing on the wire forces a
+floor, which is exactly the problem — a pre-0.32.0 client sitting in a match has
+a healthy socket and no chat surface, so the panel would now report a warning as
+*delivered* while the player saw nothing. The version floor is what keeps that
+from happening.
+
+---
+
 ## [0.34.1] — 2026-08-05
 
 **Fix: the Chat-Mod panel marked only the first blacklisted word in a message,

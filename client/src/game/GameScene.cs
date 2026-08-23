@@ -4,6 +4,7 @@ using BriskaBlast.Core;
 using BriskaBlast.Game.View;
 using BriskaBlast.Net;
 using BriskaBlast.UI;
+using BriskaBlast.UI.Chat;
 using BriskaBlast.UI.Menus;
 
 namespace BriskaBlast.Game;
@@ -119,6 +120,19 @@ public partial class GameScene : Node2D
     private const int HotbarLayer = 50;
     private HotbarView _hotbar = null!;
 
+    // In-match chat, sharing the bottom strip with the action bar. Above the bar
+    // so the panel's expanded state is not clipped by it, still below the
+    // reconnect overlay (100) and the menus (200).
+    private const int ChatLayer = 60;
+    private InGameChat _chat = null!;
+
+    // Chat holds the keyboard. Every input read below is polled from the device,
+    // and polling ignores GUI focus entirely — without this latch, typing "1"-"5"
+    // fires hotbar slots, Space serves the ball, and the arrow keys that move the
+    // caret also slide the paddle. The match keeps running underneath: chatting
+    // mid-rally is the player's own risk, by design.
+    private bool _chatFocused;
+
     /// <summary>Input action per hotbar slot, indexed by slot. Held as a table because
     /// _PhysicsProcess polls all of them every frame and building the names inline would
     /// allocate a string per slot per frame. This is also the authority on which slots
@@ -190,6 +204,15 @@ public partial class GameScene : Node2D
         AddChild(_hotbar);
         _hotbar.SyncFrom(_state.Hotbar);
 
+        // Chat shares the strip with the action bar. It binds the transcript
+        // MatchFlow carried in at the Preparing handoff, so the lobby
+        // conversation is already on screen before the first serve — nothing is
+        // re-fetched from the server.
+        _chat = new InGameChat { Layer = ChatLayer };
+        AddChild(_chat);
+        _chat.Bind(MatchFlow.Instance.Chat);
+        _chat.FocusChanged += OnChatFocusChanged;
+
         BuildOverlay();
 
         // The live net belongs to MatchFlow (this scene is only entered by it,
@@ -237,6 +260,8 @@ public partial class GameScene : Node2D
         MatchFlow.Instance.MatchEnded -= OnGameOver;
         MatchFlow.Instance.MatchPausedFor -= OnMatchPaused;
         MatchFlow.Instance.MatchResumedIn -= OnMatchResumed;
+        if (_chat != null)
+            _chat.FocusChanged -= OnChatFocusChanged;
         if (_signaling != null)
         {
             _signaling.HostChanged -= OnHostChangedInGame;
@@ -269,6 +294,9 @@ public partial class GameScene : Node2D
         // both), then show it on top of the frozen game.
         if (_pauseMenu != null)
             ClosePauseMenu();
+        // Same for chat: the end screen takes the keyboard for its own buttons,
+        // so the input must not still be holding it.
+        _chat.ReleaseInput();
         _flowPaused = false;
         _resumeCountdownActive = false;
         RemovePausePanel();
@@ -291,6 +319,10 @@ public partial class GameScene : Node2D
 
     // ---- Esc pause menu ----
 
+    // Chat took or gave back the keyboard. The latch is what actually suspends
+    // play — see the _chatFocused field for why focus alone cannot.
+    private void OnChatFocusChanged(bool focused) => _chatFocused = focused;
+
     private void TogglePauseMenu()
     {
         if (_pauseMenu != null)
@@ -305,6 +337,9 @@ public partial class GameScene : Node2D
         // post-match the scene is on its way out; don't pop a menu over it.
         if (MatchFlow.Instance.State != MatchFlowState.InMatch || _pauseMenu != null)
             return;
+        // The menu grabs focus for its own buttons, so hand the keyboard back
+        // first rather than leaving chat holding a latch it can no longer clear.
+        _chat.ReleaseInput();
         _pauseMenu = GD.Load<PackedScene>("res://src/ui/menus/PauseMenu.tscn")
             .Instantiate<PauseMenu>();
         _pauseMenu.ReturnRequested += ClosePauseMenu;
@@ -565,15 +600,24 @@ public partial class GameScene : Node2D
             UpdateOverlay();
         }
 
-        // Escape toggles the in-match pause menu (open ⇄ Return to Session).
+        // Escape toggles the in-match pause menu (open ⇄ Return to Session) —
+        // unless chat holds the keyboard, where it is the way out of the input
+        // instead. A LineEdit does not consume Escape, so without this branch
+        // typing would be interrupted by the pause menu.
         if (Input.IsActionJustPressed("ui_cancel"))
-            TogglePauseMenu();
+        {
+            if (_chatFocused)
+                _chat.ReleaseInput();
+            else
+                TogglePauseMenu();
+        }
 
         // Hotbar: number keys 1-5 fire their own slot. Suspended while the pause menu
-        // is open, like the paddle and the serve; the _gameOver / flow-pause returns
-        // above already cover the end screen and a rejoin freeze. Deliberately live
-        // during the pre-serve wait — using an item before serving is harmless.
-        if (!_paused)
+        // is open or chat holds the keyboard, like the paddle and the serve; the
+        // _gameOver / flow-pause returns above already cover the end screen and a
+        // rejoin freeze. Deliberately live during the pre-serve wait — using an item
+        // before serving is harmless.
+        if (!_paused && !_chatFocused)
         {
             // Bounded by the action table, not the slot count: a slot with no key bound
             // is simply unreachable rather than an index past the end of the table.
@@ -587,10 +631,12 @@ public partial class GameScene : Node2D
         TickSplitters(delta);
 
         // Paddle: Left/Right arrows. GetAxis returns +1 toward paddle_right.
-        // Suspended while the pause menu is open — the match stays live underneath
-        // (a P2P round can't truly pause for everyone) but we stop driving input.
+        // Suspended while the pause menu is open or chat holds the keyboard — the
+        // match stays live underneath (a P2P round can't truly pause for everyone)
+        // but we stop driving input. In chat's case that is the whole point: the
+        // arrows are moving the caret, not the paddle.
         var paddle = _state.Paddle;
-        if (!_paused)
+        if (!_paused && !_chatFocused)
         {
             float dir = Input.GetAxis("paddle_left", "paddle_right");
             float half = paddle.Width * 0.5f;
@@ -616,7 +662,7 @@ public partial class GameScene : Node2D
         {
             // Rest the un-served ball on the paddle until the player serves it.
             _serveBall.Pos = new Vector2(paddle.CenterX, paddle.Y - _serveBall.Radius);
-            if (!_paused && Input.IsActionJustPressed("serve"))
+            if (!_paused && !_chatFocused && Input.IsActionJustPressed("serve"))
             {
                 _serveBall.Vel = new Vector2(0, -_serveSpeed);
                 // Serving applies force, so it counts as a hit: tag the ball with

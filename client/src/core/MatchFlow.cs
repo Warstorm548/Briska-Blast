@@ -77,6 +77,13 @@ public partial class MatchFlow : Node
     /// the current progress on entry (events may have fired before its _Ready).</summary>
     public string PreparingStatus { get; private set; } = "";
 
+    /// <summary>The session's chat transcript. Owned here rather than by the view
+    /// that draws it so it survives every scene change: the lobby, the Preparing
+    /// screen and the match all bind the same log, and lines that arrive while no
+    /// view is mounted are still recorded. Cleared on teardown, never rebuilt from
+    /// the server.</summary>
+    public ChatLog Chat { get; } = new();
+
     /// <summary>Fired after every accepted transition. Carries (from, to).</summary>
     public event Action<MatchFlowState, MatchFlowState>? StateChanged;
 
@@ -220,6 +227,9 @@ public partial class MatchFlow : Node
         // with the state already Preparing, and its teardown's main-menu scene
         // change — issued last — wins over the connecting screen.
         TransitionTo(MatchFlowState.Preparing, "rejoining live match");
+        // A fresh process has nothing to carry; the call logs the zero and the
+        // rejoiner starts from an empty transcript by design.
+        CarryChatIntoMatch();
 
         // The deadline covers identify + mesh together — a rejoin that can't
         // produce a working mesh within the window fails back cleanly.
@@ -235,9 +245,81 @@ public partial class MatchFlow : Node
         OpenSignaling(SessionContext.Instance);
     }
 
-    /// <summary>Send a lobby chat line through the live signaling socket, so
-    /// the lobby view never touches the socket to send.</summary>
+    /// <summary>Send a chat line through the live signaling socket, so a chat
+    /// view never touches the socket to send. Nothing is rendered locally — the
+    /// server echoes the line back to the sender too, and rendering on receipt is
+    /// what keeps every client's transcript identical.</summary>
     public void SendChat(string text) => Signaling?.SendChatMessage(text);
+
+    // ---- chat transcript (recorded here so it outlives every view) ----
+
+    // A chat line broadcast by the server (ours or a peer's). Keep the roster's
+    // name map in step with what chat reports, then label via the same
+    // DisplayNameFor fallback (Player <id>) the rest of the client uses.
+    //
+    // A moderator line is the exception: it carries no sender id, so it must not
+    // go through the roster at all — feeding it an empty id would register a
+    // phantom roster entry and then label the line from it.
+    private void OnChatMessage(ChatLine line)
+    {
+        if (line.IsModerator)
+        {
+            Chat.Add(new ChatEntry
+            {
+                BodyId = line.BodyId,
+                Name = line.Username,
+                Text = line.Text,
+                IsModerator = true,
+            });
+            return;
+        }
+
+        var ctx = SessionContext.Instance;
+        if (!string.IsNullOrEmpty(line.Username))
+            ctx.SetUsername(line.From, line.Username);
+        Chat.Add(new ChatEntry
+        {
+            BodyId = line.BodyId,
+            Name = ctx.DisplayNameFor(line.From),
+            Text = line.Text,
+        });
+    }
+
+    // A moderator warned this player. Only this client receives it, and it is
+    // never queued. Recorded as an entry; the bound view is what also raises the
+    // banner, since a line that only appeared in the log would scroll away.
+    private void OnChatWarning(string reason) =>
+        Chat.Add(new ChatEntry { Text = reason, IsWarning = true });
+
+    // This player's chat privileges were revoked. Same shape as a warning but
+    // permanent, so the view renders it red.
+    //
+    // Arrives when the ban lands and again on every send the server refuses, so a
+    // player who was offline at the time still finds out the moment they try to
+    // speak. The repeat is the point — it is the answer to what they just did.
+    private void OnChatBanned(string reason) =>
+        Chat.Add(new ChatEntry { Text = reason, IsBan = true });
+
+    // A moderator withdrew a message from everyone in the session.
+    private void OnChatBodyDeleted(string bodyId) => Chat.MarkDeleted(bodyId);
+
+    /// <summary>
+    /// The chat handoff, run as the flow enters Preparing from any of its three
+    /// convergent paths: the lobby conversation becomes the match's conversation.
+    ///
+    /// Nothing is copied — the transcript already lives on this orchestrator,
+    /// which is what lets it keep recording through Preparing while no view is
+    /// mounted. Handing a snapshot over at this boundary instead would drop
+    /// everything broadcast during the phase, which is the bug this replaces.
+    /// What happens here is the bound: the match starts from a capped window.
+    /// Logged so the handoff is visible in the per-run client log next to the
+    /// mesh and ready-barrier lines.
+    /// </summary>
+    private void CarryChatIntoMatch()
+    {
+        var (kept, total) = Chat.CarryIntoMatch();
+        Log.Info("match.flow", $"chat carried into match: kept {kept} of {total} lines.");
+    }
 
     /// <summary>THE teardown: close and free the live net, clear the session,
     /// return to Idle and the main menu. <paramref name="sendLeaveFrame"/> sends
@@ -307,6 +389,14 @@ public partial class MatchFlow : Node
         s.Reconnected += OnReconnected;
         s.MatchPaused += OnMatchPaused;
         s.MatchResumed += OnMatchResumed;
+        // Chat is recorded here, not by whichever view happens to be mounted.
+        // The transcript has to span the lobby, Preparing and the match, and
+        // during Preparing no view exists at all — a view-owned subscription is
+        // exactly how lines used to be lost across the start.
+        s.ChatMessage += OnChatMessage;
+        s.ChatWarning += OnChatWarning;
+        s.ChatBanned += OnChatBanned;
+        s.ChatBodyDeleted += OnChatBodyDeleted;
         // Declare a rejoin identify only on the rejoin paths (BeginRejoin /
         // the poll recovery into an active match) — the server pauses the live
         // match for us. A lobby connect must never pause anything.
@@ -326,6 +416,11 @@ public partial class MatchFlow : Node
         // may start), replacing the old `_transport != null` one-shot guard.
         if (!TransitionTo(MatchFlowState.Preparing, "start_signaling"))
             return;
+
+        // The lobby's conversation becomes the match's, capped. From here the
+        // transcript keeps recording with no view mounted, so a line sent while
+        // players stare at the connecting screen still lands in the match log.
+        CarryChatIntoMatch();
 
         var ctx = SessionContext.Instance;
         ctx.ApplyWinCondition(winCondition);
@@ -575,6 +670,7 @@ public partial class MatchFlow : Node
 
         CloseSignaling(sendLeaveFrame: false);
         TransitionTo(MatchFlowState.Preparing, "recovered missed start");
+        CarryChatIntoMatch();
         _prepareDeadlineMsec = Time.GetTicksMsec() + PrepareTimeoutMsec;
         EmitPreparing("Connecting to match…");
 
@@ -706,6 +802,10 @@ public partial class MatchFlow : Node
             s.Reconnected -= OnReconnected;
             s.MatchPaused -= OnMatchPaused;
             s.MatchResumed -= OnMatchResumed;
+            s.ChatMessage -= OnChatMessage;
+            s.ChatWarning -= OnChatWarning;
+            s.ChatBanned -= OnChatBanned;
+            s.ChatBodyDeleted -= OnChatBodyDeleted;
             if (sendLeaveFrame)
                 s.SendLeave();
             s.CloseConnection();
@@ -734,6 +834,10 @@ public partial class MatchFlow : Node
         SessionContext.Instance?.ClearSession();
         IsRejoin = false;
         PreparingStatus = "";
+        // Deliberately here and not in CloseSignaling: the missed-start recovery
+        // closes and reopens the socket without ending the session, and the
+        // conversation has to survive that swap.
+        Chat.Clear();
         _expectedPeers.Clear();
         _connectedPeers.Clear();
         _failedPeers.Clear();
