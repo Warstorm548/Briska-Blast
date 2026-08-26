@@ -187,6 +187,51 @@ public sealed class GameState
     /// Overwritten wholesale on each ScoreUpdate — never incremented locally.</summary>
     public readonly Dictionary<string, int> Scores = new();
 
+    /// <summary>When each player's CURRENT score was first seen, by local clock.
+    /// The leaderboard breaks ties on it — equal scores rank by who got there
+    /// first. The times themselves are local and mean nothing between clients,
+    /// but every client receives the same score broadcasts in the same order, so
+    /// the ORDER this yields is the same on every screen.</summary>
+    public readonly Dictionary<string, ulong> ScoreReachedAtMsec = new();
+
+    // Scratch for ApplyScores. ScoreReachedAtMsec is readonly, so a rebuild has
+    // to stage the new stamps somewhere before clearing the old ones.
+    private readonly Dictionary<string, ulong> _stamps = new();
+
+    /// <summary>
+    /// Adopt a server tally wholesale, stamping every value that changed.
+    ///
+    /// The one place scores are written. Both callers used to clear and refill
+    /// the map separately; keeping the stamps honest in two places would have
+    /// been one edit away from silently reordering the leaderboard.
+    ///
+    /// A value is stamped whenever it differs from what is held — a DECREASE
+    /// included, since the server is authoritative and "changed" is the only
+    /// thing worth timing. Players whose score did not move keep their original
+    /// stamp, which is what makes the tie-break mean "who got here first" rather
+    /// than "who was in the last packet". Anyone the server no longer lists
+    /// falls out, so a stale stamp cannot outlive its score.
+    /// </summary>
+    public void ApplyScores(IReadOnlyDictionary<string, int> scores)
+    {
+        ulong now = Time.GetTicksMsec();
+
+        _stamps.Clear();
+        foreach (var (pid, pts) in scores)
+        {
+            bool moved = !Scores.TryGetValue(pid, out var held) || held != pts;
+            _stamps[pid] = !moved && ScoreReachedAtMsec.TryGetValue(pid, out var at) ? at : now;
+        }
+
+        ScoreReachedAtMsec.Clear();
+        foreach (var (pid, at) in _stamps)
+            ScoreReachedAtMsec[pid] = at;
+
+        Scores.Clear();
+        foreach (var (pid, pts) in scores)
+            Scores[pid] = pts;
+    }
+
     public string LocalPlayerId = "";
 
     /// <summary>Per-seat stride that namespaces ball ids so balls created

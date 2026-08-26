@@ -197,10 +197,10 @@ public sealed class NetGameController : IDisposable
     private void OnScoreUpdate(Dictionary<string, int> scores)
     {
         // Server is authoritative — overwrite, never add. A dropped/duplicated
-        // ScoreUpdate can't desync the local tally.
-        _state.Scores.Clear();
-        foreach (var (pid, pts) in scores)
-            _state.Scores[pid] = pts;
+        // ScoreUpdate can't desync the local tally. ApplyScores also timestamps
+        // whatever moved, which is the only record of who reached a score first:
+        // this frame carries the whole tally and never says who just scored.
+        _state.ApplyScores(scores);
     }
 
     public void Dispose()

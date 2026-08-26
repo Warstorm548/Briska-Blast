@@ -126,6 +126,11 @@ public partial class GameScene : Node2D
     private const int ChatLayer = 60;
     private InGameChat _chat = null!;
 
+    // The ranked leaderboard, top-left. Above chat so its glow is not clipped by
+    // the strip, still below the reconnect overlay (100) and the menus (200).
+    private const int LeaderboardLayer = 70;
+    private LeaderboardView _leaderboard = null!;
+
     // Chat holds the keyboard. Every input read below is polled from the device,
     // and polling ignores GUI focus entirely — without this latch, typing "1"-"5"
     // fires hotbar slots, Space serves the ball, and the arrow keys that move the
@@ -193,11 +198,9 @@ public partial class GameScene : Node2D
         _rng.Randomize();
         _splitterCooldown = _splitterIntervalSecs;
 
+        // Pure play-field renderer now: the scoreboard it used to carry became
+        // LeaderboardView, which resolves its own usernames.
         _view = new View2D();
-        // Label the scoreboard by username (server-provided, learned via the
-        // signaling roster) instead of the internal player_id. Null-safe: a view
-        // without a resolver falls back to the raw id.
-        _view.NameResolver = ctx != null ? ctx.DisplayNameFor : null;
         AddChild(_view);
 
         // The action bar fills the strip the arena just gave up. Its own CanvasLayer
@@ -215,6 +218,11 @@ public partial class GameScene : Node2D
         AddChild(_chat);
         _chat.Bind(MatchFlow.Instance.Chat);
         _chat.FocusChanged += OnChatFocusChanged;
+
+        // The leaderboard owns the top-left corner; the session code moved right to
+        // make room for it (see BuildOverlay).
+        _leaderboard = new LeaderboardView { Layer = LeaderboardLayer };
+        AddChild(_leaderboard);
 
         BuildOverlay();
         UpdateCursor();
@@ -304,10 +312,9 @@ public partial class GameScene : Node2D
 
         // Adopt the server's final tally so the frozen board and the leaderboard
         // are exact even if the preceding ScoreUpdate was missed.
-        _state.Scores.Clear();
-        foreach (var (pid, pts) in scores)
-            _state.Scores[pid] = pts;
+        _state.ApplyScores(scores);
         _view.Render(_state); // one last paint, then the sim freezes (_PhysicsProcess early-returns)
+        _leaderboard.SyncFrom(_state);
 
         // The match is over: drop the pause overlays if they were open (the Esc
         // menu and a pause-on-rejoin hold alike — the end screen supersedes
@@ -542,12 +549,22 @@ public partial class GameScene : Node2D
         _overlay.AddThemeFontSizeOverride("font_size", 64);
         _overlayLayer.AddChild(_overlay);
 
-        // Session code, top-left, so a player can read it back to a dropped
-        // friend who needs to re-enter it on the Join screen to rejoin.
+        // Session code, top-RIGHT, so a player can read it back to a dropped friend
+        // who needs to re-enter it on the Join screen to rejoin. It sat top-left
+        // until 0.34.0, overlapping the scoreboard that lived there; the
+        // leaderboard now owns that corner, and the pause menu carries the code
+        // with a Copy button anyway, so this is the convenience copy.
         var code = SessionContext.Instance?.SessionCode ?? "";
         _codeLabel = new Label { Text = $"Code: {code}" };
-        _codeLabel.SetAnchorsPreset(Control.LayoutPreset.TopLeft);
-        _codeLabel.Position = new Vector2(16, 12);
+        // Spans the top and right-ALIGNS its text rather than being a right-anchored
+        // box: a Label's width comes from its own text, so anchoring the box to the
+        // right edge and nudging it would run a longer code off screen.
+        _codeLabel.SetAnchorsPreset(Control.LayoutPreset.TopWide);
+        _codeLabel.HorizontalAlignment = HorizontalAlignment.Right;
+        _codeLabel.OffsetLeft = 0;
+        _codeLabel.OffsetRight = -16;
+        _codeLabel.OffsetTop = 12;
+        _codeLabel.OffsetBottom = 48;
         _codeLabel.AddThemeFontSizeOverride("font_size", 24);
         _overlayLayer.AddChild(_codeLabel);
     }
@@ -724,6 +741,9 @@ public partial class GameScene : Node2D
         }
 
         _view.Render(_state);
+        // Scores restate every frame; the board settles its ORDER on its own slower
+        // beat, which is the point of the split.
+        _leaderboard.SyncFrom(_state);
     }
 
     /// <summary>A hotbar slot's key was pressed. Acknowledges the press on screen, then

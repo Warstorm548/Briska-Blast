@@ -11,6 +11,29 @@ resurfaces unintentionally later.
 
 ---
 
+## A rejoining client's scoreboard reads 0 until the next point
+
+- **Status:** open — **pre-existing**, surfaced (not caused) by the in-match
+  leaderboard in game 0.34.0. Needs a server-side change, so it is not fixed here.
+- **Affects:** every client that rejoins a match in progress, any version. The old
+  single-line scoreboard had the same gap; a ranked board just makes it obvious.
+- **Symptom:** after a process-death rejoin, the leaderboard shows every player on
+  0 (ordered by seat order, since no tie stamps exist yet) until the next point is
+  scored **anywhere** in the match, at which point the next `ScoreUpdate` broadcast
+  resyncs the whole tally and the board corrects itself.
+- **Cause:** nothing re-fetches the tally on rejoin. `GameState` is reconstructed
+  empty in `GameScene._Ready`, and the `Identified` frame carries
+  `host_player_id, peers, seat_order, is_host, usernames, ice_servers` — no
+  `scores` field. Scores only ever arrive via the periodic wholesale `ScoreUpdate`
+  broadcast, which is emitted when someone scores, not when someone rejoins.
+- **Fix direction:** add the current tally to the rejoin path — either as a field
+  on `Identified` or as a `ScoreUpdate` pushed to the rejoining socket on identify.
+  The latter is smaller and reuses the frame clients already handle. Either way it
+  is a **protocol change**, hence deferred out of the 0.34.0 client work.
+- **Workaround:** none needed in practice — it self-corrects on the next point.
+
+---
+
 ## ✅ Chat input loses focus after every send (lobby and match)
 
 - **Status:** ✅ **resolved in game 0.33.0** (`fix/chat-focus-and-cursor`).

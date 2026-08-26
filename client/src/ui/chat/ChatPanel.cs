@@ -176,6 +176,18 @@ public partial class ChatPanel : PanelContainer
             return;
         }
 
+#if DEV_TOOLS
+        // Dev builds only, and only in the editor — see DevCommands for both gates.
+        // An unrecognised "/…" falls through and posts as chat, exactly as 0.32.0
+        // documented, so the contract is not quietly different here.
+        if (Dev.DevCommands.TryHandle(trimmed, MatchFlow.Instance.Chat))
+        {
+            input.Clear();
+            input.CallDeferred(Control.MethodName.GrabFocus);
+            return;
+        }
+#endif
+
         MatchFlow.Instance.SendChat(trimmed);
         input.Clear();
         // Sending is not leaving, so the caret has to survive it. Nothing in this

@@ -22,6 +22,22 @@
   </PropertyGroup>
 
   <!--
+    Dev tooling is compiled ONLY into dev-channel builds. Everything behind
+    DEV_TOOLS is absent from ea/stable assemblies entirely — not dead code, not
+    an unreachable branch. The tools additionally refuse to run outside the
+    editor at runtime (see src/core/DevCommands.cs), so a dev-channel export on
+    a tester's machine carries them inert.
+
+    Note this is a compile-time gate, which docs/dev/devtools.md's
+    file-distribution rule does not cover: that rule is about dev tool FILES the
+    launcher installs beside the game, and code compiled into the game assembly
+    cannot be separated that way without a second assembly.
+  -->
+  <PropertyGroup Condition="'$(ReleaseChannel)' == 'dev'">
+    <DefineConstants>$(DefineConstants);DEV_TOOLS</DefineConstants>
+  </PropertyGroup>
+
+  <!--
     Per-channel runtime-cache isolation is driven entirely by renaming this
     project file per channel in CI (release-client.yml): Godot derives the
     expected `<assembly_name>.sln` AND `<assembly_name>.csproj` paths from

@@ -164,6 +164,39 @@ scoring in the goal corners and stops fast balls from cutting the corners.
   split ball** is worth 2 (`ReportScore.points`, server-clamped to `[1, 2]`). The
   server adds the reported points to the authoritative tally.
 
+### The in-match leaderboard (game 0.34.0)
+
+`LeaderboardView` (`client/src/ui/LeaderboardView.cs`) draws the live standings
+top-left, one row per player, ranked. It replaced a single-line Label in `View2D`
+that listed players in player_id order — an ordering chosen precisely so columns
+never moved, which is the opposite of what a leaderboard is for.
+
+- **Ranking key**, in order: score **descending** → whoever **reached that score
+  first** → index in `SessionContext.SeatOrder`. Seat order is the final key
+  because it is frozen at match start and identical on every client, so a board
+  where nobody has scored yet is stable rather than arbitrary.
+- **"Reached first" has to be derived.** `ScoreUpdate` carries the whole tally
+  and never says who just scored, so `GameState.ApplyScores` — the **single**
+  place scores are written, used by both `NetGameController.OnScoreUpdate` and
+  `GameScene.OnGameOver` — diffs the incoming map and stamps whatever moved into
+  `GameState.ScoreReachedAtMsec`. A decrease stamps too; "changed" is the only
+  thing worth timing when the server is authoritative.
+- **The stamps are local clock readings** and mean nothing between machines. What
+  makes the ranking agree across screens is that every client receives the same
+  broadcasts in the same order, so the *ordering* the stamps produce is the same
+  everywhere even though the times are not. Do not "fix" this by comparing raw
+  timestamps between clients.
+- **Scores restate immediately; the order settles on a 3s beat**
+  (`ReorderIntervalMsec`). Re-sorting the instant a point lands turns a close
+  match into a flicker, and nothing is hidden by the delay because the number
+  itself has already changed. Rows glide to their new places over ~0.35s.
+- Rows are positioned **absolutely**, not parented to a `VBoxContainer` — a
+  container owns its children's positions, which is what the swap animation needs
+  to control. This is also the codebase's only `Tween`; everything else times
+  itself with a stored deadline polled in `_Process`.
+- **A rejoiner's board starts blank** — see `known-bugs.md`. Nothing is re-fetched
+  on rejoin, so scores read 0 until the next point is scored anywhere.
+
 ## Win condition & game over
 
 - The host picks a **win condition** during setup (Advanced → Match Rules),

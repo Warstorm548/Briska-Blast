@@ -9,6 +9,95 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.34.0] — 2026-08-26
+
+**The in-match scoreboard becomes a leaderboard.** Client-only; nothing on the
+wire changes, so no server release and no `min_game_version` move.
+
+What was there was a single line of text top-left — `ricky: 3   bobby: 1` —
+listing players in **player_id order**. That ordering was deliberate: it meant the
+columns never moved. This inverts that. The board is now vertical, one player per
+row, ranked, with the position number down the left edge:
+
+```
+1. ricky      5
+2. bobby      3
+3. giffer     0
+```
+
+It sits on a panel with a neon light-blue edge over a translucent tint of the same
+colour, so the ball stays trackable behind it. The blue is not a new colour — it is
+the accent the theme already uses for focus glow and the chat caret, so the panel
+reads as part of the same UI rather than something new arriving in the HUD. The
+fill deliberately departs from the chat panel's dark navy: a light blue was wanted
+here, so the fill is a low-alpha version of the edge.
+
+**The score changes at once; the order takes its time.** A point shows on the row
+the instant the server confirms it, but the ranking only settles every **3
+seconds**, and rows *glide* between places over about a third of a second rather
+than snapping. Re-sorting the moment a point lands turns a close match into a
+flicker, and nothing is being hidden by the wait — the number has already moved.
+The interval lives in one constant, to be tuned once it has been played with.
+
+**Ties go to whoever got there first.** That could not simply be read off the
+wire: the score frame carries the entire tally and never says who just scored. So
+the client diffs each incoming tally against the one it holds and stamps whatever
+moved. Those stamps are local clock readings and mean nothing between machines —
+but every client receives the same broadcasts in the same order, so the *ordering*
+they produce is identical on every screen even though the times are not. Below
+that, ranking falls to the frozen seat order, which is why a board where nobody
+has scored is stable rather than arbitrary.
+
+That diff also collapsed the two places that used to write scores — the live
+update and the final game-over tally — into **one** method. Keeping timestamps
+honest in two places was one edit away from silently reordering the board.
+
+**The session code moved to the top-right.** It had been top-left, quietly
+overlapping the scoreboard that lived there; the leaderboard now owns that corner.
+The pause menu still carries the code with its Copy button, so this is the
+convenience copy, not the way to get it.
+
+`View2D` gives up the scoreboard it was carrying and goes back to being purely the
+play-field renderer its own class doc already claimed it was.
+
+Two things worth knowing. Rows are positioned **absolutely** rather than parented
+to a container, because a container owns its children's positions and that is
+exactly what a swap animation has to control. And this is the codebase's **first
+`Tween`** — every other timed effect here is a stored deadline polled per frame.
+It earns the exception: a re-rank landing mid-glide is a kill and a restart from
+wherever the rows currently are, where hand-rolling would need per-row from/to
+state to reach the same place.
+
+**The `/` prefix finally does something — in dev builds, in the editor only.**
+0.32.0 shipped the `/` chat key with the note that it existed "so a future dev-tools
+parser has its prefix; there is no command parser yet". This is that parser, and it
+exists because the leaderboard could not otherwise be looked at: it has no scene
+file, and running the match scene alone shows an empty panel, since the roster and
+the scores both come from a live session. Tuning a 3-second beat and a
+third-of-a-second ease through a two-client match is not a loop worth keeping.
+
+`/lb` fills the board with fake players and moves their scores; `/lb 8` for a longer
+one, `/lb` again to hand it back to the match. `/help` lists what there is. The demo
+drives a **real `GameState`** through the same `ApplyScores` and the same reordering
+the match uses, so what you are watching is the shipping tie-break rather than a
+lookalike that could drift from it.
+
+It is gated twice. `DEV_TOOLS` is defined only for the dev channel, so **ea and
+stable assemblies do not contain this code at all** — confirmed by building stable
+and finding no dev symbols in the output. On top of that it refuses to run outside
+the Godot editor, so even a dev-channel build on a tester's machine carries it inert.
+One gate decides what ships, the other decides what runs. An unrecognised `/…` line
+still posts as ordinary chat exactly as before, so nothing about the documented
+behaviour changes for anyone.
+
+**A rejoining client still sees an all-zero board** until the next point is scored
+anywhere. That is not new — nothing has ever re-fetched the tally on rejoin — but
+a flat text line hid it and a ranked board does not. Fixing it properly means
+sending the tally on identify, which is a protocol change; it is recorded in
+`known-bugs.md` rather than smuggled into a client release.
+
+---
+
 ## [0.33.0] — 2026-08-25
 
 **Two fixes to the chat that 0.32.0 shipped, and the match loses its cursor.** No
