@@ -38,14 +38,24 @@ public readonly struct EdgeTarget
     public readonly EdgeKind Kind;
     public readonly string PeerId;
 
+    /// <summary>Private so an edge can only be built through <see cref="Wall"/>,
+    /// <see cref="Goal"/> or <see cref="Portal"/> — the three shapes that exist.
+    /// A Wall or Goal with a peer id, or a Portal without one, is not
+    /// representable.</summary>
     private EdgeTarget(EdgeKind kind, string peerId)
     {
         Kind = kind;
         PeerId = peerId;
     }
 
+    /// <summary>An edge the ball bounces off. Carries no peer.</summary>
     public static readonly EdgeTarget Wall = new(EdgeKind.Wall, "");
+    /// <summary>An edge the ball scores through. Always the bottom edge, and
+    /// always this screen's own goal.</summary>
     public static readonly EdgeTarget Goal = new(EdgeKind.Goal, "");
+    /// <summary>An edge the ball is handed across, to the screen belonging to
+    /// <paramref name="peerId"/>. See <c>docs/architecture/extended-mode.md</c>
+    /// for the handoff itself.</summary>
     public static EdgeTarget Portal(string peerId) => new(EdgeKind.Portal, peerId);
 }
 
@@ -135,8 +145,14 @@ public sealed class Hotbar
     /// too, so the only other thing a bigger bar needs is more input actions.</summary>
     public const int SlotCount = 5;
 
+    /// <summary>The slots themselves, left to right, always
+    /// <see cref="SlotCount"/> long and never containing a null — see
+    /// <see cref="CreateSlots"/>.</summary>
     public readonly ItemSlot[] Slots = CreateSlots();
 
+    /// <summary>Fill the bar with empty slots. A field initialiser cannot loop, and
+    /// leaving the array's entries null would put a null check on every hotbar read
+    /// instead of an empty slot here.</summary>
     private static ItemSlot[] CreateSlots()
     {
         var slots = new ItemSlot[SlotCount];
@@ -154,15 +170,26 @@ public sealed class Hotbar
 /// </summary>
 public sealed class GameState
 {
+    /// <summary>Play-field size in world units. Derived from the viewport minus the
+    /// action-bar strip, and identical on every client in a match — the ball's
+    /// position is exchanged in these units, so the screens must agree.</summary>
     public float ArenaWidth;
+
+    /// <inheritdoc cref="ArenaWidth"/>
     public float ArenaHeight;
 
+    /// <summary>This screen's own paddle. Only the local player moves it; the other
+    /// screens' paddles are never modelled here, since all that crosses the mesh is
+    /// the ball.</summary>
     public readonly Paddle Paddle = new();
 
     /// <summary>The local action bar. Local-only and never networked — what a player
     /// holds is their own business until an item actually does something.</summary>
     public readonly Hotbar Hotbar = new();
 
+    /// <summary>Balls currently on THIS screen. A ball handed across a portal is
+    /// removed here and added on the receiving screen, so exactly one screen owns
+    /// any given ball at a time.</summary>
     public readonly List<Ball> Balls = new();
 
     /// <summary>System-spawned ball splitters currently on this screen (local-only;
@@ -187,14 +214,26 @@ public sealed class GameState
     /// Overwritten wholesale on each ScoreUpdate — never incremented locally.</summary>
     public readonly Dictionary<string, int> Scores = new();
 
-    /// <summary>When each player's CURRENT score was first seen, by local clock.
-    /// The leaderboard breaks ties on it — equal scores rank by who got there
-    /// first. The times themselves are local and mean nothing between clients,
-    /// but every client receives the same score broadcasts in the same order, so
-    /// the ORDER this yields is the same on every screen.</summary>
-    public readonly Dictionary<string, ulong> ScoreReachedAtMsec = new();
+    /// <summary>Which observed tally each player's CURRENT score first appeared
+    /// in, as a <see cref="_scoreSeq"/> reading. The leaderboard breaks ties on
+    /// it — equal scores rank by who got there first.
+    ///
+    /// A COUNT of tallies, deliberately not a clock reading. Ordering has to
+    /// agree on every screen, and the only thing every client shares is the
+    /// sequence of broadcasts it applies — not its timing. A millisecond clock
+    /// looks equivalent and is not: two frames drained in one engine tick read
+    /// the same millisecond on a machine quick enough to do it, and different
+    /// ones on a machine that is not, so the tie-break would fall to seat order
+    /// on the first screen and to arrival order on the second. The counter moves
+    /// exactly once per tally, so the Nth tally stamps N everywhere.</summary>
+    public readonly Dictionary<string, ulong> ScoreReachedAtSeq = new();
 
-    // Scratch for ApplyScores. ScoreReachedAtMsec is readonly, so a rebuild has
+    // Tallies applied so far. The stamp source — see ScoreReachedAtSeq for why
+    // this is a count and not a clock. Starts at 0, so 0 reads as "not seen in
+    // any tally yet" and never collides with a real stamp.
+    private ulong _scoreSeq;
+
+    // Scratch for ApplyScores. ScoreReachedAtSeq is readonly, so a rebuild has
     // to stage the new stamps somewhere before clearing the old ones.
     private readonly Dictionary<string, ulong> _stamps = new();
 
@@ -207,25 +246,37 @@ public sealed class GameState
     ///
     /// A value is stamped whenever it differs from what is held — a DECREASE
     /// included, since the server is authoritative and "changed" is the only
-    /// thing worth timing. Players whose score did not move keep their original
+    /// thing worth marking. Players whose score did not move keep their original
     /// stamp, which is what makes the tie-break mean "who got here first" rather
     /// than "who was in the last packet". Anyone the server no longer lists
     /// falls out, so a stale stamp cannot outlive its score.
+    ///
+    /// Everything that moves in ONE tally shares that tally's number. The frame
+    /// says only what the scores now are, never who just scored, so when two
+    /// players move together there is nothing to separate them and the
+    /// leaderboard's seat-order key does it — the same way on every screen.
+    ///
+    /// The stamps count tallies THIS client applied, so they are comparable only
+    /// against each other. A client that joined late, or missed frames, starts
+    /// counting where it came in and collapses everything before that into its
+    /// first tally; its board can therefore break a tie differently from one that
+    /// saw the whole match. Nothing on the wire carries the history needed to fix
+    /// that, and seat order still keeps every board internally stable.
     /// </summary>
     public void ApplyScores(IReadOnlyDictionary<string, int> scores)
     {
-        ulong now = Time.GetTicksMsec();
+        ulong seq = ++_scoreSeq;
 
         _stamps.Clear();
         foreach (var (pid, pts) in scores)
         {
             bool moved = !Scores.TryGetValue(pid, out var held) || held != pts;
-            _stamps[pid] = !moved && ScoreReachedAtMsec.TryGetValue(pid, out var at) ? at : now;
+            _stamps[pid] = !moved && ScoreReachedAtSeq.TryGetValue(pid, out var at) ? at : seq;
         }
 
-        ScoreReachedAtMsec.Clear();
+        ScoreReachedAtSeq.Clear();
         foreach (var (pid, at) in _stamps)
-            ScoreReachedAtMsec[pid] = at;
+            ScoreReachedAtSeq[pid] = at;
 
         Scores.Clear();
         foreach (var (pid, pts) in scores)

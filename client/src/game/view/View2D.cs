@@ -30,6 +30,9 @@ public partial class View2D : Node2D, IGameView
     private GameState? _state;
     private bool _barriersBuilt;
 
+    /// <summary>Build the static sprites from the central
+    /// <see cref="SpriteRegistry"/> — the single source of truth for textures, so
+    /// nothing here loads a path of its own.</summary>
     public override void _Ready()
     {
         var sprites = SpriteRegistry.Instance;
@@ -81,6 +84,9 @@ public partial class View2D : Node2D, IGameView
         _barriersBuilt = true;
     }
 
+    /// <summary>Paint one frame of the field: background, paddle, balls and
+    /// splitters, adding and freeing sprites as objects come and go. Purely a view
+    /// — it reads <paramref name="state"/> and never writes to it.</summary>
     public void Render(GameState state)
     {
         _state = state;
@@ -158,6 +164,8 @@ public partial class View2D : Node2D, IGameView
         QueueRedraw(); // refresh the edge outlines
     }
 
+    /// <summary>Draw the four edge outlines. Vector work only; everything with a
+    /// texture is a child sprite positioned in <see cref="Render"/>.</summary>
     public override void _Draw()
     {
         if (_state is not { } s)
@@ -169,6 +177,9 @@ public partial class View2D : Node2D, IGameView
         DrawEdge(Edge.Left, new Vector2(0, 0), new Vector2(0, h));
     }
 
+    /// <summary>Outline one edge in the colour of its role — goal, portal or wall —
+    /// so a player can see at a glance which sides pass a ball on and which return
+    /// it. An unmapped edge falls back to Wall.</summary>
     private void DrawEdge(Edge edge, Vector2 a, Vector2 b)
     {
         var kind = _state!.Edges.TryGetValue(edge, out var t) ? t.Kind : EdgeKind.Wall;

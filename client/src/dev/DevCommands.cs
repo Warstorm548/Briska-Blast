@@ -111,6 +111,10 @@ public static class DevCommands
         return true;
     }
 
+    /// <summary>Post a tool's answer into the transcript under
+    /// <see cref="ReplyName"/>. Local only — it goes through <see cref="ChatLog"/>
+    /// directly rather than <c>MatchFlow.SendChat</c>, so a dev command's output
+    /// never reaches the session or the other players.</summary>
     private static void Reply(ChatLog log, string text) =>
         log.Add(new ChatEntry { Name = ReplyName, Text = text });
 }

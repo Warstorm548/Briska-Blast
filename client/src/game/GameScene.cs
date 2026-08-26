@@ -374,6 +374,8 @@ public partial class GameScene : Node2D
             ? Input.MouseModeEnum.Visible
             : Input.MouseModeEnum.Hidden;
 
+    /// <summary>Escape's action when chat is not holding the keyboard: open the
+    /// pause menu, or close it if it is already up.</summary>
     private void TogglePauseMenu()
     {
         if (_pauseMenu != null)
@@ -382,6 +384,9 @@ public partial class GameScene : Node2D
             OpenPauseMenu();
     }
 
+    /// <summary>Put the in-match pause menu up. A local overlay only — the
+    /// simulation keeps running underneath and the other screens are unaffected,
+    /// unlike the flow pause a rejoin triggers.</summary>
     private void OpenPauseMenu()
     {
         // Only while actually playing — mid-leave (flow already Idle) or
@@ -450,6 +455,10 @@ public partial class GameScene : Node2D
         _pausePanel.SetStatus($"Waiting for {displayName} to reconnect…");
     }
 
+    /// <summary>The server says the frozen match is restarting in
+    /// <paramref name="countdownSecs"/>. Arms the countdown that
+    /// <see cref="TickFlowPause"/> paints and unfreezes on. Ignored once the match
+    /// is over, or if this screen was never frozen.</summary>
     private void OnMatchResumed(int countdownSecs)
     {
         if (_gameOver || !_flowPaused)
@@ -458,6 +467,8 @@ public partial class GameScene : Node2D
         _resumeAtMsec = Time.GetTicksMsec() + (ulong)Mathf.Max(countdownSecs, 0) * 1000UL;
     }
 
+    /// <summary>Tear down the "waiting for a player" panel, if one is up. Safe to
+    /// call when there is none, so every exit path can call it unconditionally.</summary>
     private void RemovePausePanel()
     {
         _pausePanel?.QueueFree();
@@ -500,18 +511,23 @@ public partial class GameScene : Node2D
         UpdateOverlay();
     }
 
+    /// <summary>The host dropped. Raise the overlay hint; the mesh holds until they
+    /// return or their grace expires.</summary>
     private void OnHostReconnecting(string playerId, int graceSecs)
     {
         _hostReconnecting = true;
         UpdateOverlay();
     }
 
+    /// <summary>The host is back. Clear the hint.</summary>
     private void OnHostReconnected(string playerId)
     {
         _hostReconnecting = false;
         UpdateOverlay();
     }
 
+    /// <summary>A non-host peer dropped mid-game. Flags the reconnect window on the
+    /// overlay; play continues over the rest of the mesh.</summary>
     private void OnPeerReconnecting(string playerId, int graceSecs)
     {
         // A non-host peer dropped mid-game. Show a brief hint; their slot is held
@@ -523,18 +539,25 @@ public partial class GameScene : Node2D
         UpdateOverlay();
     }
 
+    /// <summary>This client lost its own connection. Raise the hint — the match is
+    /// still running on the other screens.</summary>
     private void OnSelfReconnecting()
     {
         _selfReconnecting = true;
         UpdateOverlay();
     }
 
+    /// <summary>This client is back on. Clear the hint.</summary>
     private void OnSelfReconnected()
     {
         _selfReconnecting = false;
         UpdateOverlay();
     }
 
+    /// <summary>Build the connection-status overlay: one centred Label on a
+    /// high-layer <see cref="CanvasLayer"/> so it floats above the field and every
+    /// other HUD element. Created hidden — <see cref="UpdateOverlay"/> decides when
+    /// it has something to say.</summary>
     private void BuildOverlay()
     {
         _overlayLayer = new CanvasLayer { Layer = 100 };
@@ -569,6 +592,10 @@ public partial class GameScene : Node2D
         _overlayLayer.AddChild(_codeLabel);
     }
 
+    /// <summary>Repaint the connection overlay from the reconnect flags, in
+    /// priority order: this client's own drop outranks the host's, which outranks
+    /// another player's. No flag set hides it. Every flag change routes through
+    /// here, so the precedence lives in exactly one place.</summary>
     private void UpdateOverlay()
     {
         string msg =
@@ -642,6 +669,10 @@ public partial class GameScene : Node2D
         }
     }
 
+    /// <summary>The match tick: step the simulation, poll input, and run the
+    /// per-frame timers. Returns early and drives nothing once the match is over or
+    /// while the flow is frozen for a rejoin, so those two states are the only
+    /// things that can stop the sim.</summary>
     public override void _PhysicsProcess(double delta)
     {
         // Match over: the simulation is frozen behind the end screen. Step nothing,
@@ -769,6 +800,9 @@ public partial class GameScene : Node2D
         Log.Debug("game.hotbar", $"slot {index + 1} activated (icon={slot.Icon}, count={slot.Count})");
     }
 
+    /// <summary>A ball left through this screen's goal. Reports it to the server —
+    /// which is authoritative for the tally; nothing is scored locally — and
+    /// re-serves if the ball lost was the master.</summary>
     private void OnScore(ScoreEvent e)
     {
         // Report to the server (server-relayed scoring) — the controller drops
@@ -781,6 +815,8 @@ public partial class GameScene : Node2D
             SpawnServeBall();
     }
 
+    /// <summary>Put a fresh master ball on the paddle and wait for the serve. Split
+    /// balls already in play are untouched.</summary>
     private void SpawnServeBall()
     {
         // Serve a fresh master ball. Any split balls in play are left alone — only
@@ -797,6 +833,9 @@ public partial class GameScene : Node2D
         _awaitingServe = true;
     }
 
+    /// <summary>Count down the splitter timer and drop a new one when it expires.
+    /// No-ops when the host has splitters switched off. This timer owns the cadence,
+    /// so consuming a splitter in the sim does not re-arm it.</summary>
     private void TickSplitters(double dt)
     {
         if (_splitterIntervalSecs <= 0)

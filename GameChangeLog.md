@@ -60,7 +60,7 @@ listing players in **player_id order**. That ordering was deliberate: it meant t
 columns never moved. This inverts that. The board is now vertical, one player per
 row, ranked, with the position number down the left edge:
 
-```
+```text
 1. ricky      5
 2. bobby      3
 3. giffer     0
@@ -83,11 +83,18 @@ The interval lives in one constant, to be tuned once it has been played with.
 **Ties go to whoever got there first.** That could not simply be read off the
 wire: the score frame carries the entire tally and never says who just scored. So
 the client diffs each incoming tally against the one it holds and stamps whatever
-moved. Those stamps are local clock readings and mean nothing between machines —
-but every client receives the same broadcasts in the same order, so the *ordering*
-they produce is identical on every screen even though the times are not. Below
-that, ranking falls to the frozen seat order, which is why a board where nobody
-has scored is stable rather than arbitrary.
+moved. The stamp is a **count of tallies applied**, not a clock reading — the
+counter moves once per tally, so the Nth tally stamps N on every screen and the
+ranking is a pure function of broadcast order rather than of how fast a given
+machine drained its socket. Below that, ranking falls to the frozen seat order,
+which is why a board where nobody has scored — or where two players moved in the
+same tally — is stable rather than arbitrary.
+
+The stamps count what *this* client applied, so a player who joined late or
+missed frames collapses everything before their arrival into their first tally
+and can break a tie differently from a client that saw the whole match. The wire
+carries nothing to reconcile that; ordering it server-side would be a protocol
+change. Every board stays internally consistent regardless.
 
 That diff also collapsed the two places that used to write scores — the live
 update and the final game-over tally — into **one** method. Keeping timestamps

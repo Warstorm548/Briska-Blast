@@ -72,6 +72,9 @@ public partial class LeaderboardView : CanvasLayer
     /// <summary>Current top-to-bottom ranking, as ids. Compared against a freshly
     /// computed one to decide whether anything actually needs to move.</summary>
     private readonly List<string> _order = new();
+    /// <summary>Scratch for the ranking about to be computed, compared against
+    /// <see cref="_order"/> before anything is allowed to move. Reused rather than
+    /// allocated per beat — this runs on a 3s timer for the whole match.</summary>
     private readonly List<string> _nextOrder = new();
 
     private ulong _nextReorderMsec;
@@ -107,6 +110,10 @@ public partial class LeaderboardView : CanvasLayer
     private ulong _nextDemoScoreMsec;
 #endif
 
+    /// <summary>Derive the board's metrics from the viewport and build the panel.
+    /// Sizes are height-relative fractions rather than pixels because the logical
+    /// viewport is only 2560×1440 at 16:9 and grows on one axis otherwise — a
+    /// fraction is the only thing that means the same on every display.</summary>
     public override void _Ready()
     {
 #if DEV_TOOLS
@@ -182,12 +189,12 @@ public partial class LeaderboardView : CanvasLayer
     /// Order is score descending, then whoever REACHED that score first, then seat
     /// order. The middle key is the interesting one: the score frame carries the
     /// whole tally and never says who just scored, so <c>GameState.ApplyScores</c>
-    /// stamps what moved and this reads those stamps. The stamps are local clock
-    /// readings and mean nothing between machines — but every client receives the
-    /// same broadcasts in the same order, so the ordering they produce agrees on
-    /// every screen. Seat order is the final key because it is frozen at match
-    /// start and identical everywhere, so a board where nobody has scored is
-    /// stable rather than arbitrary.
+    /// stamps what moved and this reads those stamps. The stamps count tallies
+    /// applied, not milliseconds, so every client that saw the same broadcasts
+    /// produces the same ordering regardless of how fast it drained them. Seat
+    /// order is the final key because it is frozen at match start and identical
+    /// everywhere, so a board where nobody has scored — or where two players
+    /// moved in one tally — is stable rather than arbitrary.
     /// </summary>
     private void Reorder(GameState state)
     {
@@ -200,8 +207,8 @@ public partial class LeaderboardView : CanvasLayer
             if (sa != sb)
                 return sb.CompareTo(sa);
 
-            ulong ta = state.ScoreReachedAtMsec.GetValueOrDefault(a, 0UL);
-            ulong tb = state.ScoreReachedAtMsec.GetValueOrDefault(b, 0UL);
+            ulong ta = state.ScoreReachedAtSeq.GetValueOrDefault(a, 0UL);
+            ulong tb = state.ScoreReachedAtSeq.GetValueOrDefault(b, 0UL);
             if (ta != tb)
                 return ta.CompareTo(tb);
 
@@ -238,6 +245,10 @@ public partial class LeaderboardView : CanvasLayer
         }
     }
 
+    /// <summary>Position of <paramref name="playerId"/> in the frozen seating, or
+    /// <see cref="int.MaxValue"/> if they are not in it. The leaderboard's last
+    /// ranking key: seat order is fixed at match start and identical on every
+    /// client, so it settles ties the same way everywhere.</summary>
     private int SeatIndex(string playerId)
     {
         var ctx = SessionContext.Instance;
@@ -246,8 +257,14 @@ public partial class LeaderboardView : CanvasLayer
         return i >= 0 ? i : int.MaxValue;
     }
 
+    /// <summary>Row index for a player. Rows are built once per roster and never
+    /// reordered — only their POSITIONS animate — so this index stays valid across
+    /// re-ranks and is what every parallel row list is keyed by.</summary>
     private int IndexOf(string playerId) => _rowIds.IndexOf(playerId);
 
+    /// <summary>True if <paramref name="candidate"/> matches the order already on
+    /// screen. Guards the re-rank: without it every beat would kill and restart the
+    /// tween, so a board that is not actually changing would still twitch.</summary>
     private bool SameOrder(List<string> candidate)
     {
         if (_order.Count != candidate.Count)
@@ -357,6 +374,8 @@ public partial class LeaderboardView : CanvasLayer
         }
     }
 
+    /// <summary>Build one cell of a row. Every label is <c>MouseFilter.Ignore</c>:
+    /// the board sits over live play and must never take a click away from it.</summary>
     private static Label MakeLabel(string text, int fontSize, Color color, HorizontalAlignment align)
     {
         var label = new Label
@@ -391,6 +410,8 @@ public partial class LeaderboardView : CanvasLayer
         return box;
     }
 
+    /// <summary>The visible viewport, which every metric on this board is a
+    /// fraction of.</summary>
     private Vector2 GetViewportSize() => GetViewport().GetVisibleRect().Size;
 
 #if DEV_TOOLS
@@ -426,6 +447,10 @@ public partial class LeaderboardView : CanvasLayer
         _nextDemoScoreMsec = Time.GetTicksMsec() + DemoScoreIntervalMsec;
     }
 
+    /// <summary>Drive the demo board: every <c>DemoScoreIntervalMsec</c>, award a
+    /// random player 1 or 2 points and re-apply. Dev builds only, and inert unless
+    /// the demo is on — a real match never reaches past the guard, and its scores
+    /// arrive from the server rather than from here.</summary>
     public override void _Process(double delta)
     {
         if (!DemoActive || _rowIds.Count == 0)
@@ -446,6 +471,8 @@ public partial class LeaderboardView : CanvasLayer
         Apply(_demoState);
     }
 
+    /// <summary>Clear the static hook the dev command reaches the board through, so
+    /// a torn-down scene's board is not left addressable by the next match.</summary>
     public override void _ExitTree()
     {
         if (Current == this)

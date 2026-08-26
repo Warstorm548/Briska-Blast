@@ -179,13 +179,28 @@ never moved, which is the opposite of what a leaderboard is for.
   and never says who just scored, so `GameState.ApplyScores` — the **single**
   place scores are written, used by both `NetGameController.OnScoreUpdate` and
   `GameScene.OnGameOver` — diffs the incoming map and stamps whatever moved into
-  `GameState.ScoreReachedAtMsec`. A decrease stamps too; "changed" is the only
-  thing worth timing when the server is authoritative.
-- **The stamps are local clock readings** and mean nothing between machines. What
-  makes the ranking agree across screens is that every client receives the same
-  broadcasts in the same order, so the *ordering* the stamps produce is the same
-  everywhere even though the times are not. Do not "fix" this by comparing raw
-  timestamps between clients.
+  `GameState.ScoreReachedAtSeq`. A decrease stamps too; "changed" is the only
+  thing worth marking when the server is authoritative.
+- **The stamps count tallies, not milliseconds.** `ScoreReachedAtSeq` holds a
+  per-client counter that moves exactly once per applied tally, so the Nth tally
+  stamps N on every screen and the ordering is a pure function of broadcast
+  order. **Do not swap this back to a clock.** `Time.GetTicksMsec()` was tried
+  first and is not equivalent: two `ScoreUpdate` frames drained in one engine
+  tick read the *same* millisecond on a machine fast enough to do it and
+  *different* ones on a machine that is not, so the tie-break would fall to seat
+  order on the first screen and to arrival order on the second — two boards, same
+  broadcasts. Comparing raw timestamps *between* clients is even further wrong.
+- **Everything that moves in one tally shares that tally's number.** The frame
+  says what the scores now are, never who just scored, so two players moving
+  together cannot be separated and the seat-order key resolves them identically
+  everywhere.
+- **Known limitation: the count is per client, not per match.** A client that
+  joined late or missed frames starts counting where it came in and collapses
+  everything prior into its first tally, so its board can break a tie differently
+  from one that watched the whole match. Nothing on the wire carries the history
+  needed to reconcile that; seat order still keeps every board internally stable.
+  Fixing it properly means the server ordering the tie, which is a protocol
+  change — see [`docs/planning/roadmap.md`](../planning/roadmap.md).
 - **Scores restate immediately; the order settles on a 3s beat**
   (`ReorderIntervalMsec`). Re-sorting the instant a point lands turns a close
   match into a flicker, and nothing is hidden by the delay because the number

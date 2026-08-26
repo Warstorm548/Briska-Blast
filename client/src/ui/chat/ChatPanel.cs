@@ -40,6 +40,10 @@ public partial class ChatPanel : PanelContainer
 
     private ChatLog? _log;
 
+    /// <summary>Wire the input's submit and focus signals, the notice ✕, and clear
+    /// the scene's placeholder line. Configures the input to hold edit mode across
+    /// a send — see the comment on that assignment, it is the fix for a bug that
+    /// survived two releases.</summary>
     public override void _Ready()
     {
         var input = GetNode<LineEdit>("%ChatInput");
@@ -68,6 +72,9 @@ public partial class ChatPanel : PanelContainer
         GetNode<RichTextLabel>("%ChatLog").Clear();
     }
 
+    /// <summary>Drop the <see cref="ChatLog"/> subscription. The log outlives every
+    /// scene, so a panel that did not detach would keep being called after the
+    /// scene it drew into was gone.</summary>
     public override void _ExitTree() => Unbind();
 
     /// <summary>Show or hide the "Chat" caption (the in-match overlay hides it —
@@ -141,6 +148,9 @@ public partial class ChatPanel : PanelContainer
         log.Redrawn += Redraw;
     }
 
+    /// <summary>Detach from the current log, if any. Idempotent, so
+    /// <see cref="Bind"/> can call it unconditionally before re-subscribing and
+    /// <see cref="_ExitTree"/> can call it after.</summary>
     private void Unbind()
     {
         if (_log == null)
@@ -171,6 +181,10 @@ public partial class ChatPanel : PanelContainer
     /// <summary>Drop keyboard focus, handing control back to whatever owns it.</summary>
     public void ReleaseInput() => GetNode<LineEdit>("%ChatInput").ReleaseFocus();
 
+    /// <summary>Record the input's focus state and raise
+    /// <see cref="InputFocusChanged"/> on a real transition. Edge-triggered on
+    /// purpose: the match suspends and restores player controls from this, and
+    /// re-raising an unchanged value would have it doing so repeatedly.</summary>
     private void SetFocused(bool focused)
     {
         if (InputFocused == focused)

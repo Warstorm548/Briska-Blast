@@ -31,6 +31,9 @@ public sealed class NetGameController : IDisposable
     // it dropped (OnPeerLost removes the live mapping above, losing it otherwise).
     private readonly Dictionary<string, Edge> _peerHomeEdge = new();
 
+    /// <summary>Bind the controller to the live match: snapshot the seat's portal
+    /// edges, then subscribe to the peer transport and the signaling socket. Every
+    /// subscription taken here is dropped again in <see cref="Dispose"/>.</summary>
     public NetGameController(GameState state, IPeerTransport transport,
         SignalingClient signaling, float spawnRadius)
     {
@@ -92,6 +95,9 @@ public sealed class NetGameController : IDisposable
     private static string PeerName(string peerId) =>
         SessionContext.Instance?.DisplayNameFor(peerId) ?? peerId;
 
+    /// <summary>A packet arrived from a peer. Only ball handoffs are carried, and
+    /// one from a peer with no live edge mapping is discarded rather than guessed
+    /// at — that peer has already dropped, so the ball has nowhere to enter.</summary>
     private void OnPeerData(string peerId, byte[] data)
     {
         if (!GamePacket.TryReadBallHandoff(data, out var pkt))
@@ -161,6 +167,9 @@ public sealed class NetGameController : IDisposable
         Log.Debug("game.handoff", $"IN  ball={pkt.BallId} kind={pkt.Kind} peer={PeerName(peerId)} edge={entryEdge}");
     }
 
+    /// <summary>A peer disconnected or failed. Flips their portal edge to a solid
+    /// wall so balls bounce instead of vanishing into a dead channel, remembering
+    /// which edge was theirs so a rejoin can restore the same one.</summary>
     private void OnPeerLost(string peerId)
     {
         // Flip the lost peer's portal edge to a solid wall so any future ball
@@ -194,15 +203,21 @@ public sealed class NetGameController : IDisposable
         _transport.ResyncPeer(peerId);
     }
 
+    /// <summary>Adopt a server tally. Overwrites wholesale, so a dropped or
+    /// duplicated frame cannot desync the local scores.</summary>
     private void OnScoreUpdate(Dictionary<string, int> scores)
     {
         // Server is authoritative — overwrite, never add. A dropped/duplicated
-        // ScoreUpdate can't desync the local tally. ApplyScores also timestamps
-        // whatever moved, which is the only record of who reached a score first:
-        // this frame carries the whole tally and never says who just scored.
+        // ScoreUpdate can't desync the local tally. ApplyScores also stamps
+        // whatever moved with a tally count, which is the only record of who
+        // reached a score first: this frame carries the whole tally and never
+        // says who just scored.
         _state.ApplyScores(scores);
     }
 
+    /// <summary>Drop every transport and signaling subscription. The transport and
+    /// socket outlive the match, so a controller that did not detach would keep
+    /// handling packets for a match that has ended.</summary>
     public void Dispose()
     {
         _transport.PeerData -= OnPeerData;
