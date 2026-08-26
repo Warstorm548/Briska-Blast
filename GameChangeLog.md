@@ -9,6 +9,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.33.0] — 2026-08-25
+
+**Two fixes to the chat 0.32.0 shipped, and the match loses its cursor.** No
+server change and nothing new on the wire, so no `min_game_version` move.
+
+**The chat input keeps the caret after you send.** It did not: Enter posted the
+message, cleared the box and quietly gave up focus, so the next thing you typed
+went nowhere until you clicked the field or pressed Enter a second time. The bug
+began in the lobby and rode into the match, because both render through the same
+`ChatPanel`. 0.32.0 already promised the opposite behaviour in this file, and the
+code carried a comment saying focus was "deliberately KEPT" — this is the code
+catching up with both.
+
+Worth recording *why* it took a fix rather than a deletion: nothing in the client
+releases focus on that path. There are exactly four focus calls in `client/src`,
+and none of them fire on a send. The input surrenders focus as it consumes the
+submit, below our code, so keeping the caret means taking it back — deferred,
+because a same-frame grab is undone by the release that follows it.
+
+**The mouse is gone from the match.** Nothing in play needs a pointer — no event,
+feature or mechanic has been built that calls for one — so there is no cursor
+while the ball is live. It returns only for the two things that genuinely need
+it: the pause menu, whose Copy-code button is mouse-only, and the end screen.
+Return to Session and it goes again.
+
+Hiding it is half the job. A hidden cursor still delivers clicks, and a blind
+click on the chat panel would have focused the input and suspended the paddle
+with nothing on screen to explain why — so the in-match panel now ignores the
+mouse entirely and clicks fall through it. Keyboard is unaffected: `mouse_filter`
+gates click routing, not `GrabFocus`, so `T` and `/` still open chat. Setting
+`focus_mode` instead would have killed both, which is why it was not touched. The
+lobby is deliberately unchanged — clicking the chat there is still how you start
+typing.
+
+The cursor is *hidden*, not *captured*: capture warps the pointer to the centre
+of the window and exists for mouselook, which would fight windowed play and
+alt-tab. And because `Input.MouseMode` is global rather than per-scene, the
+restore is unconditional and lives in `GameScene._ExitTree` — every way out of a
+match leaves by way of the tree, so one line there covers the pause menu, the end
+screen, a kick and a failed flow alike. Miss it and the main menu comes back with
+no pointer.
+
+**The in-match moderator banner no longer offers a ✕.** With no cursor there is
+nothing to click it with, and a notice there is meant to stand: it is not
+dismissed by focusing chat and it does not time out. A new moderator notice
+replaces it in place — a ban landing after a warning recolours the banner it
+inherits, exactly as before. The lobby keeps its working ✕.
+
+One consequence worth knowing: you can no longer mouse-scroll the chat log during
+a match. That follows from having no cursor, and is intended.
+
+---
+
 ## [0.32.0] — 2026-08-22
 
 **Chat in the match** (server 0.35.0). Chat is no longer a lobby-only feature.

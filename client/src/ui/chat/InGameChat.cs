@@ -66,6 +66,14 @@ public partial class InGameChat : CanvasLayer
         _panel.SetCompact(true);
         _panel.AddThemeStyleboxOverride("panel", TranslucentPanel());
 
+        // The match has no cursor, so the panel takes no mouse: a click cannot
+        // focus the input (which would suspend the paddle with nothing on screen
+        // to explain it), and the banner's ✕ goes with it, since a notice here is
+        // meant to stand until a moderator replaces it. Keyboard is the only way
+        // in — T and / below still work, and the lobby keeps both behaviours.
+        _panel.MakeClickThrough();
+        _panel.ShowDismissButton(false);
+
         // Pinned bottom-left. Only the top offset moves when the panel grows, so
         // it expands upward into the field and never shifts off the strip.
         _panel.AnchorLeft = 0;

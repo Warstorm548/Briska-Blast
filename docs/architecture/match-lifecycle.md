@@ -154,6 +154,33 @@ while still in the lobby) is logged and ignored. There are no per-scene
   `CloseSignaling` — the missed-start recovery swaps sockets without ending the
   session, and the conversation has to survive that swap.
 
+## Keyboard and cursor in a match
+
+Chat is keyboard-only in the match and mouse-or-keyboard in the lobby, and that
+difference is deliberate rather than incidental.
+
+- **Focus survives a send.** `ChatPanel.OnSubmitted` re-grabs focus after posting
+  a line, deferred: the input gives focus up as it consumes the submit, below
+  client code, so a same-frame grab is undone by the release that follows it.
+  Enter on an empty box (or a bare `/`) still releases — that is the documented
+  way out of chat, and the only path in the client that intentionally drops it.
+- **The match has no cursor.** `GameScene.UpdateCursor` holds the whole policy in
+  one rule: hidden while playing, `Visible` only while the pause menu or the end
+  screen is up. Those two are the entire list of things that need a pointer
+  today — the reconnect overlay and the rejoin pause panel are labels. Hidden,
+  not `Captured`: capture warps the pointer to the window centre for mouselook
+  and would fight windowed play.
+- **`Input.MouseMode` is global**, so the restore in `GameScene._ExitTree` is
+  unconditional and is the one place every exit passes through. Adding a new way
+  out of a match needs no cursor handling; adding a new *overlay with clickable
+  controls* means adding it to the rule.
+- **Hiding the cursor is not enough on its own** — a hidden cursor still delivers
+  clicks. `InGameChat` therefore calls `ChatPanel.MakeClickThrough()`, without
+  which a blind click would focus chat and suspend the paddle via the
+  `_chatFocused` latch with nothing on screen to explain it. `mouse_filter` gates
+  click routing only, so `GrabFocus` — and with it `T` and `/` — keeps working.
+  Do not reach for `focus_mode` instead: it would block both.
+
 ## The one teardown
 
 Every exit funnels through one private `Teardown`:

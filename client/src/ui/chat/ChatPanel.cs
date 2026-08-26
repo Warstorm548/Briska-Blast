@@ -79,6 +79,37 @@ public partial class ChatPanel : PanelContainer
     }
 
     /// <summary>
+    /// Stop the panel responding to the mouse at all, so a click falls through to
+    /// whatever is behind it instead of focusing the input.
+    ///
+    /// The match hides the cursor, and a blind click that focused chat would
+    /// suspend the player's controls with nothing on screen to say why. Keyboard
+    /// focus is untouched — <c>mouse_filter</c> gates click routing, not
+    /// <c>GrabFocus</c>, so T and / still open the input. Setting
+    /// <c>focus_mode</c> instead would have blocked both.
+    ///
+    /// One-way, and only the match calls it: the defaults being undone here
+    /// differ per node type (a Label ignores the mouse already, a Button does
+    /// not), so there is no single value to hand back. The lobby simply never
+    /// calls it. Same reasoning as the action bar, which is Ignore throughout for
+    /// being keyboard-driven — see <c>HotbarView</c>.
+    /// </summary>
+    public void MakeClickThrough()
+    {
+        MouseFilter = MouseFilterEnum.Ignore;
+        // owned: false — the children belong to whichever scene instanced this
+        // panel (the lobby's tree, or InGameChat at runtime), not to the panel.
+        foreach (var child in FindChildren("*", "Control", recursive: true, owned: false))
+            ((Control)child).MouseFilter = MouseFilterEnum.Ignore;
+    }
+
+    /// <summary>Show or hide the notice banner's ✕. The match hides it: with no
+    /// cursor there is nothing to click it with, and a moderator notice there is
+    /// meant to stay until a moderator replaces it.</summary>
+    public void ShowDismissButton(bool visible) =>
+        GetNode<Button>("%NoticeDismiss").Visible = visible;
+
+    /// <summary>
     /// Render <paramref name="log"/> and follow it from here on.
     ///
     /// Draws the existing entries BEFORE subscribing, the same pull-then-subscribe
@@ -147,6 +178,11 @@ public partial class ChatPanel : PanelContainer
 
         MatchFlow.Instance.SendChat(trimmed);
         input.Clear();
+        // Sending is not leaving, so the caret has to survive it. Nothing in this
+        // client releases focus on this path — the input gives it up as it consumes
+        // the submit — so keeping it means taking it back. Deferred, or the release
+        // lands after the grab and wins.
+        input.CallDeferred(Control.MethodName.GrabFocus);
     }
 
     // A line was appended. Drawing just this one keeps the common case cheap and

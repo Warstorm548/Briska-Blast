@@ -214,6 +214,7 @@ public partial class GameScene : Node2D
         _chat.FocusChanged += OnChatFocusChanged;
 
         BuildOverlay();
+        UpdateCursor();
 
         // The live net belongs to MatchFlow (this scene is only entered by it,
         // post-mesh). Lifecycle events — session end, kick, terminal close —
@@ -253,6 +254,14 @@ public partial class GameScene : Node2D
 
     public override void _ExitTree()
     {
+        // The cursor is hidden for the match but Input.MouseMode is global, so it
+        // has to be handed back or the menu we are leaving for arrives with no
+        // pointer. Unconditional, and here rather than in the exit handlers:
+        // every way out of a match — the pause menu, the end screen, a kick, a
+        // FailFlow — leaves by way of the tree, and this is the one place all of
+        // them pass through.
+        Input.MouseMode = Input.MouseModeEnum.Visible;
+
         // Detach so the surviving socket doesn't call into a freed scene if it
         // emits another event after we leave.
         _controller?.Dispose();
@@ -307,6 +316,10 @@ public partial class GameScene : Node2D
         _endGameMenu.HostRequested += OnEndGameHost;
         AddChild(_endGameMenu);
         _endGameMenu.Populate(winnerPlayerId, scores);
+        // Play is over and the end screen is a menu: the pointer comes back. Last,
+        // because the rule reads _endGameMenu and the ClosePauseMenu above already
+        // ran it once while this was still null.
+        UpdateCursor();
     }
 
     // "Return to Main Menu": the one MatchFlow teardown (idempotent — a second
@@ -322,6 +335,26 @@ public partial class GameScene : Node2D
     // Chat took or gave back the keyboard. The latch is what actually suspends
     // play — see the _chatFocused field for why focus alone cannot.
     private void OnChatFocusChanged(bool focused) => _chatFocused = focused;
+
+    /// <summary>
+    /// The whole cursor policy, in one rule: nothing in play needs a pointer, so
+    /// there is none, and it comes back only while a menu with clickable controls
+    /// is up. The pause menu's Copy-code button is mouse-only, and the end screen
+    /// is a menu; those two are the entire list of things that need it today.
+    ///
+    /// Hidden rather than Captured: Captured warps the pointer to the centre of
+    /// the window and is meant for mouselook, which would fight windowed play and
+    /// alt-tab. Hidden leaves the OS pointer where it is — which is also why it
+    /// alone is not enough: a hidden cursor still delivers clicks, so the chat
+    /// panel is made click-through as well (see <c>InGameChat</c>).
+    ///
+    /// The status overlays are deliberately absent from the rule: the reconnect
+    /// overlay and the rejoin pause panel are labels, with nothing to click.
+    /// </summary>
+    private void UpdateCursor() =>
+        Input.MouseMode = _pauseMenu != null || _endGameMenu != null
+            ? Input.MouseModeEnum.Visible
+            : Input.MouseModeEnum.Hidden;
 
     private void TogglePauseMenu()
     {
@@ -347,6 +380,7 @@ public partial class GameScene : Node2D
         _pauseMenu.QuitRequested += OnQuitGame;
         AddChild(_pauseMenu);
         _paused = true;
+        UpdateCursor();
     }
 
     // "Return to Session": just dismiss the overlay and resume play.
@@ -360,6 +394,7 @@ public partial class GameScene : Node2D
         _pauseMenu.QueueFree();
         _pauseMenu = null;
         _paused = false;
+        UpdateCursor();
     }
 
     // "Exit to main menu": leave WITHOUT an explicit `leave` frame, so the server

@@ -11,6 +11,47 @@ resurfaces unintentionally later.
 
 ---
 
+## ✅ Chat input loses focus after every send (lobby and match)
+
+- **Status:** ✅ **resolved in game 0.33.0** (`fix/chat-focus-and-cursor`).
+- **Affects:** game 0.32.0, both surfaces — the bug was in the shared
+  `ChatPanel`, which the lobby and the match both render through.
+- **Symptom (as reported):** press Enter to send; the message posts and the box
+  clears, but the caret disappears and the focus ring drops. Anything typed next
+  goes nowhere until the field is clicked again or Enter is pressed a second
+  time.
+- **Cause:** nothing in the client released focus on that path — there are
+  exactly four focus calls in `client/src` and none of them fire on a send, and
+  `SessionLobby.Render` only sets `Text`/`Visible`. The input surrenders focus as
+  it consumes the submit, below client code.
+- **Fix:** re-grab focus after posting, **deferred** — a same-frame grab is undone
+  by the release that follows it (`ChatPanel.OnSubmitted`). The intentional
+  release on an empty box or a bare `/` is untouched: that is the way out of chat.
+- **Regression watch:** if this resurfaces, check first that the re-grab is still
+  deferred rather than direct — that is the part that is easy to "simplify" away.
+
+## ✅ Mouse usable during a match; clicking chat silently froze the paddle
+
+- **Status:** ✅ **resolved in game 0.33.0** (`fix/chat-focus-and-cursor`).
+- **Affects:** game 0.32.0. Before it, no build ever set `Input.MouseMode` at all
+  — the cursor was simply always visible, everywhere.
+- **Symptom:** the cursor was visible for the whole match, and clicking the chat
+  panel focused the input. Because a focused input sets the `_chatFocused` latch,
+  that suspended the paddle, the serve and the hotbar keys with nothing on screen
+  to explain why the controls had stopped responding.
+- **Cause:** two independent gaps. Nothing hid the cursor, and `ChatPanel.tscn`
+  set no `mouse_filter`, so every control in it accepted clicks.
+- **Fix:** `GameScene.UpdateCursor` hides the cursor for live play and reveals it
+  only for the pause menu and the end screen; `InGameChat` calls
+  `ChatPanel.MakeClickThrough()` so clicks pass through the in-match panel. Both
+  halves are needed — a hidden cursor still delivers clicks. The lobby is
+  unchanged.
+- **Regression watch:** `Input.MouseMode` is **global**, so the unconditional
+  restore in `GameScene._ExitTree` is what keeps menus usable after a match. A new
+  in-match overlay with clickable controls must be added to `UpdateCursor`'s rule.
+
+---
+
 ## Ball enters displaced on a TURN-relayed / distant peer's screen
 
 - **Status:** open — **under active investigation**; code-level diagnosis strong,
