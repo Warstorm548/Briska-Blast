@@ -54,6 +54,9 @@ public partial class InGameChat : CanvasLayer
 
     private ChatPanel _panel = null!;
 
+    /// <summary>Build the match's copy of the shared panel: compact, headerless,
+    /// translucent, pinned bottom-left, and deaf to the mouse — the match has no
+    /// cursor, so keyboard is the only way into it.</summary>
     public override void _Ready()
     {
         _panel = GD.Load<PackedScene>("res://src/ui/chat/ChatPanel.tscn").Instantiate<ChatPanel>();

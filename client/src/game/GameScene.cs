@@ -143,6 +143,9 @@ public partial class GameScene : Node2D
         "hotbar_slot_1", "hotbar_slot_2", "hotbar_slot_3", "hotbar_slot_4", "hotbar_slot_5",
     };
 
+    /// <summary>Stand the match up: resolve the arena from this client's viewport,
+    /// build the view, action bar, chat and overlays, subscribe to the flow and the
+    /// socket, and take the cursor away for the duration of play.</summary>
     public override void _Ready()
     {
         var ctx = SessionContext.Instance;
@@ -252,6 +255,10 @@ public partial class GameScene : Node2D
         _view.Render(_state);
     }
 
+    /// <summary>Leave the match: hand the cursor back, then detach from the
+    /// controller, the flow and the socket so nothing calls into a freed scene.
+    /// Every exit passes through here, which is what makes it the right place for
+    /// state that outlives the scene.</summary>
     public override void _ExitTree()
     {
         // The cursor is hidden for the match but Input.MouseMode is global, so it
@@ -285,6 +292,10 @@ public partial class GameScene : Node2D
 
     // ---- end-of-match (MatchFlow's GameOver relay) ----
 
+    /// <summary>A player met the win condition. Freeze the sim, clear the pause
+    /// overlays and chat's hold on the keyboard, then put the end screen up and
+    /// give the cursor back for its buttons. Idempotent — a second relay of the
+    /// same result finds <c>_gameOver</c> already set.</summary>
     private void OnGameOver(string winnerPlayerId, Dictionary<string, int> scores)
     {
         if (_gameOver)

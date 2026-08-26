@@ -11,7 +11,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.33.0] — 2026-08-25
 
-**Two fixes to the chat 0.32.0 shipped, and the match loses its cursor.** No
+**Two fixes to the chat that 0.32.0 shipped, and the match loses its cursor.** No
 server change and nothing new on the wire, so no `min_game_version` move.
 
 **The chat input keeps the caret after you send.** It did not: Enter posted the
