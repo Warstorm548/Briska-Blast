@@ -11,24 +11,58 @@ resurfaces unintentionally later.
 
 ---
 
-## ✅ Chat input loses focus after every send (lobby and match)
+## A rejoining client's scoreboard reads 0 until the next point
 
-- **Status:** ✅ **resolved in game 0.33.0** (`fix/chat-focus-and-cursor`).
-- **Affects:** game 0.32.0, both surfaces — the bug was in the shared
+- **Status:** open — **pre-existing**, surfaced (not caused) by the in-match
+  leaderboard in game 0.34.0. Needs a server-side change, so it is not fixed here.
+- **Affects:** every client that rejoins a match in progress, any version. The old
+  single-line scoreboard had the same gap; a ranked board just makes it obvious.
+- **Symptom:** after a process-death rejoin, the leaderboard shows every player on
+  0 (ordered by seat order, since no tie stamps exist yet) until the next point is
+  scored **anywhere** in the match, at which point the next `ScoreUpdate` broadcast
+  resyncs the whole tally and the board corrects itself.
+- **Cause:** nothing re-fetches the tally on rejoin. `GameState` is reconstructed
+  empty in `GameScene._Ready`, and the `Identified` frame carries
+  `host_player_id, peers, seat_order, is_host, usernames, ice_servers` — no
+  `scores` field. Scores only ever arrive via the periodic wholesale `ScoreUpdate`
+  broadcast, which is emitted when someone scores, not when someone rejoins.
+- **Fix direction:** add the current tally to the rejoin path — either as a field
+  on `Identified` or as a `ScoreUpdate` pushed to the rejoining socket on identify.
+  The latter is smaller and reuses the frame clients already handle. Either way it
+  is a **protocol change**, hence deferred out of the 0.34.0 client work.
+- **Workaround:** none needed in practice — it self-corrects on the next point.
+
+---
+
+## ✅ Chat input stops accepting typing after every send (lobby and match)
+
+- **Status:** ✅ **resolved in game 0.34.1**. Previously marked resolved in 0.33.0
+  (`fix/chat-focus-and-cursor`) — **that fix did not work**; see below.
+- **Affects:** game 0.32.0 and 0.33.0, both surfaces — the bug is in the shared
   `ChatPanel`, which the lobby and the match both render through.
 - **Symptom (as reported):** press Enter to send; the message posts and the box
-  clears, but the caret disappears and the focus ring drops. Anything typed next
-  goes nowhere until the field is clicked again or Enter is pressed a second
-  time.
-- **Cause:** nothing in the client released focus on that path — there are
-  exactly four focus calls in `client/src` and none of them fire on a send, and
-  `SessionLobby.Render` only sets `Text`/`Visible`. The input surrenders focus as
-  it consumes the submit, below client code.
-- **Fix:** re-grab focus after posting, **deferred** — a same-frame grab is undone
-  by the release that follows it (`ChatPanel.OnSubmitted`). The intentional
-  release on an empty box or a bare `/` is untouched: that is the way out of chat.
-- **Regression watch:** if this resurfaces, check first that the re-grab is still
-  deferred rather than direct — that is the part that is easy to "simplify" away.
+  clears, but the caret disappears. Anything typed next goes nowhere until Enter
+  is pressed a second time (or, in the lobby, the field is clicked again).
+- **Cause:** Godot 4.4 split a `LineEdit`'s **edit mode** away from its **focus**,
+  and `keep_editing_on_text_submit` defaults to `false`. Enter emits
+  `text_submitted` and then leaves edit mode *while preserving focus* — `unedit()`
+  is documented in exactly those terms. Focus is never lost on a send.
+- **Why 0.33.0 missed it:** it read "no caret" as "no focus" and answered with a
+  deferred `GrabFocus()`. The control still had focus, so the grab was a no-op and
+  nothing changed. The tell was in the bug report the whole time: pressing Enter
+  again fixed it, and Enter on a *focused* `LineEdit` is precisely what re-enters
+  edit mode. A focus problem would not have responded to that.
+- **Fix (0.34.1):** set `keep_editing_on_text_submit = true` on the input, and
+  drop the deferred `GrabFocus()` from both send paths — they never did anything.
+  `FocusInput()` additionally calls `Edit()` after `GrabFocus()`, because a grab
+  only starts edit mode as a side effect of focus *changing* and so does nothing
+  on an input that is already focused but not editing; that is what made `T` and
+  `/` look broken too. The intentional release on an empty box or a bare `/` is
+  untouched: it releases focus outright, which ends edit mode with it.
+- **Regression watch:** the diagnostic question is **`IsEditing()`, not
+  `HasFocus()`** — they are different states in Godot 4.4+ and only the first one
+  decides whether keystrokes reach the box. If chat ever goes deaf again, print
+  both before assuming focus is the problem.
 
 ## ✅ Mouse usable during a match; clicking chat silently froze the paddle
 

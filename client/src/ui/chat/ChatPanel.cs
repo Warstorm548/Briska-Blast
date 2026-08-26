@@ -40,9 +40,26 @@ public partial class ChatPanel : PanelContainer
 
     private ChatLog? _log;
 
+    /// <summary>Wire the input's submit and focus signals, the notice ✕, and clear
+    /// the scene's placeholder line. Configures the input to hold edit mode across
+    /// a send — see the comment on that assignment, it is the fix for a bug that
+    /// survived two releases.</summary>
     public override void _Ready()
     {
         var input = GetNode<LineEdit>("%ChatInput");
+
+        // Godot 4.4 split a LineEdit's EDIT mode out of its focus state, and
+        // keep_editing_on_text_submit defaults to false: Enter emits
+        // text_submitted and then leaves edit mode while KEEPING focus. That is
+        // the bug 0.33.0 aimed at and missed — it answered with GrabFocus on a
+        // control that had never lost focus, so the call did nothing and the
+        // caret stayed dead. Pressing Enter again was the only way back, because
+        // Enter on a focused LineEdit re-enters edit mode: the workaround players
+        // found is the diagnosis. Holding edit mode across a submit is precisely
+        // what this property is for. The empty-Enter exit in OnSubmitted still
+        // works, because it releases focus outright and editing ends with it.
+        input.KeepEditingOnTextSubmit = true;
+
         input.TextSubmitted += OnSubmitted;
         input.FocusEntered += () => SetFocused(true);
         input.FocusExited += () => SetFocused(false);
@@ -55,6 +72,9 @@ public partial class ChatPanel : PanelContainer
         GetNode<RichTextLabel>("%ChatLog").Clear();
     }
 
+    /// <summary>Drop the <see cref="ChatLog"/> subscription. The log outlives every
+    /// scene, so a panel that did not detach would keep being called after the
+    /// scene it drew into was gone.</summary>
     public override void _ExitTree() => Unbind();
 
     /// <summary>Show or hide the "Chat" caption (the in-match overlay hides it —
@@ -128,6 +148,9 @@ public partial class ChatPanel : PanelContainer
         log.Redrawn += Redraw;
     }
 
+    /// <summary>Detach from the current log, if any. Idempotent, so
+    /// <see cref="Bind"/> can call it unconditionally before re-subscribing and
+    /// <see cref="_ExitTree"/> can call it after.</summary>
     private void Unbind()
     {
         if (_log == null)
@@ -146,11 +169,22 @@ public partial class ChatPanel : PanelContainer
         input.Text = prefill;
         input.CaretColumn = prefill.Length;
         input.GrabFocus();
+        // GrabFocus only starts edit mode as a side effect of the focus CHANGING,
+        // so it does nothing on an input already focused but not editing — the
+        // state anything that ends editing without taking focus leaves behind
+        // (Escape, now that a submit no longer does). Edit() is the direct way in
+        // and no-ops when already editing, so T and / open the caret from either
+        // state rather than only from a cold start.
+        input.Edit();
     }
 
     /// <summary>Drop keyboard focus, handing control back to whatever owns it.</summary>
     public void ReleaseInput() => GetNode<LineEdit>("%ChatInput").ReleaseFocus();
 
+    /// <summary>Record the input's focus state and raise
+    /// <see cref="InputFocusChanged"/> on a real transition. Edge-triggered on
+    /// purpose: the match suspends and restores player controls from this, and
+    /// re-raising an unchanged value would have it doing so repeatedly.</summary>
     private void SetFocused(bool focused)
     {
         if (InputFocused == focused)
@@ -160,7 +194,9 @@ public partial class ChatPanel : PanelContainer
     }
 
     // Enter in the input. Trim, send through the orchestrator, then clear the
-    // field — focus is deliberately KEPT, because sending is not leaving.
+    // field — focus AND edit mode are deliberately KEPT, because sending is not
+    // leaving. Both survive on their own now; see KeepEditingOnTextSubmit in
+    // _Ready for why keeping the caret is a property and not a re-grab.
     private void OnSubmitted(string text)
     {
         var input = GetNode<LineEdit>("%ChatInput");
@@ -176,13 +212,22 @@ public partial class ChatPanel : PanelContainer
             return;
         }
 
+#if DEV_TOOLS
+        // Dev builds only, and only in the editor — see DevCommands for both gates.
+        // An unrecognised "/…" falls through and posts as chat, exactly as 0.32.0
+        // documented, so the contract is not quietly different here.
+        if (Dev.DevCommands.TryHandle(trimmed, MatchFlow.Instance.Chat))
+        {
+            input.Clear();
+            return;
+        }
+#endif
+
         MatchFlow.Instance.SendChat(trimmed);
+        // Clear only. Nothing has to be restored: the input holds on to both focus
+        // and edit mode across the submit, so the caret is already where the player
+        // left it, ready for the next line.
         input.Clear();
-        // Sending is not leaving, so the caret has to survive it. Nothing in this
-        // client releases focus on this path — the input gives it up as it consumes
-        // the submit — so keeping it means taking it back. Deferred, or the release
-        // lands after the grab and wins.
-        input.CallDeferred(Control.MethodName.GrabFocus);
     }
 
     // A line was appended. Drawing just this one keeps the common case cheap and

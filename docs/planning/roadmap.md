@@ -78,6 +78,12 @@ Work intentionally deferred until after the initial production deployment of the
 - **Why deferred**: Bounds are game-design constants today, not ops config. Promoting them to runtime config buys nothing until live balancing iteration becomes a real workflow, and adds Redis-key parsing/validation that doesn't exist yet (what if the stored value is `"abc"`?).
 - **Trigger to start**: Active gamemode-balancing work where redeploying for each tweak is too slow, OR a third-party balance contributor needs to tweak bounds without source access.
 
+### Server-ordered leaderboard tie-break (game 0.34.1)
+
+- **What**: Have the server say *who* scored, or hand out a match-wide ordinal with each `ScoreUpdate`, so equal scores rank identically on every client no matter when that client joined.
+- **Why deferred**: It is a **protocol change**, and the client-side approximation is good enough for now. `GameState.ApplyScores` stamps each changed score with a count of the tallies *that client* has applied, which is exact for every client that saw the whole match. A client that joined late or missed frames collapses everything before its arrival into its first tally and can therefore break a tie differently — its board stays internally stable, it just may not agree with a full-match client's. `ScoreUpdate` carries the whole tally and never names the scorer, so nothing on the wire can currently fix it.
+- **Trigger to start**: A tie-break disagreement is actually observed in play, or the next `ScoreUpdate` schema change makes it cheap to add the field while the frame is already open.
+
 ### Score / replay / audit persistence
 
 - **What**: Persist match outcomes — scores, winner, gamemode, duration, peer roster — to Redis keyed off `session_code` with an appropriate TTL. Establishes the keyspace conventions for any future server-side audit trail.

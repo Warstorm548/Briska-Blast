@@ -164,6 +164,54 @@ scoring in the goal corners and stops fast balls from cutting the corners.
   split ball** is worth 2 (`ReportScore.points`, server-clamped to `[1, 2]`). The
   server adds the reported points to the authoritative tally.
 
+### The in-match leaderboard (game 0.34.0)
+
+`LeaderboardView` (`client/src/ui/LeaderboardView.cs`) draws the live standings
+top-left, one row per player, ranked. It replaced a single-line Label in `View2D`
+that listed players in player_id order — an ordering chosen precisely so columns
+never moved, which is the opposite of what a leaderboard is for.
+
+- **Ranking key**, in order: score **descending** → whoever **reached that score
+  first** → index in `SessionContext.SeatOrder`. Seat order is the final key
+  because it is frozen at match start and identical on every client, so a board
+  where nobody has scored yet is stable rather than arbitrary.
+- **"Reached first" has to be derived.** `ScoreUpdate` carries the whole tally
+  and never says who just scored, so `GameState.ApplyScores` — the **single**
+  place scores are written, used by both `NetGameController.OnScoreUpdate` and
+  `GameScene.OnGameOver` — diffs the incoming map and stamps whatever moved into
+  `GameState.ScoreReachedAtSeq`. A decrease stamps too; "changed" is the only
+  thing worth marking when the server is authoritative.
+- **The stamps count tallies, not milliseconds.** `ScoreReachedAtSeq` holds a
+  per-client counter that moves exactly once per applied tally, so the Nth tally
+  stamps N on every screen and the ordering is a pure function of broadcast
+  order. **Do not swap this back to a clock.** `Time.GetTicksMsec()` was tried
+  first and is not equivalent: two `ScoreUpdate` frames drained in one engine
+  tick read the *same* millisecond on a machine fast enough to do it and
+  *different* ones on a machine that is not, so the tie-break would fall to seat
+  order on the first screen and to arrival order on the second — two boards, same
+  broadcasts. Comparing raw timestamps *between* clients is even further wrong.
+- **Everything that moves in one tally shares that tally's number.** The frame
+  says what the scores now are, never who just scored, so two players moving
+  together cannot be separated and the seat-order key resolves them identically
+  everywhere.
+- **Known limitation: the count is per client, not per match.** A client that
+  joined late or missed frames starts counting where it came in and collapses
+  everything prior into its first tally, so its board can break a tie differently
+  from one that watched the whole match. Nothing on the wire carries the history
+  needed to reconcile that; seat order still keeps every board internally stable.
+  Fixing it properly means the server ordering the tie, which is a protocol
+  change — see [`docs/planning/roadmap.md`](../planning/roadmap.md).
+- **Scores restate immediately; the order settles on a 3s beat**
+  (`ReorderIntervalMsec`). Re-sorting the instant a point lands turns a close
+  match into a flicker, and nothing is hidden by the delay because the number
+  itself has already changed. Rows glide to their new places over ~0.35s.
+- Rows are positioned **absolutely**, not parented to a `VBoxContainer` — a
+  container owns its children's positions, which is what the swap animation needs
+  to control. This is also the codebase's only `Tween`; everything else times
+  itself with a stored deadline polled in `_Process`.
+- **A rejoiner's board starts blank** — see `known-bugs.md`. Nothing is re-fetched
+  on rejoin, so scores read 0 until the next point is scored anywhere.
+
 ## Win condition & game over
 
 - The host picks a **win condition** during setup (Advanced → Match Rules),

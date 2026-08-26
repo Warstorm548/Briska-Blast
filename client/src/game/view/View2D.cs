@@ -1,6 +1,4 @@
-using System;
 using System.Collections.Generic;
-using System.Text;
 using Godot;
 using BriskaBlast.Core;
 
@@ -20,7 +18,6 @@ public partial class View2D : Node2D, IGameView
 
     private Sprite2D _background = null!;
     private Sprite2D _paddle = null!;
-    private Label _scoreboard = null!;
     private readonly Dictionary<int, Sprite2D> _ballSprites = new();
     private readonly Dictionary<int, Sprite2D> _splitterSprites = new();
 
@@ -29,18 +26,13 @@ public partial class View2D : Node2D, IGameView
     private readonly List<int> _gone = new();
     private readonly HashSet<int> _seenSplitters = new();
     private readonly List<int> _goneSplitters = new();
-    private readonly List<string> _scoreOrder = new();
-    private readonly StringBuilder _scoreText = new();
 
     private GameState? _state;
     private bool _barriersBuilt;
 
-    /// <summary>Resolves a player_id to the display name shown on the scoreboard.
-    /// Injected by <c>GameScene</c> from <c>SessionContext.DisplayNameFor</c>. When
-    /// null (e.g. a view rendered in isolation) the scoreboard falls back to the
-    /// raw id, so the numeric id is never shown as long as a resolver is wired.</summary>
-    public Func<string, string>? NameResolver { get; set; }
-
+    /// <summary>Build the static sprites from the central
+    /// <see cref="SpriteRegistry"/> — the single source of truth for textures, so
+    /// nothing here loads a path of its own.</summary>
     public override void _Ready()
     {
         var sprites = SpriteRegistry.Instance;
@@ -59,12 +51,6 @@ public partial class View2D : Node2D, IGameView
 
         // Ball textures are resolved per ball in Render (by kind), so the registry
         // loads the BallBT art lazily — the build runs before it's imported.
-
-        // Minimal scoreboard, top-left. Sized large so it's visible on the
-        // 2560-wide design viewport without further theming.
-        _scoreboard = new Label { Position = new Vector2(24, 16), ZIndex = 10 };
-        _scoreboard.AddThemeFontSizeOverride("font_size", 48);
-        AddChild(_scoreboard);
     }
 
     /// <summary>Create the four static corner-barrier sprites once. They never move, so
@@ -98,6 +84,9 @@ public partial class View2D : Node2D, IGameView
         _barriersBuilt = true;
     }
 
+    /// <summary>Paint one frame of the field: background, paddle, balls and
+    /// splitters, adding and freeing sprites as objects come and go. Purely a view
+    /// — it reads <paramref name="state"/> and never writes to it.</summary>
     public void Render(GameState state)
     {
         _state = state;
@@ -172,29 +161,11 @@ public partial class View2D : Node2D, IGameView
             _splitterSprites.Remove(id);
         }
 
-        // Scoreboard: "<name>: N  <name>: N  ..." sorted by player_id (stable and
-        // unique, so duplicate display names never reorder columns); each id is
-        // rendered as its username via NameResolver, falling back to the raw id
-        // only when no resolver/name is available. Reusing the StringBuilder +
-        // sort buffer keeps Render allocation-free apart from the resolver call.
-        _scoreOrder.Clear();
-        foreach (var pid in state.Scores.Keys)
-            _scoreOrder.Add(pid);
-        _scoreOrder.Sort(string.CompareOrdinal);
-
-        _scoreText.Clear();
-        foreach (var pid in _scoreOrder)
-        {
-            if (_scoreText.Length > 0)
-                _scoreText.Append("   ");
-            var name = NameResolver?.Invoke(pid) ?? pid;
-            _scoreText.Append(name).Append(": ").Append(state.Scores[pid]);
-        }
-        _scoreboard.Text = _scoreText.ToString();
-
         QueueRedraw(); // refresh the edge outlines
     }
 
+    /// <summary>Draw the four edge outlines. Vector work only; everything with a
+    /// texture is a child sprite positioned in <see cref="Render"/>.</summary>
     public override void _Draw()
     {
         if (_state is not { } s)
@@ -206,6 +177,9 @@ public partial class View2D : Node2D, IGameView
         DrawEdge(Edge.Left, new Vector2(0, 0), new Vector2(0, h));
     }
 
+    /// <summary>Outline one edge in the colour of its role — goal, portal or wall —
+    /// so a player can see at a glance which sides pass a ball on and which return
+    /// it. An unmapped edge falls back to Wall.</summary>
     private void DrawEdge(Edge edge, Vector2 a, Vector2 b)
     {
         var kind = _state!.Edges.TryGetValue(edge, out var t) ? t.Kind : EdgeKind.Wall;
