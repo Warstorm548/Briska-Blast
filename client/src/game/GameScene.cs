@@ -665,8 +665,11 @@ public partial class GameScene : Node2D
 
         // Escape toggles the in-match pause menu (open ⇄ Return to Session) —
         // unless chat holds the keyboard, where it is the way out of the input
-        // instead. A LineEdit does not consume Escape, so without this branch
-        // typing would be interrupted by the pause menu.
+        // instead. Escape IS consumed by an editing LineEdit, but only to leave
+        // edit mode, and that preserves focus (Godot 4.4+ keeps the two apart) —
+        // so without this branch chat would sit there holding the latch with no
+        // caret, and the paddle would never come back. Polling sidesteps the
+        // consumption either way: this reads the raw action, not the event.
         if (Input.IsActionJustPressed("ui_cancel"))
         {
             if (_chatFocused)

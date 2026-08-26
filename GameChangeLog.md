@@ -9,6 +9,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.34.1] — 2026-08-26
+
+**The chat caret survives a send — this time for the right reason.** 0.33.0
+claimed this fix and did not deliver it, so the bug outlived the release in both
+the lobby and the match. Client-only; nothing on the wire changes, so no server
+release and no `min_game_version` move.
+
+Godot 4.4 split a `LineEdit`'s **edit mode** away from its **focus**, and
+`keep_editing_on_text_submit` defaults to `false`. Enter therefore emits
+`text_submitted` and then leaves edit mode *while keeping focus*. 0.33.0 read the
+symptom as lost focus and answered with a deferred `GrabFocus()` — on a control
+that had never lost focus. The call was a no-op and the caret stayed dead.
+
+The workaround players found was the diagnosis all along: pressing Enter a second
+time brought typing back, because Enter on a **focused** `LineEdit` re-enters
+edit mode. Nothing else would, which is why `T` and `/` looked broken too — they
+route through `GrabFocus()` as well.
+
+Two changes, both in the shared `ChatPanel`, so the lobby and the in-match
+overlay are fixed by the same edit:
+
+- `keep_editing_on_text_submit` is now `true`. Enter posts the line and the caret
+  stays where it was. The deferred `GrabFocus()` calls are gone from both send
+  paths — they never did anything.
+- `FocusInput()` calls `Edit()` after `GrabFocus()`. A grab only starts edit mode
+  as a side effect of focus *changing*, so it did nothing on an input already
+  focused but not editing. `Edit()` enters it directly and no-ops when already
+  editing, so `T` and `/` open the caret from either state rather than only from
+  a cold start.
+
+Enter on an empty box still leaves the input: that path releases focus outright,
+and edit mode ends with it.
+
+One stale comment corrected in `GameScene`. It said a `LineEdit` does not consume
+Escape. It does, as of 4.4 — but only to leave edit mode, and that preserves
+focus. The branch it justified is still needed, and for a sharper reason than it
+gave: without it chat would sit holding the keyboard latch with no caret to show
+for it, and the paddle would never come back.
+
+---
+
 ## [0.34.0] — 2026-08-26
 
 **The in-match scoreboard becomes a leaderboard.** Client-only; nothing on the
