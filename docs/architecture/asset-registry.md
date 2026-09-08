@@ -12,7 +12,7 @@ a **category tag**.
   or send over the wire later.
 - A category tag distinguishing **player-controlled** sprites (paddles, the served
   ball), **system-controlled** static fixtures (the corner barriers),
-  **system-handled** random spawns (the ball splitter), and **UI** chrome (the hotbar
+  **system-handled** random spawns (the ball splitter, loot pickups), and **UI** chrome (the hotbar
   slot frame), so systems can treat each class uniformly — e.g. host spawn-frequency
   settings enumerate only the system spawns via `SpriteRegistry.SystemSpawns()`, which
   the static `SystemControlled` fixtures and `Ui` chrome are deliberately excluded from.
@@ -23,7 +23,8 @@ a **category tag**.
   number.
 - `enum AssetCategory { PlayerControlled, SystemControlled, SystemHandled, Ui }`
   (`SystemControlled` = game-owned but static, e.g. the corner barriers; `SystemHandled`
-  = random spawns with a host-tunable cadence; `Ui` = screen furniture drawn on a
+  = random spawns with a host-tunable cadence, e.g. the ball splitter and loot pickups;
+  `Ui` = screen furniture drawn on a
   `CanvasLayer`, e.g. the hotbar slot frame — the other three all answer "who moves this
   thing in the arena", which a UI sprite has no answer to).
 - `Entries` — the table ("grid"): one `AssetEntry(id, name, res-path, category)` row
@@ -51,6 +52,10 @@ relevant sim data (e.g. a `BallKind` on `Ball`) — the registry only owns the
 
 - The ball-splitter mechanic that introduced the registry (master ball → 3 BallBT
   split balls, system spawns, double score): see [`extended-mode.md`](extended-mode.md).
+- The loot table and the Full Barrier item (the second system-spawn mechanic, and the
+  first sprites to serve as both a world pickup and a hotbar icon): see
+  [`loot-table-and-barrier.md`](loot-table-and-barrier.md). Note its step-1 warning —
+  the headless import rewrites C# indentation.
 - Per-channel runtime-cache isolation / `files.json` integrity (a different
   "assets on disk" concern): see
   [`runtime-cache-and-integrity.md`](runtime-cache-and-integrity.md).

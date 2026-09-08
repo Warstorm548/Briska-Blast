@@ -42,10 +42,12 @@ public sealed class ServerApi
 
     public Task<ApiResult<HostResponse>> HostAsync(
         string playerId, string secretToken, string gamemode, int playerCount,
-        WinConditionDto winCondition, SpawnSettingsDto spawnSettings) =>
+        WinConditionDto winCondition, SpawnSettingsDto spawnSettings,
+        LootSettingsDto lootSettings) =>
         SendJson<HostRequest, HostResponse>(
             HttpMethod.Post, "host",
-            new HostRequest(playerId, secretToken, gamemode, playerCount, winCondition, spawnSettings));
+            new HostRequest(playerId, secretToken, gamemode, playerCount, winCondition,
+                spawnSettings, lootSettings));
 
     public Task<ApiResult<JoinResponse>> JoinAsync(
         string code, string playerId, string secretToken) =>

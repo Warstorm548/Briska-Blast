@@ -100,6 +100,24 @@ public sealed class Splitter
     public float Radius = 24f;
 }
 
+/// <summary>A loot item lying in the arena, waiting to be collected. A system spawn
+/// like <see cref="Splitter"/>: it appears on a host-configured cadence and is
+/// consumed when a ball touches it.
+///
+/// Unlike a splitter, collecting one does NOT necessarily benefit this screen — the
+/// item goes to the ball's last hitter, who is usually a peer. The pickup itself is
+/// still purely local (each client spawns its own); only the award crosses the wire.
+/// See <c>GameSimulation.ResolvePickups</c>.</summary>
+public sealed class Pickup
+{
+    public int Id;
+    public Vector2 Pos;
+    public float Radius = 24f;
+    /// <summary>Which item this grants. Drives both the sprite and what lands in
+    /// the collector's hotbar.</summary>
+    public ItemId Item;
+}
+
 /// <summary>The local player's paddle: a horizontal bar that slides along the
 /// bottom of the screen, a gap above the goal line.</summary>
 public sealed class Paddle
@@ -160,6 +178,63 @@ public sealed class Hotbar
             slots[i] = new ItemSlot();
         return slots;
     }
+
+    /// <summary>Take one of <paramref name="item"/> into the bar: stack it onto a
+    /// slot that already holds it and has room, else claim the first empty slot.
+    /// Returns false when the bar has no room — every slot full or already at this
+    /// item's <see cref="ItemRegistry"/> cap — in which case nothing changes.
+    ///
+    /// Stacking is tried before claiming an empty slot so a player never ends up
+    /// holding the same item in two slots while a third sits empty.</summary>
+    public bool TryAdd(ItemId item)
+    {
+        var icon = ItemRegistry.Icon(item);
+        int max = ItemRegistry.MaxStack(item);
+
+        foreach (var slot in Slots)
+            if (!slot.IsEmpty && slot.Icon == icon && slot.Count < max)
+            {
+                slot.Count++;
+                return true;
+            }
+
+        foreach (var slot in Slots)
+            if (slot.IsEmpty)
+            {
+                slot.Icon = icon;
+                slot.Count = 1;
+                return true;
+            }
+
+        return false;
+    }
+
+    /// <summary>Spend one charge from a slot. When that was the last one the slot is
+    /// <b>cleared outright</b> — icon and all — rather than left showing a zero, so
+    /// the next pickup of ANY item can claim it. Slots are not owned by an item.
+    ///
+    /// Returns the item that was spent, or null when the slot was already empty.
+    /// Note the caller must not read the slot's icon afterwards to learn what it
+    /// activated; that is why the item comes back from here.</summary>
+    public ItemId? Consume(int index)
+    {
+        if (index < 0 || index >= SlotCount)
+            return null;
+
+        var slot = Slots[index];
+        if (slot.IsEmpty || slot.Count <= 0)
+            return null;
+        if (!ItemRegistry.TryFromIcon(slot.Icon!.Value, out var item))
+            return null;
+
+        slot.Count--;
+        if (slot.Count <= 0)
+        {
+            slot.Icon = null;
+            slot.Count = 0;
+        }
+        return item;
+    }
 }
 
 /// <summary>
@@ -195,6 +270,34 @@ public sealed class GameState
     /// <summary>System-spawned ball splitters currently on this screen (local-only;
     /// never networked). A ball touching one consumes it into three split balls.</summary>
     public readonly List<Splitter> Splitters = new();
+
+    /// <summary>Loot items lying on THIS screen waiting to be collected (local-only;
+    /// each client spawns its own). A ball touching one consumes it and awards the
+    /// item to that ball's last hitter — who is often a peer, which is the one part
+    /// of the loot system that leaves this screen.</summary>
+    public readonly List<Pickup> Pickups = new();
+
+    /// <summary>Seconds left on the local player's deployed Full Barrier; 0 when no
+    /// barrier is up. Activating the item ADDS to this rather than replacing it, so
+    /// a second activation at 15s remaining leaves 45s.
+    ///
+    /// Deliberately not stored on the hotbar slot: spending the last charge clears
+    /// the slot, and the countdown has to outlive that — the player is still standing
+    /// behind the barrier they just paid for.</summary>
+    public float ShieldSecsRemaining;
+
+    /// <summary>Whether a barrier is currently deployed. The simulation only collides
+    /// balls against the barrier while this holds.</summary>
+    public bool ShieldActive => ShieldSecsRemaining > 0f;
+
+    /// <summary>Geometry of the deployed barrier: a capsule whose spine runs
+    /// horizontally from (<see cref="ShieldX0"/>, <see cref="ShieldY"/>) to
+    /// (<see cref="ShieldX1"/>, <see cref="ShieldY"/>) with radius
+    /// <see cref="ShieldRadius"/> — which is exactly "a rectangle with half-round
+    /// ends". Resolved once from the arena in <c>GameScene._Ready</c>; the ends are
+    /// pulled in far enough to clear the corner barriers, so the bar never overlaps
+    /// them while the gap it leaves stays far narrower than a ball.</summary>
+    public float ShieldX0, ShieldX1, ShieldY, ShieldRadius;
 
     /// <summary>When true, BallBT split balls that hit another splitter split again;
     /// when false only the master ball can trigger a split. Host-configured.</summary>
@@ -313,4 +416,11 @@ public sealed class GameState
     /// <summary>Splitter id allocator. Splitters never leave this screen, so a plain
     /// local counter suffices (no cross-screen uniqueness needed).</summary>
     public int NextSplitterId() => _nextSplitterId++;
+
+    private int _nextPickupId;
+
+    /// <summary>Pickup id allocator. Like splitter ids, purely local: a pickup is
+    /// only ever addressed on the screen that spawned it (the award that leaves this
+    /// screen carries an item id, not a pickup id), so no seat namespacing.</summary>
+    public int NextPickupId() => _nextPickupId++;
 }

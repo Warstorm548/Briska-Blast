@@ -20,12 +20,34 @@ public partial class View2D : Node2D, IGameView
     private Sprite2D _paddle = null!;
     private readonly Dictionary<int, Sprite2D> _ballSprites = new();
     private readonly Dictionary<int, Sprite2D> _splitterSprites = new();
+    private readonly Dictionary<int, Sprite2D> _pickupSprites = new();
 
     // Reused across frames so Render allocates nothing in the hot loop.
     private readonly HashSet<int> _seen = new();
     private readonly List<int> _gone = new();
     private readonly HashSet<int> _seenSplitters = new();
     private readonly List<int> _goneSplitters = new();
+    private readonly HashSet<int> _seenPickups = new();
+    private readonly List<int> _gonePickups = new();
+
+    // --- Deployed barrier, drawn as THREE region-sliced sprites from one texture.
+    // A single sprite stretched across the goal mouth would smear its rounded caps
+    // into ellipses — and the caps are the shape's whole point. So the two caps
+    // scale uniformly and only the flat middle stretches, which is lossless because
+    // the source's middle region has no horizontal variation at all.
+    //
+    // Source layout (FullBarrier.png, 240x64): cap | middle | cap, and a 2px
+    // transparent margin top/bottom so the antialiased edge isn't clipped. The
+    // capsule itself is 60px thick, which is why the runtime scale divides by
+    // ShieldTexCapsule rather than the full texture height.
+    private const float ShieldTexCapW = 32f;
+    private const float ShieldTexMidW = 176f;
+    private const float ShieldTexH = 64f;
+    private const float ShieldTexCapsule = 60f;
+
+    private Sprite2D _shieldLeft = null!;
+    private Sprite2D _shieldMid = null!;
+    private Sprite2D _shieldRight = null!;
 
     private GameState? _state;
     private bool _barriersBuilt;
@@ -51,6 +73,60 @@ public partial class View2D : Node2D, IGameView
 
         // Ball textures are resolved per ball in Render (by kind), so the registry
         // loads the BallBT art lazily — the build runs before it's imported.
+
+        // The barrier's three slices. Built once and simply hidden while no barrier
+        // is deployed, since it is one fixed span that only toggles visibility.
+        var shieldTex = sprites.GetTexture(AssetId.FullBarrier);
+        _shieldLeft = MakeShieldSlice(shieldTex, new Rect2(0, 0, ShieldTexCapW, ShieldTexH));
+        _shieldMid = MakeShieldSlice(shieldTex, new Rect2(ShieldTexCapW, 0, ShieldTexMidW, ShieldTexH));
+        _shieldRight = MakeShieldSlice(shieldTex,
+            new Rect2(ShieldTexCapW + ShieldTexMidW, 0, ShieldTexCapW, ShieldTexH));
+    }
+
+    private Sprite2D MakeShieldSlice(Texture2D tex, Rect2 region)
+    {
+        var s = new Sprite2D
+        {
+            Texture = tex,
+            RegionEnabled = true,
+            RegionRect = region,
+            Visible = false,
+            // Above the background and corner barriers, alongside the paddle.
+            ZIndex = 0,
+        };
+        AddChild(s);
+        return s;
+    }
+
+    /// <summary>Position the barrier's three slices across the span the sim collides
+    /// against, so the drawn shape and the collider are the same capsule. The caps
+    /// keep a uniform scale (staying circular); only the middle stretches.</summary>
+    private void RenderShield(GameState state)
+    {
+        bool active = state.ShieldActive;
+        _shieldLeft.Visible = active;
+        _shieldMid.Visible = active;
+        _shieldRight.Visible = active;
+        if (!active)
+            return;
+
+        // The sim's radius is the capsule's, so scale off the capsule's own height
+        // rather than the texture's (which carries the antialias margin).
+        float scale = state.ShieldRadius * 2f / ShieldTexCapsule;
+        float capW = ShieldTexCapW * scale;
+        float y = state.ShieldY;
+
+        // X0/X1 are the spine's endpoints, i.e. the centres of the two round caps.
+        _shieldLeft.Scale = new Vector2(scale, scale);
+        _shieldLeft.Position = new Vector2(state.ShieldX0 - capW * 0.5f, y);
+
+        _shieldRight.Scale = new Vector2(scale, scale);
+        _shieldRight.Position = new Vector2(state.ShieldX1 + capW * 0.5f, y);
+
+        // The middle fills the gap between the cap sprites, stretched only in x.
+        float midW = state.ShieldX1 - state.ShieldX0;
+        _shieldMid.Scale = new Vector2(midW / ShieldTexMidW, scale);
+        _shieldMid.Position = new Vector2((state.ShieldX0 + state.ShieldX1) * 0.5f, y);
     }
 
     /// <summary>Create the four static corner-barrier sprites once. They never move, so
@@ -160,6 +236,40 @@ public partial class View2D : Node2D, IGameView
             _splitterSprites[id].QueueFree();
             _splitterSprites.Remove(id);
         }
+
+        // Loot pickups: same create/move/free-by-id pattern again. The texture comes
+        // from the item's own registry row, so a second loot item needs no change
+        // here — it just resolves to a different sprite.
+        _seenPickups.Clear();
+        foreach (var pu in state.Pickups)
+        {
+            _seenPickups.Add(pu.Id);
+            if (!_pickupSprites.TryGetValue(pu.Id, out var sprite))
+            {
+                sprite = new Sprite2D
+                {
+                    Texture = SpriteRegistry.Instance.GetTexture(ItemRegistry.Icon(pu.Item)),
+                };
+                AddChild(sprite);
+                _pickupSprites[pu.Id] = sprite;
+            }
+            sprite.Position = pu.Pos;
+            var pusize = sprite.Texture.GetSize();
+            if (pusize.X > 0 && pusize.Y > 0)
+                sprite.Scale = new Vector2(pu.Radius * 2f / pusize.X, pu.Radius * 2f / pusize.Y);
+        }
+
+        _gonePickups.Clear();
+        foreach (var id in _pickupSprites.Keys)
+            if (!_seenPickups.Contains(id))
+                _gonePickups.Add(id);
+        foreach (var id in _gonePickups)
+        {
+            _pickupSprites[id].QueueFree();
+            _pickupSprites.Remove(id);
+        }
+
+        RenderShield(state);
 
         QueueRedraw(); // refresh the edge outlines
     }

@@ -70,6 +70,105 @@ public sealed record SpawnSettingsDto(int SplitterIntervalSecs, bool ChainSplit)
 }
 
 /// <summary>
+/// Mirror of the Rust <c>LootSettings</c> struct. Serializes flat as
+/// <c>{"drop_interval_secs":N,"barrier_enabled":bool,"barrier_weight":N,
+/// "barrier_duration_secs":N}</c> under the snake_case policy. Range constants are
+/// hand-mirrored from <c>shared/src/types/loot_settings.rs</c> so the UI slider caps
+/// and the server's check can't drift.
+///
+/// The weighting maths below mirrors the Rust methods of the same names, which are
+/// the tested implementation (<c>cargo test -p shared</c>) — this side has no test
+/// runner, so treat Rust as the reference and keep the two in step.
+/// </summary>
+public sealed record LootSettingsDto(
+    int DropIntervalSecs,
+    bool BarrierEnabled,
+    int BarrierWeight,
+    int BarrierDurationSecs)
+{
+    public const int IntervalMin = 5;
+    public const int IntervalMax = 60;
+    public const int IntervalDefault = 20;
+
+    public const int WeightMin = 1;
+    public const int WeightMax = 100;
+    /// <summary>The subscribed total can never exceed this — see
+    /// <see cref="SubscribedTotal"/> for what "subscribed" means.</summary>
+    public const int WeightTotalMax = 100;
+
+    public const int BarrierDurationMin = 5;
+    public const int BarrierDurationMax = 120;
+
+    public const bool BarrierEnabledDefault = true;
+    public const int BarrierWeightDefault = 50;
+    public const int BarrierDurationDefault = 30;
+
+    /// <summary>How many items the loot table holds. Adding item #2 means bumping
+    /// this and adding one entry to <see cref="Entries"/>.</summary>
+    public const int ItemCount = 1;
+
+    public static LootSettingsDto Default =>
+        new(IntervalDefault, BarrierEnabledDefault, BarrierWeightDefault, BarrierDurationDefault);
+
+    /// <summary>Every item's (enabled, weight) pair in a fixed order. The one place
+    /// the item list is enumerated; the maths below is already generic over N.</summary>
+    public (bool Enabled, int Weight)[] Entries() =>
+        new[] { (BarrierEnabled, BarrierWeight) };
+
+    /// <summary>Sum of the <b>distinct</b> weight values among enabled items.
+    ///
+    /// Distinct, not per-item: two items sharing a weight share one bucket and split
+    /// it, so they add that weight to the total once. A lone item at 50 drops on half
+    /// of all rolls; two items both at 50 drop on 25% of rolls each — still half the
+    /// rolls between them, not all of them. The remainder up to 100 is
+    /// <see cref="NothingRate"/>.</summary>
+    public int SubscribedTotal()
+    {
+        var e = Entries();
+        int total = 0;
+        for (int i = 0; i < e.Length; i++)
+        {
+            if (!e[i].Enabled)
+                continue;
+            // Count a weight only the first time it appears among enabled items.
+            bool alreadyCounted = false;
+            for (int j = 0; j < i; j++)
+                if (e[j].Enabled && e[j].Weight == e[i].Weight)
+                {
+                    alreadyCounted = true;
+                    break;
+                }
+            if (!alreadyCounted)
+                total += e[i].Weight;
+        }
+        return total;
+    }
+
+    /// <summary>Each item's actual drop chance as a percentage of all rolls, in
+    /// <see cref="Entries"/> order. A disabled item is 0. Items tied on a weight split
+    /// it evenly, so these can be fractional even though the weights are integers.</summary>
+    public float[] ResolvedRates()
+    {
+        var e = Entries();
+        var rates = new float[e.Length];
+        for (int i = 0; i < e.Length; i++)
+        {
+            if (!e[i].Enabled)
+                continue;
+            int tied = 0;
+            for (int j = 0; j < e.Length; j++)
+                if (e[j].Enabled && e[j].Weight == e[i].Weight)
+                    tied++;
+            rates[i] = e[i].Weight / (float)tied;
+        }
+        return rates;
+    }
+
+    /// <summary>The chance a roll produces nothing at all, as a percentage.</summary>
+    public float NothingRate() => System.Math.Max(0, WeightTotalMax - SubscribedTotal());
+}
+
+/// <summary>
 /// Mirror of the Rust <c>IceServer</c> struct (<c>server/src/turn.rs</c>): one
 /// WebRTC <c>iceServers</c> entry, minted by the server from Cloudflare's TURN
 /// service and delivered in the <c>start_signaling</c> / <c>identified</c>
@@ -85,7 +184,8 @@ public sealed record HostRequest(
     string Gamemode,
     int PlayerCount,
     WinConditionDto WinCondition,
-    SpawnSettingsDto SpawnSettings);
+    SpawnSettingsDto SpawnSettings,
+    LootSettingsDto LootSettings);
 
 public sealed record HostResponse(string SessionCode);
 
@@ -100,6 +200,7 @@ public sealed record JoinResponse(
     string Gamemode,
     WinConditionDto WinCondition,
     SpawnSettingsDto SpawnSettings,
+    LootSettingsDto LootSettings,
     int PlayerCount,
     int CurrentPlayerCount,
     List<JoinedPeer> Joiners);
@@ -109,6 +210,7 @@ public sealed record SessionPollResponse(
     string Gamemode,
     WinConditionDto WinCondition,
     SpawnSettingsDto SpawnSettings,
+    LootSettingsDto LootSettings,
     int PlayerCount,
     int CurrentPlayerCount,
     List<string> JoinerPlayerIds);

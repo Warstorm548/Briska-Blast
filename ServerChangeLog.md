@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.36.0] — 2026-09-07
+
+**Loot-table settings (shared 0.7.0) validated and carried through the session.**
+Pure pass-through plus one trust-boundary check — the server never rolls the table,
+it only guarantees the numbers every client rolls against are legal and identical.
+
+`POST /host` validates `loot_settings` alongside the win condition and spawn settings,
+rejecting with `invalid_loot_settings`. That error body carries a `field` key naming
+the offending setting, which the other three validation errors don't need — the loot
+table has four independently-bounded values plus a cap on their combined total, so a
+bare error code would leave a host guessing which slider to move.
+
+The setting is persisted on `Session` (`#[serde(default)]`, so sessions written before
+this field existed still deserialize across the deploy) and echoed unchanged by
+`/join`, `GET /session/:code` and the `start_signaling` broadcast.
+
+**On deploy: raise `min_game_version` to 0.35.0.** Not for the usual reason — arena
+geometry is unchanged and the handoff maths is untouched. The gate is required because
+game 0.35.0 introduces a peer-to-peer `ItemAward` frame: a 0.34.x client discards the
+unknown discriminator safely, but then never receives an item it earned while still
+awarding items to newer peers. That silent one-way failure is the documented criterion
+for a required bump.
+
+---
+
 ## [0.35.0] — 2026-08-22
 
 **Moderator warnings and chat bans now reach players who are in a match.** One

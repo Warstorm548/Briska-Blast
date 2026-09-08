@@ -230,7 +230,7 @@ never moved, which is the opposite of what a leaderboard is for.
   channel, so each client latches game-over before the `SessionEnded` arrives and
   suppresses its usual auto-leave — the end screen owns navigation from then on.
 
-## Random spawns: ball splitter & BallBT
+## Random spawns: ball splitter, BallBT & loot
 
 - A **BallSpliter** is a *system-spawned* element (not player-controlled). Each
   player's screen spawns its own on a host-configured cadence — a cooldown that
@@ -253,10 +253,22 @@ never moved, which is the opposite of what a leaderboard is for.
   `/host`, validated server-side (`invalid_spawn_settings`), and broadcast to every
   client (joiners included) via `start_signaling`, so the rules match across the
   table. Each client drives its **own** local spawner from them.
+- **Loot pickups** are the second kind of system spawn (game 0.35.0). They roll on
+  their **own** cadence, separate from the splitter's, and a roll can legitimately
+  produce nothing. Unlike a splitter, collecting one benefits the ball's **last
+  hitter** rather than the screen it spawned on — so knocking a ball across a portal
+  into an item on someone else's field earns it for you, and the award crosses the
+  mesh as an `ItemAward` packet.
+- Loot rules come from the host's **Loot Table** tab (`LootSettings`: drop interval
+  5–60s / default 20, per-item enable + weight 1–100, Full Barrier duration 5–120s /
+  default 30), sent at `/host`, validated server-side (`invalid_loot_settings`), and
+  broadcast via `start_signaling` on the same path as `SpawnSettings`. Drop odds treat
+  weights as **buckets** — tied items share one. Full detail, every tunable, and how to
+  add a second item: [`loot-table-and-barrier.md`](loot-table-and-barrier.md).
 - Sprites resolve through a central **`SpriteRegistry`** autoload
   (`client/src/core/SpriteRegistry.cs`): every fast-lookup sprite has a stable,
-  upward-counting `AssetId` plus a `PlayerControlled` / `SystemHandled` tag. See
-  [`asset-registry.md`](asset-registry.md).
+  upward-counting `AssetId` plus a `PlayerControlled` / `SystemControlled` /
+  `SystemHandled` / `Ui` tag. See [`asset-registry.md`](asset-registry.md).
 
 ## Serve
 

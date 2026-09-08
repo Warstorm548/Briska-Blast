@@ -52,6 +52,26 @@ public readonly struct ScoreEvent
     }
 }
 
+/// <summary>A ball touched a loot pickup on this screen, so the item is earned.
+/// <see cref="EarnerId"/> is the ball's last hitter — the player who knocked it into
+/// the pickup — which is frequently a PEER rather than the screen's owner. The sim
+/// reports it and stops there; routing the award (locally or over the mesh) is
+/// <c>GameScene</c>'s job, the same division of labour as <see cref="HandoffEvent"/>.
+///
+/// Never emitted for a ball nobody has hit yet: an unearned pickup is left on the
+/// field rather than awarded to whoever happens to own the screen.</summary>
+public readonly struct PickupEvent
+{
+    public readonly ItemId Item;
+    public readonly string EarnerId;
+
+    public PickupEvent(ItemId item, string earnerId)
+    {
+        Item = item;
+        EarnerId = earnerId;
+    }
+}
+
 /// <summary>Events emitted by one <see cref="GameSimulation.Step"/>. Owned and
 /// reused by the caller (cleared at the start of each Step) to avoid allocating
 /// in the physics loop.</summary>
@@ -59,11 +79,13 @@ public sealed class StepResult
 {
     public readonly List<HandoffEvent> Handoffs = new();
     public readonly List<ScoreEvent> Scores = new();
+    public readonly List<PickupEvent> Pickups = new();
 
     public void Clear()
     {
         Handoffs.Clear();
         Scores.Clear();
+        Pickups.Clear();
     }
 }
 
@@ -99,6 +121,11 @@ public static class GameSimulation
         result.Clear();
         float dtf = (float)dt;
 
+        // The deployed barrier is on a timer, and the timer is a rule — so it ticks
+        // here with the rest of them rather than in the scene's frame handler.
+        if (state.ShieldSecsRemaining > 0f)
+            state.ShieldSecsRemaining = Mathf.Max(0f, state.ShieldSecsRemaining - dtf);
+
         // Iterate backwards so removing handed-off / scored balls is safe.
         for (int i = state.Balls.Count - 1; i >= 0; i--)
         {
@@ -112,6 +139,9 @@ public static class GameSimulation
         // A ball touching a splitter spawns split balls — handled after integration
         // so the ball list is settled for this frame.
         ResolveSplitters(state);
+
+        // Same reasoning for loot: resolve against the settled ball list.
+        ResolvePickups(state, result);
     }
 
     /// <summary>Resolve one ball against the paddle and edges after integration.
@@ -126,6 +156,11 @@ public static class GameSimulation
         // first so a ball entering a bottom goal corner bounces off instead of sneaking
         // past the paddle into the goal below. ---
         ResolveBarriers(state, ball);
+
+        // --- Deployed Full Barrier: a solid capsule spanning the goal mouth below
+        // the paddle. Resolved alongside the corner barriers and before the goal
+        // check, so a ball that beat the paddle is turned away rather than scoring.
+        ResolveShield(state, ball);
 
         // --- Paddle (only while descending and overlapping the paddle face) ---
         var paddle = state.Paddle;
@@ -266,6 +301,84 @@ public static class GameSimulation
             float vn = ball.Vel.Dot(n);
             if (vn < 0f)
                 ball.Vel -= 2f * vn * n;
+        }
+    }
+
+    /// <summary>Bounce a ball off the deployed Full Barrier. Circle↔capsule, which is
+    /// the simplest shape that is exactly "a rectangle with half-round ends": find the
+    /// closest point on the capsule's spine SEGMENT, and if the ball is within
+    /// <c>ballRadius + capsuleRadius</c> of it, push it out along that direction and
+    /// reflect across the same normal (<c>v − 2(v·n)n</c>) — identical maths to
+    /// <see cref="ResolveBarriers"/>, including the <c>vn &lt; 0</c> guard that stops a
+    /// ball already leaving from being yanked back into the surface.
+    ///
+    /// Because the spine is a segment rather than an infinite line, the rounded ends
+    /// fall out for free: near an end the closest point is the endpoint, so the ball
+    /// deflects off a circle of exactly the drawn cap's radius.
+    ///
+    /// A ball whose centre sits exactly on the spine has no defined push direction;
+    /// it is nudged straight up, away from the goal, since that is the direction the
+    /// barrier exists to send balls. Like the other collision checks this is
+    /// position-based, so a very fast ball could tunnel — the same accepted parity
+    /// limitation the corner barriers carry.</summary>
+    private static void ResolveShield(GameState state, Ball ball)
+    {
+        if (!state.ShieldActive)
+            return;
+
+        float reach = ball.Radius + state.ShieldRadius;
+        // Closest point on the spine segment (it is horizontal, so only x clamps).
+        float cx = Mathf.Clamp(ball.Pos.X, state.ShieldX0, state.ShieldX1);
+        var closest = new Vector2(cx, state.ShieldY);
+        var delta = ball.Pos - closest;
+        float dist2 = delta.LengthSquared();
+        if (dist2 >= reach * reach)
+            return;
+
+        float dist = Mathf.Sqrt(dist2);
+        Vector2 n = dist < 1e-5f ? new Vector2(0f, -1f) : delta / dist;
+
+        ball.Pos = closest + n * reach;
+        float vn = ball.Vel.Dot(n);
+        if (vn < 0f)
+            ball.Vel -= 2f * vn * n;
+    }
+
+    /// <summary>Resolve ball↔pickup collisions. A ball of any kind collects a loot
+    /// item, and the item goes to that ball's LAST HITTER — the player who knocked it
+    /// in — not to whoever owns this screen.
+    ///
+    /// A ball nobody has hit yet leaves the pickup untouched: with no earner there is
+    /// nobody to award it to, and defaulting it to the screen's owner would hand out
+    /// free items for a ball merely drifting past.
+    ///
+    /// The pickup is consumed as soon as it is earned, even if the earner turns out to
+    /// have a full hotbar. The awarding screen cannot see a remote player's stack, so
+    /// "put it back when the collector is full" is not implementable symmetrically
+    /// without an ack round trip per pickup — the accepted cost is that an item earned
+    /// at a full stack is wasted.</summary>
+    private static void ResolvePickups(GameState state, StepResult result)
+    {
+        if (state.Pickups.Count == 0)
+            return;
+
+        // Backwards so a collected pickup can be removed in place.
+        for (int p = state.Pickups.Count - 1; p >= 0; p--)
+        {
+            var pickup = state.Pickups[p];
+            for (int b = 0; b < state.Balls.Count; b++)
+            {
+                var ball = state.Balls[b];
+                float reach = ball.Radius + pickup.Radius;
+                if (ball.Pos.DistanceSquaredTo(pickup.Pos) > reach * reach)
+                    continue;
+                if (string.IsNullOrEmpty(ball.LastHitterId))
+                    break; // unearned — leave it on the field for a hit ball
+
+                result.Pickups.Add(new PickupEvent(pickup.Item, ball.LastHitterId));
+                state.Pickups.RemoveAt(p);
+                break; // collected; on to the next pickup
+            }
         }
     }
 

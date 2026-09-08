@@ -9,6 +9,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.35.0] — 2026-09-07
+
+**The hotbar has something to hold.** 0.27.0 shipped five keybound slots and no items;
+this is the loot table that fills them, and its first entry — the **Full Barrier**, a
+neon capsule that spans your goal mouth and turns away any ball that reaches it. (It
+blocks from where it stands: a ball already past the barrier line when you deploy still
+scores.) Requires server 0.36.0 and shared 0.7.0.
+
+**This release is required.** Server 0.36.0 sets `min_game_version` to 0.35.0, because
+a 0.34.x client silently never receives loot it earned while still awarding items to
+newer peers. Arena geometry is unchanged, so that is the only reason for the gate.
+
+**Who collects a pickup is the interesting decision.** Loot spawns per screen, like the
+ball splitter — but the item goes to the **ball's last hitter**, not to whoever owns the
+screen it landed on. Knock a ball across a portal into an item sitting on an opponent's
+field and it is yours. Since balls carry their last hitter across handoffs, the earner is
+usually a remote peer, so the award is the one part of this that leaves the screen: a new
+`ItemAward` packet on the same channel ball handoffs already use. Sending it peer-to-peer
+rather than through the server was deliberate — a reward does not warrant being made more
+reliable than the balls themselves. Two failure modes are accepted rather than engineered
+away: a closed channel loses the award (logged, exactly as a lost handoff is), and an item
+earned at a full stack is wasted, because the awarding screen cannot see a remote player's
+hotbar without an ack round trip per pickup.
+
+**Drop chances are buckets, not percentages** — the part worth knowing before tuning. The
+odds sum the *distinct* weights of enabled items, and items tied on a weight split that
+bucket. A lone Full Barrier at 50 drops on half of all rolls; add a second item also at 50
+and they take 25% each rather than filling every roll between them. A weight therefore
+stops being a literal percentage the moment something shares it, which is why the new
+**Loot Table** tab shows each item's *resolved* rate and a live "Nothing X%" instead of
+echoing the raw sliders back. It is a third tab rather than a third group in Advanced,
+which had roughly 120px less room than the group needed, and it scrolls so item #2 is free.
+
+**The barrier's ends are computed, not baked.** It is a capsule below the paddle — the
+sim collides against its spine segment, so the rounded caps come out of the maths for
+free. Its ends are solved at runtime against the real corner-barrier triangles, because
+clients run different arena aspect ratios and a hardcoded inset would be right on exactly
+one screen. The result spans 93–96% of the arena and leaves a gap roughly a tenth of a
+ball's diameter, so the bar and the corner triangles seal the goal between them while
+never overlapping. It is drawn as three region slices of one sprite — the caps scale
+uniformly, only the flat middle stretches — because stretching a single sprite across
+2400px would smear the rounded ends into ellipses, and the ends are the shape's point.
+
+Two smaller rules in the bar itself: the stack count sits in the slot's **top-right**, and
+spending an item's last charge **clears the slot outright** rather than showing a zero, so
+the slot is immediately free for any other item. The active-effect readout deliberately
+lives to the **right of the row, outside the slots** — a barrier's countdown has to outlive
+the slot that bought it, and a timer drawn inside the slot would vanish exactly when the
+player most needs it. Activating again **adds** to the time left rather than replacing it.
+
+Placeholder art for both the shield icon (84×84 — the slot's real interior, the frame
+being subtracted from *both* sides) and the barrier.
+
+See [`docs/architecture/loot-table-and-barrier.md`](docs/architecture/loot-table-and-barrier.md)
+for every tunable, the geometry, and how to add the second item.
+
+---
+
 ## [0.34.1] — 2026-08-26
 
 **The chat caret survives a send — this time for the right reason.** 0.33.0

@@ -36,6 +36,17 @@ public partial class SessionContext : Node
     public int SplitterIntervalSecs { get; set; } = SpawnSettingsDto.IntervalDefault;
     public bool ChainSplit { get; set; } = SpawnSettingsDto.ChainSplitDefault;
 
+    /// <summary>Loot-table rules for this session, learned from host setup, the
+    /// join/poll response, or the <c>start_signaling</c> frame. Mirrors the server's
+    /// <c>loot_settings</c>; <see cref="Game.GameScene"/> drives its local loot
+    /// spawner from these.
+    ///
+    /// Held as the whole DTO rather than unpacked into fields like the two rule sets
+    /// above, because the drop odds are a computation over all items
+    /// (<see cref="LootSettingsDto.ResolvedRates"/>), not four independent values —
+    /// splitting them would put the weighting maths somewhere else than its inputs.</summary>
+    public LootSettingsDto LootSettings { get; set; } = LootSettingsDto.Default;
+
     /// <summary>Human-readable win condition for menus, e.g. "First to 11".</summary>
     public string WinConditionDisplay =>
         WinConditionKind == WinConditionDto.SetScoreKind
@@ -162,13 +173,15 @@ public partial class SessionContext : Node
 
     /// <summary>Set up local state after a successful POST /host.</summary>
     public void StartHostSession(string code, string mode, int maxPlayers,
-        WinConditionDto winCondition, SpawnSettingsDto spawnSettings)
+        WinConditionDto winCondition, SpawnSettingsDto spawnSettings,
+        LootSettingsDto lootSettings)
     {
         SessionCode = code;
         GameMode = mode;
         MaxPlayers = maxPlayers;
         ApplyWinCondition(winCondition);
         ApplySpawnSettings(spawnSettings);
+        ApplyLootSettings(lootSettings);
         PlayerIds.Clear();
         SeatOrder.Clear();
         _usernames.Clear();
@@ -178,13 +191,15 @@ public partial class SessionContext : Node
 
     /// <summary>Set up local state after a successful POST /join.</summary>
     public void StartJoinSession(string code, string mode, int maxPlayers,
-        WinConditionDto winCondition, SpawnSettingsDto spawnSettings, IEnumerable<string> roster)
+        WinConditionDto winCondition, SpawnSettingsDto spawnSettings,
+        LootSettingsDto lootSettings, IEnumerable<string> roster)
     {
         SessionCode = code;
         GameMode = mode;
         MaxPlayers = maxPlayers;
         ApplyWinCondition(winCondition);
         ApplySpawnSettings(spawnSettings);
+        ApplyLootSettings(lootSettings);
         PlayerIds.Clear();
         SeatOrder.Clear();
         _usernames.Clear();
@@ -200,13 +215,15 @@ public partial class SessionContext : Node
     /// <c>Identified</c> frame, so they start empty here; the rejoin flavor
     /// itself is tracked by <see cref="MatchFlow.IsRejoin"/>.</summary>
     public void StartRejoinSession(string code, string mode, int maxPlayers,
-        WinConditionDto winCondition, SpawnSettingsDto spawnSettings)
+        WinConditionDto winCondition, SpawnSettingsDto spawnSettings,
+        LootSettingsDto lootSettings)
     {
         SessionCode = code;
         GameMode = mode;
         MaxPlayers = maxPlayers;
         ApplyWinCondition(winCondition);
         ApplySpawnSettings(spawnSettings);
+        ApplyLootSettings(lootSettings);
         PlayerIds.Clear();
         SeatOrder.Clear();
         _usernames.Clear();
@@ -264,6 +281,26 @@ public partial class SessionContext : Node
         ChainSplit = chainSplit;
     }
 
+    /// <summary>Adopt loot-table settings from a wire DTO (host/join/poll/start). A
+    /// null DTO (a server predating the field) falls back to the defaults, and each
+    /// out-of-range field falls back individually rather than discarding the whole
+    /// set — a bad duration should not also reset the host's drop weights.</summary>
+    public void ApplyLootSettings(LootSettingsDto? lootSettings)
+    {
+        var s = lootSettings ?? LootSettingsDto.Default;
+        LootSettings = new LootSettingsDto(
+            InRange(s.DropIntervalSecs, LootSettingsDto.IntervalMin, LootSettingsDto.IntervalMax,
+                LootSettingsDto.IntervalDefault),
+            s.BarrierEnabled,
+            InRange(s.BarrierWeight, LootSettingsDto.WeightMin, LootSettingsDto.WeightMax,
+                LootSettingsDto.BarrierWeightDefault),
+            InRange(s.BarrierDurationSecs, LootSettingsDto.BarrierDurationMin,
+                LootSettingsDto.BarrierDurationMax, LootSettingsDto.BarrierDurationDefault));
+
+        static int InRange(int value, int min, int max, int fallback) =>
+            value >= min && value <= max ? value : fallback;
+    }
+
     /// <summary>Reset all per-session state (code, mode, roster, seating, usernames,
     /// host) back to empty — called by <see cref="MatchFlow"/>'s teardown when a
     /// match ends or is left.</summary>
@@ -276,6 +313,7 @@ public partial class SessionContext : Node
         WinScoreTarget = WinConditionDto.ScoreDefault;
         SplitterIntervalSecs = SpawnSettingsDto.IntervalDefault;
         ChainSplit = SpawnSettingsDto.ChainSplitDefault;
+        LootSettings = LootSettingsDto.Default;
         PlayerIds.Clear();
         SeatOrder.Clear();
         _usernames.Clear();

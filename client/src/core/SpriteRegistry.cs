@@ -47,6 +47,14 @@ public enum AssetId
     /// the current sprite is <c>ItemSlotV3.png</c> and swapping it again is a path
     /// change on the <see cref="SpriteRegistry"/> row, not a new id.</summary>
     ItemSlot = 7,
+    /// <summary>The Full Barrier loot item — used BOTH as the collectible lying in
+    /// the arena and as its hotbar slot icon, so what a player picks up looks like
+    /// what lands in their bar. Placeholder art.</summary>
+    BarrierShield = 8,
+    /// <summary>The deployed Full Barrier itself: a neon capsule spanning the goal
+    /// mouth below the paddle. Drawn from three regions of one sprite so its rounded
+    /// caps keep their shape at any span — see <c>View2D</c>.</summary>
+    FullBarrier = 9,
 }
 
 /// <summary>One row of the asset lookup table: a stable id, a human label, the
@@ -89,6 +97,8 @@ public partial class SpriteRegistry : Node
         new(AssetId.Background, "Background", "res://src/assets/sprites/backgrounds/BackgroundDefault.png", AssetCategory.PlayerControlled),
         new(AssetId.CornerBarrier, "CornerBarrier", "res://src/assets/sprites/Platforms/Cornerbarrier.png", AssetCategory.SystemControlled),
         new(AssetId.ItemSlot, "ItemSlot", "res://src/assets/sprites/ActionBarArea/ItemSlotV3.png", AssetCategory.Ui),
+        new(AssetId.BarrierShield, "BarrierShield", "res://src/assets/sprites/loottable/BarrierShieldIcon.png", AssetCategory.SystemHandled),
+        new(AssetId.FullBarrier, "FullBarrier", "res://src/assets/sprites/loottable/FullBarrier.png", AssetCategory.SystemControlled),
     };
 
     private readonly Dictionary<AssetId, AssetEntry> _byId = new();

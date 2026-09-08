@@ -207,6 +207,7 @@ pub async fn start_session(
                             gamemode: session.gamemode,
                             win_condition: session.win_condition,
                             spawn_settings: session.spawn_settings,
+                            loot_settings: session.loot_settings,
                             player_count: session.player_count,
                             peers: session_members,
                             ice_servers,

@@ -409,8 +409,8 @@ public partial class MatchFlow : Node
     /// alike): adopt the authoritative match rules, freeze the seating roster,
     /// and bring the mesh up behind the connecting screen.</summary>
     private void OnStartSignaling(string gamemode, WinConditionDto winCondition,
-        SpawnSettingsDto spawnSettings, int playerCount, string[] peers,
-        IceServerDto[] iceServers)
+        SpawnSettingsDto spawnSettings, LootSettingsDto lootSettings, int playerCount,
+        string[] peers, IceServerDto[] iceServers)
     {
         // The transition gate rejects duplicates / late frames (only InLobby
         // may start), replacing the old `_transport != null` one-shot guard.
@@ -425,6 +425,7 @@ public partial class MatchFlow : Node
         var ctx = SessionContext.Instance;
         ctx.ApplyWinCondition(winCondition);
         ctx.ApplySpawnSettings(spawnSettings);
+        ctx.ApplyLootSettings(lootSettings);
         // `peers` is the server's authoritative, self-inclusive start-time
         // roster ([host, …joiners] in join order) — identical on every client —
         // frozen here for the Extended-mode portal layout (GameScene.BuildEdges).
@@ -662,6 +663,7 @@ public partial class MatchFlow : Node
         var ctx = SessionContext.Instance;
         ctx.ApplyWinCondition(info.WinCondition);
         ctx.ApplySpawnSettings(info.SpawnSettings);
+        ctx.ApplyLootSettings(info.LootSettings);
 
         // `active` means the barrier already resolved — a ball may be in play,
         // so the game scene must not serve (rejoin semantics). `starting` means
