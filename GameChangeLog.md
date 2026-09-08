@@ -13,8 +13,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 **The hotbar has something to hold.** 0.27.0 shipped five keybound slots and no items;
 this is the loot table that fills them, and its first entry — the **Full Barrier**, a
-neon capsule that spans your goal mouth and turns away every ball that would score on
-you. Requires server 0.36.0 and shared 0.7.0.
+neon capsule that spans your goal mouth and turns away any ball that reaches it. (It
+blocks from where it stands: a ball already past the barrier line when you deploy still
+scores.) Requires server 0.36.0 and shared 0.7.0.
 
 **This release is required.** Server 0.36.0 sets `min_game_version` to 0.35.0, because
 a 0.34.x client silently never receives loot it earned while still awarding items to

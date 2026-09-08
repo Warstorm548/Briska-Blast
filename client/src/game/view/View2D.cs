@@ -124,7 +124,7 @@ public partial class View2D : Node2D, IGameView
         _shieldRight.Position = new Vector2(state.ShieldX1 + capW * 0.5f, y);
 
         // The middle fills the gap between the cap sprites, stretched only in x.
-        float midW = (state.ShieldX1 - state.ShieldX0) + capW;
+        float midW = state.ShieldX1 - state.ShieldX0;
         _shieldMid.Scale = new Vector2(midW / ShieldTexMidW, scale);
         _shieldMid.Position = new Vector2((state.ShieldX0 + state.ShieldX1) * 0.5f, y);
     }
