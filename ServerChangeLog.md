@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.36.1] — 2026-09-08
+
+Picks up shared 0.7.1: the Full Barrier's default duration drops from **30s to 5s**.
+
+Server-side this only changes `LootSettings::default()` — the fallback applied when a
+client omits `loot_settings` entirely. A client that sends the field is unaffected, so
+this is a no-op for any 0.35.x client. Validation bounds are unchanged (5–120s).
+
+**No `min_game_version` change** — 0.35.0 and 0.35.1 clients interoperate; the default
+is a starting value, not a rule.
+
+---
+
 ## [0.36.0] — 2026-09-07
 
 **Loot-table settings (shared 0.7.0) validated and carried through the session.**

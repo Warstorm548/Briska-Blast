@@ -261,7 +261,7 @@ never moved, which is the opposite of what a leaderboard is for.
   mesh as an `ItemAward` packet.
 - Loot rules come from the host's **Loot Table** tab (`LootSettings`: drop interval
   5–60s / default 20, per-item enable + weight 1–100, Full Barrier duration 5–120s /
-  default 30), sent at `/host`, validated server-side (`invalid_loot_settings`), and
+  default 5), sent at `/host`, validated server-side (`invalid_loot_settings`), and
   broadcast via `start_signaling` on the same path as `SpawnSettings`. Drop odds treat
   weights as **buckets** — tied items share one. Full detail, every tunable, and how to
   add a second item: [`loot-table-and-barrier.md`](loot-table-and-barrier.md).

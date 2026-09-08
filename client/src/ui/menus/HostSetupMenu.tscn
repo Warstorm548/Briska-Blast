@@ -373,21 +373,21 @@ size_flags_vertical = 1
 min_value = 5.0
 max_value = 120.0
 step = 1.0
-value = 30.0
+value = 5.0
 
 [node name="BarrierDurationValue" type="Label" parent="TabContainer/LootTable/Scroll/Content/BarrierDurationRow"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(150, 0)
 layout_mode = 2
 size_flags_vertical = 1
-text = "30s"
+text = "5s"
 vertical_alignment = 1
 theme_override_colors/font_color = Color(0.7, 0.78, 0.9, 1)
 theme_override_font_sizes/font_size = 22
 
 [node name="BarrierHint" type="Label" parent="TabContainer/LootTable/Scroll/Content"]
 layout_mode = 2
-text = "Blocks every ball that would score on the player who activates it. Stacks up to 5; activating again adds to the time left."
+text = "Blocks any ball that reaches it, for the player who activates it. Stacks up to 5; activating again adds to the time left."
 autowrap_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.62, 0.75, 1)
 theme_override_font_sizes/font_size = 20

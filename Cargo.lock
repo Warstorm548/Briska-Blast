@@ -4233,7 +4233,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.36.0"
+version = "0.36.1"
 dependencies = [
  "axum",
  "base64",
@@ -4303,7 +4303,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "serde",
  "serde_json",

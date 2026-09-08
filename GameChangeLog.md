@@ -9,6 +9,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.35.1] — 2026-09-08
+
+**The Full Barrier now defaults to 5 seconds instead of 30.** Requires server 0.36.1
+and shared 0.7.1.
+
+30s made the default barrier a very large swing for a common drop — at a 50% drop
+chance and a stack of 5, a host who never opened the Loot Table tab could hand out
+two and a half minutes of blocked goal. 5s is the floor of the range, so the default
+is now the most conservative setting and hosts opt *up* into longer barriers rather
+than discovering they need to dial one down.
+
+Only the starting value moves; the 5–120s range is unchanged and the chosen duration
+still crosses the wire, so a 0.35.0 client and a 0.35.1 client play the same match
+identically. **No `min_game_version` change.**
+
+Also corrects the Loot Table tab's description of the item, which still claimed it
+blocks "every ball that would score" — it blocks balls that reach it, and a ball
+already past the barrier line when you deploy still scores.
+
+---
+
 ## [0.35.0] — 2026-09-07
 
 **The hotbar has something to hold.** 0.27.0 shipped five keybound slots and no items;

@@ -13,6 +13,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.1] — 2026-09-08
+
+### Changed
+
+- `DEFAULT_BARRIER_DURATION_SECS` **30 → 5**. The Full Barrier now defaults to the
+  floor of its 5–120s range, so a host who never opens the Loot Table tab gets a brief
+  barrier rather than a half-minute one. Range, weight and cadence defaults unchanged.
+
+Affects only the value a host starts with (and the fallback for a client that omits
+the field); the chosen duration still travels on the wire, so no protocol change and
+no `min_game_version` move.
+
+---
+
 ## [0.7.0] — 2026-09-07
 
 Adds the loot-table rules type behind the game's first hotbar item.

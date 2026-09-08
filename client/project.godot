@@ -12,7 +12,7 @@ config_version=5
 
 config/name="Briska Blast"
 config/description="Cross-platform multiplayer paddle/ball game."
-config/version="0.35.0"
+config/version="0.35.1"
 run/main_scene="res://src/ui/menus/MainMenu.tscn"
 config/features=PackedStringArray("4.6", "C#", "Forward Plus")
 

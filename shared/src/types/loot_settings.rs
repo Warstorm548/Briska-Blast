@@ -23,7 +23,7 @@ pub const BARRIER_DURATION_MAX_SECS: u8 = 120;
 
 pub const DEFAULT_BARRIER_ENABLED: bool = true;
 pub const DEFAULT_BARRIER_WEIGHT: u8 = 50;
-pub const DEFAULT_BARRIER_DURATION_SECS: u8 = 30;
+pub const DEFAULT_BARRIER_DURATION_SECS: u8 = 5;
 
 /// How many items the loot table holds. Adding item #2 means bumping this, adding
 /// its three fields below, and adding one entry to [`LootSettings::entries`] —
@@ -219,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn default_is_twenty_second_cadence_barrier_on_at_fifty_for_thirty() {
+    fn default_is_twenty_second_cadence_barrier_on_at_fifty_for_five() {
         let d = defaults();
         assert_eq!(d.drop_interval_secs, DEFAULT_DROP_INTERVAL_SECS);
         assert!(d.barrier_enabled);

@@ -23,7 +23,7 @@ table plays by the host's numbers.
 | Drop Rate | 5–60s | **20s** | How often the table is *rolled*. A roll can produce nothing. |
 | In Loot Table | on/off | **on** | Off removes the item entirely — it can never drop. |
 | Drop Chance | 1–100 | **50** | The item's weight. See §2 — it is a literal percentage only while no other item shares it. |
-| Duration | 5–120s | **30s** | Seconds one activation adds to the barrier timer. |
+| Duration | 5–120s | **5s** | Seconds one activation adds to the barrier timer. Defaults to the floor of its range. |
 
 Bounds live once, in `shared/src/types/loot_settings.rs`, and are **hand-mirrored** into
 `LootSettingsDto` (`client/src/net/Dto.cs`). Change one, change the other — there is no codegen.

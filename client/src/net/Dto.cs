@@ -101,7 +101,7 @@ public sealed record LootSettingsDto(
 
     public const bool BarrierEnabledDefault = true;
     public const int BarrierWeightDefault = 50;
-    public const int BarrierDurationDefault = 30;
+    public const int BarrierDurationDefault = 5;
 
     /// <summary>How many items the loot table holds. Adding item #2 means bumping
     /// this and adding one entry to <see cref="Entries"/>.</summary>
