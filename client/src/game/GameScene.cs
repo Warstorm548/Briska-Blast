@@ -54,6 +54,30 @@ public partial class GameScene : Node2D
     private double _splitterCooldown;
     private readonly RandomNumberGenerator _rng = new();
 
+    // Loot-drop cadence and the host's table. Like the splitter spawner above, each
+    // screen rolls its own drops locally — identical odds everywhere, independent
+    // outcomes. Seeded from the host's settings in _Ready.
+    private LootSettingsDto _lootSettings = LootSettingsDto.Default;
+    private double _lootIntervalSecs = LootSettingsDto.IntervalDefault;
+    private double _lootCooldown;
+
+    // --- Deployed Full Barrier geometry (see GameState.ShieldX0/X1/Y/Radius) ---
+
+    /// <summary>Gap between the paddle's underside and the top of the barrier, as a
+    /// fraction of arena height. Exists so the two read as separate objects rather
+    /// than one thick bar.</summary>
+    private const float ShieldClearanceHFrac = 6f / 1440f;
+
+    /// <summary>Barrier thickness as a fraction of arena height. Sized to read
+    /// clearly without crowding the goal gap, which is 120/1440 tall in total.</summary>
+    private const float ShieldThicknessHFrac = 30f / 1440f;
+
+    /// <summary>How far the barrier's rounded ends stop short of the corner barriers,
+    /// as a fraction of arena height. Small on purpose: the resulting gap is a few
+    /// pixels, far narrower than a ball's ~45px diameter, so the barrier and the
+    /// corner triangles seal the goal between them while never overlapping.</summary>
+    private const float ShieldEndClearanceHFrac = 4f / 1440f;
+
     // Seat-relative portal layout (bottom is always the local goal). Seats are
     // arranged on a fixed "table" matching Example Imgs/GameMode Extended.png:
     // seat 0 = P1/Host at the bottom (South), 1 = P2 top (North), 2 = P3 left
@@ -194,9 +218,17 @@ public partial class GameScene : Node2D
         {
             _splitterIntervalSecs = ctx.SplitterIntervalSecs;
             _state.ChainSplitEnabled = ctx.ChainSplit;
+            _lootSettings = ctx.LootSettings;
+            _lootIntervalSecs = _lootSettings.DropIntervalSecs;
         }
         _rng.Randomize();
         _splitterCooldown = _splitterIntervalSecs;
+        _lootCooldown = _lootIntervalSecs;
+
+        // The barrier sits in the gap between the paddle and the goal line. Solved
+        // here, after the corner triangles exist, because its ends are derived from
+        // them rather than hardcoded — see ResolveShieldGeometry.
+        ResolveShieldGeometry(arena);
 
         // Pure play-field renderer now: the scoreboard it used to carry became
         // LeaderboardView, which resolves its own usernames.
@@ -251,7 +283,12 @@ public partial class GameScene : Node2D
         // score channel. Only meaningful with both a transport and a signaling
         // socket; without them this is the defensive no-peer fallback.
         if (flow.Transport != null && _signaling != null)
+        {
             _controller = new NetGameController(_state, flow.Transport, _signaling, _ballRadius);
+            // A peer awarding us loot we earned on their screen. Unsubscribed with
+            // the controller in _ExitTree via Dispose.
+            _controller.ItemAwarded += GrantItem;
+        }
 
         // On a fresh start the host serves the first ball; everyone else starts
         // empty and receives a ball via handoff or when they're scored on. On a
@@ -279,6 +316,8 @@ public partial class GameScene : Node2D
 
         // Detach so the surviving socket doesn't call into a freed scene if it
         // emits another event after we leave.
+        if (_controller != null)
+            _controller.ItemAwarded -= GrantItem;
         _controller?.Dispose();
         _controller = null;
         MatchFlow.Instance.MatchEnded -= OnGameOver;
@@ -727,6 +766,10 @@ public partial class GameScene : Node2D
         // the serve / paddle — the sim resolves any ball that touches one.
         TickSplitters(delta);
 
+        // Loot rolls on its own separate cadence, and can legitimately produce
+        // nothing — see LootTable for how the host's weights decide.
+        TickLoot(delta);
+
         // Paddle: Left/Right arrows. GetAxis returns +1 toward paddle_right.
         // Suspended while the pause menu is open or chat holds the keyboard — the
         // match stays live underneath (a P2P round can't truly pause for everyone)
@@ -755,6 +798,10 @@ public partial class GameScene : Node2D
         foreach (var score in _step.Scores)
             OnScore(score);
 
+        // Loot earned this frame goes to the ball's last hitter — us, or a peer.
+        foreach (var pickup in _step.Pickups)
+            OnPickupEarned(pickup);
+
         if (_awaitingServe && _serveBall != null)
         {
             // Rest the un-served ball on the paddle until the player serves it.
@@ -778,12 +825,13 @@ public partial class GameScene : Node2D
         // Scores restate every frame; the board settles its ORDER on its own slower
         // beat, which is the point of the split.
         _leaderboard.SyncFrom(_state);
+        // Effect timers restate every frame too — the slot contents they outlive are
+        // only repainted on change (SyncFrom), so the two are deliberately separate.
+        _hotbar.SyncEffects(_state);
     }
 
     /// <summary>A hotbar slot's key was pressed. Acknowledges the press on screen, then
-    /// activates whatever the slot holds — which is nothing today, since no item system
-    /// exists yet to fill one. The empty-slot return below is where item activation
-    /// hangs when it arrives.</summary>
+    /// spends one charge from the slot and applies the item's effect.</summary>
     private void OnHotbarSlotActivated(int index)
     {
         // Flash regardless of contents: the player pressed a key and deserves to see
@@ -797,7 +845,24 @@ public partial class GameScene : Node2D
             return;
         }
 
-        Log.Debug("game.hotbar", $"slot {index + 1} activated (icon={slot.Icon}, count={slot.Count})");
+        // Consume returns what was spent, because spending the last charge clears
+        // the slot — reading the icon afterwards would find nothing.
+        if (_state.Hotbar.Consume(index) is not { } item)
+            return;
+
+        switch (item)
+        {
+            case ItemId.BarrierShield:
+                // ADD to whatever is left rather than replacing it: activating at 15s
+                // remaining leaves 45s, which is what makes holding a stack worth
+                // something mid-rally.
+                _state.ShieldSecsRemaining += _lootSettings.BarrierDurationSecs;
+                break;
+        }
+
+        _hotbar.SyncFrom(_state.Hotbar);
+        Log.Debug("game.hotbar",
+            $"slot {index + 1} activated {item} (shield now {_state.ShieldSecsRemaining:F1}s)");
     }
 
     /// <summary>A ball left through this screen's goal. Reports it to the server —
@@ -875,6 +940,72 @@ public partial class GameScene : Node2D
         }
     }
 
+    /// <summary>Place the deployed barrier: a horizontal capsule in the gap between
+    /// the paddle's underside and the goal line, spanning the goal mouth.
+    ///
+    /// The ends are <b>solved against the corner triangles rather than hardcoded</b>.
+    /// Clients run different arena aspect ratios (see docs/planning/known-bugs.md), so
+    /// a baked inset would be wrong on every screen but one, and the corner colliders
+    /// are the thing the bar must not overlap. Bisecting on the real
+    /// <see cref="CornerBarrier.ClosestPoint"/> keeps art and collider derived from the
+    /// same geometry — the invariant CornerBarrier already maintains.
+    ///
+    /// The result leaves a gap of only <see cref="ShieldEndClearanceHFrac"/> at each
+    /// end, which is several times narrower than a ball, so the barrier and the corner
+    /// triangles seal the goal between them without ever intersecting.</summary>
+    private void ResolveShieldGeometry(Vector2 arena)
+    {
+        float radius = ShieldThicknessHFrac * arena.Y * 0.5f;
+        float clearance = ShieldClearanceHFrac * arena.Y;
+        float endGap = ShieldEndClearanceHFrac * arena.Y;
+
+        var paddle = _state.Paddle;
+        float centreY = paddle.Y + paddle.Height + clearance + radius;
+        float needed = radius + endGap;
+
+        // Walk each end inward to the first x that clears the corner triangles.
+        // Monotonic in x over each half (the hypotenuse recedes as you move inward),
+        // so a plain bisection converges.
+        float left = Bisect(0f, arena.X * 0.5f, centreY, needed, fromLeft: true);
+        float right = Bisect(arena.X * 0.5f, arena.X, centreY, needed, fromLeft: false);
+
+        _state.ShieldRadius = radius;
+        _state.ShieldY = centreY;
+        _state.ShieldX0 = left;
+        _state.ShieldX1 = right;
+
+        Log.Debug("game.loot",
+            $"shield span x {left:F0}..{right:F0} y {centreY:F0} r {radius:F1} " +
+            $"({100f * (right - left) / arena.X:F1}% of width)");
+    }
+
+    // Smallest (fromLeft) or largest (!fromLeft) x in [lo,hi] whose distance to every
+    // corner triangle is at least `needed`. Falls back to the inner bound if no such
+    // x exists, which can only happen on a degenerately small arena.
+    private float Bisect(float lo, float hi, float y, float needed, bool fromLeft)
+    {
+        for (int i = 0; i < 40; i++)
+        {
+            float mid = (lo + hi) * 0.5f;
+            bool clear = DistanceToCorners(new Vector2(mid, y)) >= needed;
+            if (clear == fromLeft)
+                hi = mid;
+            else
+                lo = mid;
+        }
+        return fromLeft ? hi : lo;
+    }
+
+    /// <summary>Distance from a point to the nearest corner barrier, using the same
+    /// closest-point routine the ball collision uses.</summary>
+    private float DistanceToCorners(Vector2 p)
+    {
+        float best = float.MaxValue;
+        foreach (var tri in _state.Barriers)
+            best = Mathf.Min(best, p.DistanceTo(CornerBarrier.ClosestPoint(p, in tri)));
+        return best;
+    }
+
     /// <summary>True if a circle at <paramref name="pos"/> overlaps any corner barrier.</summary>
     private bool OverlapsBarrier(Vector2 pos, float radius)
     {
@@ -882,5 +1013,82 @@ public partial class GameScene : Node2D
             if (CornerBarrier.Overlaps(tri, pos, radius))
                 return true;
         return false;
+    }
+
+    /// <summary>Count down the loot timer and roll the host's table when it expires.
+    /// Modelled on <see cref="TickSplitters"/> — its own cadence, the same placement
+    /// rules — with two differences: the roll can legitimately come up empty, and at
+    /// most one uncollected pickup is allowed on screen at a time.
+    ///
+    /// The one-at-a-time cap keeps items from piling up when nobody is collecting
+    /// them (a stack that is already full, or a rally that never reaches the drop).</summary>
+    private void TickLoot(double dt)
+    {
+        if (_lootIntervalSecs <= 0)
+            return; // disabled by the host
+
+        _lootCooldown -= dt;
+        if (_lootCooldown > 0)
+            return;
+        _lootCooldown = _lootIntervalSecs;
+
+        if (_state.Pickups.Count > 0)
+            return; // one uncollected pickup at a time
+
+        var rolled = LootTable.Roll(_lootSettings, _rng);
+        if (rolled is not { } item)
+            return; // the roll came up empty — the normal case under 100% subscribed
+
+        // Same placement rules as a splitter: clear of the edges and the paddle band,
+        // and out of the corner barriers so it can't spawn unreachable.
+        float margin = _ballRadius * 4f;
+        float minX = margin, maxX = _state.ArenaWidth - margin;
+        float minY = margin, maxY = _state.Paddle.Y - margin;
+        if (maxX <= minX || maxY <= minY)
+            return;
+
+        float radius = _ballRadius * 1.5f;
+        for (int attempt = 0; attempt < 8; attempt++)
+        {
+            var pos = new Vector2(_rng.RandfRange(minX, maxX), _rng.RandfRange(minY, maxY));
+            if (OverlapsBarrier(pos, radius))
+                continue;
+            _state.Pickups.Add(new Pickup
+            {
+                Id = _state.NextPickupId(),
+                Radius = radius,
+                Pos = pos,
+                Item = item,
+            });
+            Log.Debug("game.loot", $"spawned {item} at ({pos.X:F0},{pos.Y:F0})");
+            return;
+        }
+    }
+
+    /// <summary>A ball touched a pickup on our screen. The item belongs to that ball's
+    /// last hitter, so it either lands in our own hotbar or is sent to the peer who
+    /// earned it. The sim has already consumed the pickup by this point.</summary>
+    private void OnPickupEarned(PickupEvent ev)
+    {
+        if (ev.EarnerId == _state.LocalPlayerId)
+        {
+            GrantItem(ev.Item);
+            return;
+        }
+
+        _controller?.SendItemAward(ev.EarnerId, ev.Item);
+    }
+
+    /// <summary>Put an earned item in the local hotbar and refresh the bar. Silently
+    /// does nothing when the bar has no room — our own stack cap, applied identically
+    /// whether the item was earned here or awarded by a peer.</summary>
+    private void GrantItem(ItemId item)
+    {
+        if (!_state.Hotbar.TryAdd(item))
+        {
+            Log.Debug("game.loot", $"earned {item} but the hotbar is full — item lost");
+            return;
+        }
+        _hotbar.SyncFrom(_state.Hotbar);
     }
 }

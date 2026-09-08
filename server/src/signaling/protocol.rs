@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use crate::turn::IceServer;
 use shared::types::gamemode::GameMode;
+use shared::types::loot_settings::LootSettings;
 use shared::types::spawn_settings::SpawnSettings;
 use shared::types::win_condition::WinCondition;
 
@@ -187,6 +188,11 @@ pub enum ServerMsg {
         /// Host-chosen random-spawn rules (BallSpliter cadence + chain-split), so
         /// every client drives an identical local spawner.
         spawn_settings: SpawnSettings,
+        /// Host-chosen loot-table rules, so every client rolls its own local drops
+        /// against identical odds. A client predating this field ignores it and
+        /// drops no loot at all while its peers do — silent divergence rather than
+        /// graceful degradation, which is what forces the `min_game_version` gate.
+        loot_settings: LootSettings,
         player_count: u8,
         peers: Vec<String>,
         ice_servers: Vec<IceServer>,
@@ -470,6 +476,7 @@ mod tests {
             gamemode: GameMode::Extended,
             win_condition: WinCondition::default(),
             spawn_settings: SpawnSettings::default(),
+            loot_settings: LootSettings::default(),
             player_count: 2,
             peers: vec!["000000001".into(), "000000004".into()],
             ice_servers: vec![

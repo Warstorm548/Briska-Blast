@@ -224,6 +224,185 @@ autowrap_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.62, 0.75, 1)
 theme_override_font_sizes/font_size = 20
 
+[node name="LootTable" type="MarginContainer" parent="TabContainer"]
+visible = false
+layout_mode = 2
+theme_override_constants/margin_left = 48
+theme_override_constants/margin_top = 48
+theme_override_constants/margin_right = 48
+theme_override_constants/margin_bottom = 48
+
+[node name="Scroll" type="ScrollContainer" parent="TabContainer/LootTable"]
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="Content" type="VBoxContainer" parent="TabContainer/LootTable/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 24
+
+[node name="DropsHeading" type="Label" parent="TabContainer/LootTable/Scroll/Content"]
+layout_mode = 2
+text = "Loot Drops"
+theme_override_colors/font_color = Color(0.5, 0.75, 1, 1)
+theme_override_font_sizes/font_size = 36
+
+[node name="DropsSeparator" type="HSeparator" parent="TabContainer/LootTable/Scroll/Content"]
+layout_mode = 2
+
+[node name="LootIntervalRow" type="HBoxContainer" parent="TabContainer/LootTable/Scroll/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="LootIntervalLabel" type="Label" parent="TabContainer/LootTable/Scroll/Content/LootIntervalRow"]
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+size_flags_vertical = 1
+text = "Drop Rate"
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 28
+
+[node name="LootDropInterval" type="HSlider" parent="TabContainer/LootTable/Scroll/Content/LootIntervalRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(300, 56)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 1
+min_value = 5.0
+max_value = 60.0
+step = 1.0
+value = 20.0
+
+[node name="LootDropIntervalValue" type="Label" parent="TabContainer/LootTable/Scroll/Content/LootIntervalRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+size_flags_vertical = 1
+text = "every 20s"
+vertical_alignment = 1
+theme_override_colors/font_color = Color(0.7, 0.78, 0.9, 1)
+theme_override_font_sizes/font_size = 22
+
+[node name="DropsHint" type="Label" parent="TabContainer/LootTable/Scroll/Content"]
+layout_mode = 2
+text = "How often the table is rolled. A roll can come up empty - see the summary below."
+autowrap_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.62, 0.75, 1)
+theme_override_font_sizes/font_size = 20
+
+[node name="BarrierHeading" type="Label" parent="TabContainer/LootTable/Scroll/Content"]
+layout_mode = 2
+text = "Full Barrier"
+theme_override_colors/font_color = Color(0.5, 0.75, 1, 1)
+theme_override_font_sizes/font_size = 36
+
+[node name="BarrierSeparator" type="HSeparator" parent="TabContainer/LootTable/Scroll/Content"]
+layout_mode = 2
+
+[node name="BarrierEnabledRow" type="HBoxContainer" parent="TabContainer/LootTable/Scroll/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="BarrierEnabledLabel" type="Label" parent="TabContainer/LootTable/Scroll/Content/BarrierEnabledRow"]
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+size_flags_vertical = 1
+text = "In Loot Table"
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 28
+
+[node name="BarrierEnabled" type="CheckBox" parent="TabContainer/LootTable/Scroll/Content/BarrierEnabledRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 1
+button_pressed = true
+text = "Players can find this item"
+theme_override_font_sizes/font_size = 22
+
+[node name="BarrierWeightRow" type="HBoxContainer" parent="TabContainer/LootTable/Scroll/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="BarrierWeightLabel" type="Label" parent="TabContainer/LootTable/Scroll/Content/BarrierWeightRow"]
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+size_flags_vertical = 1
+text = "Drop Chance"
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 28
+
+[node name="BarrierWeight" type="HSlider" parent="TabContainer/LootTable/Scroll/Content/BarrierWeightRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(300, 56)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 1
+min_value = 1.0
+max_value = 100.0
+step = 1.0
+value = 50.0
+
+[node name="BarrierWeightValue" type="Label" parent="TabContainer/LootTable/Scroll/Content/BarrierWeightRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+size_flags_vertical = 1
+text = "50"
+vertical_alignment = 1
+theme_override_colors/font_color = Color(0.7, 0.78, 0.9, 1)
+theme_override_font_sizes/font_size = 22
+
+[node name="BarrierDurationRow" type="HBoxContainer" parent="TabContainer/LootTable/Scroll/Content"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="BarrierDurationLabel" type="Label" parent="TabContainer/LootTable/Scroll/Content/BarrierDurationRow"]
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+size_flags_vertical = 1
+text = "Duration"
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 28
+
+[node name="BarrierDuration" type="HSlider" parent="TabContainer/LootTable/Scroll/Content/BarrierDurationRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(300, 56)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 1
+min_value = 5.0
+max_value = 120.0
+step = 1.0
+value = 30.0
+
+[node name="BarrierDurationValue" type="Label" parent="TabContainer/LootTable/Scroll/Content/BarrierDurationRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+size_flags_vertical = 1
+text = "30s"
+vertical_alignment = 1
+theme_override_colors/font_color = Color(0.7, 0.78, 0.9, 1)
+theme_override_font_sizes/font_size = 22
+
+[node name="BarrierHint" type="Label" parent="TabContainer/LootTable/Scroll/Content"]
+layout_mode = 2
+text = "Blocks every ball that would score on the player who activates it. Stacks up to 5; activating again adds to the time left."
+autowrap_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.62, 0.75, 1)
+theme_override_font_sizes/font_size = 20
+
+[node name="SummarySeparator" type="HSeparator" parent="TabContainer/LootTable/Scroll/Content"]
+layout_mode = 2
+
+[node name="LootTableSummary" type="Label" parent="TabContainer/LootTable/Scroll/Content"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Full Barrier 50%   -   Nothing 50%"
+autowrap_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.78, 0.9, 1)
+theme_override_font_sizes/font_size = 24
+
 [node name="ReturnButton" type="Button" parent="."]
 unique_name_in_owner = true
 layout_mode = 1

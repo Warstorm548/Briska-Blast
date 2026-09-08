@@ -52,7 +52,8 @@ public partial class JoinMenu : Control
         if (result.Ok && result.Value is { } r)
         {
             var roster = r.Joiners.Select(j => j.PlayerId);
-            SessionContext.Instance.StartJoinSession(code, r.Gamemode, r.PlayerCount, r.WinCondition, r.SpawnSettings, roster);
+            SessionContext.Instance.StartJoinSession(code, r.Gamemode, r.PlayerCount, r.WinCondition, r.SpawnSettings,
+                r.LootSettings, roster);
             GetTree().ChangeSceneToFile("res://src/ui/menus/SessionLobby.tscn");
             return;
         }
@@ -101,7 +102,8 @@ public partial class JoinMenu : Control
             return;
         }
 
-        SessionContext.Instance.StartRejoinSession(code, s.Gamemode, s.PlayerCount, s.WinCondition, s.SpawnSettings);
+        SessionContext.Instance.StartRejoinSession(code, s.Gamemode, s.PlayerCount, s.WinCondition, s.SpawnSettings,
+            s.LootSettings);
         // MatchFlow owns the rest: fresh signaling socket, seat restore from the
         // Identified frame, mesh bring-up behind the connecting screen, and the
         // failure path (rejection lands on the main menu with the reason).

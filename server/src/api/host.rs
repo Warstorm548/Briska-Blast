@@ -52,6 +52,18 @@ pub async fn host(
         .validate()
         .map_err(|(min, max, requested)| AppError::InvalidSpawnSettings { min, max, requested })?;
 
+    // And for the loot table. The host UI shrinks each weight slider to the
+    // remaining headroom so the 100% total cannot be oversubscribed there, but the
+    // cap is re-checked here for the same reason as the two above.
+    body.loot_settings
+        .validate()
+        .map_err(|e| AppError::InvalidLootSettings {
+            field: e.field,
+            min: e.min,
+            max: e.max,
+            requested: e.requested,
+        })?;
+
     let mut conn = state
         .redis
         .get()
@@ -77,6 +89,7 @@ pub async fn host(
         gamemode: body.gamemode,
         win_condition: body.win_condition,
         spawn_settings: body.spawn_settings,
+        loot_settings: body.loot_settings,
         player_count: body.player_count,
         joiners: Vec::new(),
         status: SessionStatus::Waiting,

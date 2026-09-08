@@ -8,6 +8,7 @@ namespace BriskaBlast.Game.Net;
 public enum GameMsg : byte
 {
     BallHandoff = 1,
+    ItemAward = 2,
 }
 
 /// <summary>
@@ -103,6 +104,50 @@ public static class GamePacket
             if (ms.Position < ms.Length && r.ReadByte() == (byte)BallKind.Split)
                 kind = BallKind.Split;
             pkt = new BallHandoffPacket(id, hitter, perp, tang, along, ts, kind);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>A loot item earned by the receiving peer: they were the last player to
+    /// hit the ball that touched a pickup on the sender's screen. The sender has
+    /// already consumed the pickup, so this frame is the only record of the award.
+    ///
+    /// Carries just the item id — the pickup's own id is meaningless off the screen
+    /// that spawned it, and the recipient re-derives everything else (icon, stack cap)
+    /// from its own <c>ItemRegistry</c>.</summary>
+    public static byte[] WriteItemAward(ItemId item)
+    {
+        using var ms = new MemoryStream(4);
+        using var w = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: false);
+        w.Write((byte)GameMsg.ItemAward);
+        w.Write((int)item);
+        return ms.ToArray();
+    }
+
+    /// <summary>Returns true and fills <paramref name="item"/> when
+    /// <paramref name="data"/> is a well-formed ItemAward frame naming an item this
+    /// build knows. An unknown discriminator, a truncated payload, or an item id from
+    /// a newer client all return false rather than throwing — a peer must not be able
+    /// to crash us, and an unrecognised item is safer dropped than guessed at.</summary>
+    public static bool TryReadItemAward(byte[] data, out ItemId item)
+    {
+        item = default;
+        if (data is null || data.Length < 5 || data[0] != (byte)GameMsg.ItemAward)
+            return false;
+
+        try
+        {
+            using var ms = new MemoryStream(data, writable: false);
+            using var r = new BinaryReader(ms, Encoding.UTF8, leaveOpen: false);
+            r.ReadByte(); // discriminator
+            int raw = r.ReadInt32();
+            if (!Enum.IsDefined(typeof(ItemId), raw))
+                return false;
+            item = (ItemId)raw;
             return true;
         }
         catch

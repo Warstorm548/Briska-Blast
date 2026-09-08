@@ -32,6 +32,19 @@ public partial class HostSetupMenu : Control
 	private HSlider _splitterInterval = null!;
 	private Label _splitterIntervalValue = null!;
 	private CheckBox _chainSplit = null!;
+	private HSlider _lootDropInterval = null!;
+	private Label _lootDropIntervalValue = null!;
+	private CheckBox _barrierEnabled = null!;
+	private HSlider _barrierWeight = null!;
+	private Label _barrierWeightValue = null!;
+	private HSlider _barrierDuration = null!;
+	private Label _barrierDurationValue = null!;
+	private Label _lootTableSummary = null!;
+
+	// The host has subscribed more than 100% across the loot table, which is
+	// impossible to satisfy. Blocks Create so the UI refuses before the server has to.
+	private bool _lootOverSubscribed;
+	private bool _busy;
 	private Button _createButton = null!;
 	private Label _status = null!;
 
@@ -79,6 +92,42 @@ public partial class HostSetupMenu : Control
 		_splitterInterval.ValueChanged += _ => UpdateSplitterLabel();
 		UpdateSplitterLabel();
 
+		// Loot Table tab: drop cadence + the per-item enable / weight / duration.
+		// Bounds come from the shared LootSettings constants for the same reason as
+		// above — the scene's authored min/max values are decorative.
+		_lootDropInterval = GetNode<HSlider>("%LootDropInterval");
+		_lootDropIntervalValue = GetNode<Label>("%LootDropIntervalValue");
+		_barrierEnabled = GetNode<CheckBox>("%BarrierEnabled");
+		_barrierWeight = GetNode<HSlider>("%BarrierWeight");
+		_barrierWeightValue = GetNode<Label>("%BarrierWeightValue");
+		_barrierDuration = GetNode<HSlider>("%BarrierDuration");
+		_barrierDurationValue = GetNode<Label>("%BarrierDurationValue");
+		_lootTableSummary = GetNode<Label>("%LootTableSummary");
+
+		_lootDropInterval.MinValue = LootSettingsDto.IntervalMin;
+		_lootDropInterval.MaxValue = LootSettingsDto.IntervalMax;
+		_lootDropInterval.Value = LootSettingsDto.IntervalDefault;
+		_barrierEnabled.ButtonPressed = LootSettingsDto.BarrierEnabledDefault;
+		_barrierWeight.MinValue = LootSettingsDto.WeightMin;
+		_barrierWeight.MaxValue = LootSettingsDto.WeightMax;
+		_barrierWeight.Value = LootSettingsDto.BarrierWeightDefault;
+		_barrierDuration.MinValue = LootSettingsDto.BarrierDurationMin;
+		_barrierDuration.MaxValue = LootSettingsDto.BarrierDurationMax;
+		_barrierDuration.Value = LootSettingsDto.BarrierDurationDefault;
+
+		_lootDropInterval.ValueChanged += _ => UpdateLootLabels();
+		_barrierWeight.ValueChanged += _ => UpdateLootLabels();
+		_barrierDuration.ValueChanged += _ => UpdateLootLabels();
+		_barrierEnabled.Toggled += _ => UpdateLootLabels();
+		UpdateLootLabels();
+
+		// Tab titles come from the child node names unless set here, which is why
+		// they otherwise read "BasicSetup". Naming all three keeps them consistent.
+		var tabs = GetNode<TabContainer>("%TabContainer");
+		tabs.SetTabTitle(0, "Basic Setup");
+		tabs.SetTabTitle(1, "Advanced");
+		tabs.SetTabTitle(2, "Loot Table");
+
 		_createButton.Pressed += OnCreatePressed;
 		GetNode<Button>("%ReturnButton").Pressed += () =>
 			GetTree().ChangeSceneToFile("res://src/ui/menus/MainMenu.tscn");
@@ -123,6 +172,78 @@ public partial class HostSetupMenu : Control
 	private void UpdateSplitterLabel() =>
 		_splitterIntervalValue.Text = $"every {(int)_splitterInterval.Value}s";
 
+	// The readouts beside the loot sliders, plus the live resolved-rate summary.
+	private void UpdateLootLabels()
+	{
+		_lootDropIntervalValue.Text = $"every {(int)_lootDropInterval.Value}s";
+		_barrierWeightValue.Text = $"{(int)_barrierWeight.Value}";
+		_barrierDurationValue.Text = $"{(int)_barrierDuration.Value}s";
+		UpdateLootSummary();
+	}
+
+	/// <summary>Show each item's RESOLVED drop rate rather than its raw weight, plus
+	/// the chance of no drop at all.
+	///
+	/// Showing resolved rates is the point: a weight stops being a literal percentage
+	/// the moment a second item shares it (two items on 50 subscribe one 50 and take
+	/// 25% each), so raw weights would quietly mislead. This way a host sees the split
+	/// happen while setting it, not mid-match.</summary>
+	private void UpdateLootSummary()
+	{
+		var settings = BuildLootSettings();
+		var rates = settings.ResolvedRates();
+
+		var text = new System.Text.StringBuilder();
+		for (int i = 0; i < rates.Length; i++)
+		{
+			if (rates[i] <= 0f)
+				continue;
+			if (text.Length > 0)
+				text.Append("   ·   ");
+			var item = BriskaBlast.Game.ItemRegistry.LootOrder[i];
+			text.Append($"{BriskaBlast.Game.ItemRegistry.DisplayName(item)} {Format(rates[i])}%");
+		}
+
+		int total = settings.SubscribedTotal();
+		_lootOverSubscribed = total > LootSettingsDto.WeightTotalMax;
+		if (_lootOverSubscribed)
+		{
+			// Unreachable with a single item (its own slider caps at 100); this is
+			// what will catch an oversubscribed table once item #2 exists.
+			_lootTableSummary.Text =
+				$"Drop chances total {total}% — that is more than 100%. Lower one to continue.";
+			_lootTableSummary.AddThemeColorOverride("font_color", new Color(1f, 0.45f, 0.45f));
+		}
+		else
+		{
+			if (text.Length > 0)
+				text.Append("   ·   ");
+			text.Append($"Nothing {Format(settings.NothingRate())}%");
+			_lootTableSummary.Text = text.Length > 0
+				? text.ToString()
+				: "No items enabled — nothing will ever drop.";
+			_lootTableSummary.AddThemeColorOverride("font_color", new Color(0.7f, 0.78f, 0.9f));
+		}
+
+		RefreshCreateEnabled();
+
+		// Whole numbers stay whole; a split bucket shows its half.
+		static string Format(float v) =>
+			Mathf.IsEqualApprox(v, Mathf.Round(v)) ? $"{Mathf.RoundToInt(v)}" : $"{v:0.#}";
+	}
+
+	private void RefreshCreateEnabled() => _createButton.Disabled = _busy || _lootOverSubscribed;
+
+	private LootSettingsDto BuildLootSettings()
+	{
+		// Clamp defensively to the shared ranges (the sliders already bound these;
+		// the server re-checks regardless).
+		int interval = Math.Clamp((int)_lootDropInterval.Value, LootSettingsDto.IntervalMin, LootSettingsDto.IntervalMax);
+		int weight = Math.Clamp((int)_barrierWeight.Value, LootSettingsDto.WeightMin, LootSettingsDto.WeightMax);
+		int duration = Math.Clamp((int)_barrierDuration.Value, LootSettingsDto.BarrierDurationMin, LootSettingsDto.BarrierDurationMax);
+		return new LootSettingsDto(interval, _barrierEnabled.ButtonPressed, weight, duration);
+	}
+
 	private SpawnSettingsDto BuildSpawnSettings()
 	{
 		// Clamp defensively to the shared range (the slider already bounds it; the
@@ -140,6 +261,7 @@ public partial class HostSetupMenu : Control
 		var max = (int)_maxPlayers.Value;
 		var winCondition = BuildWinCondition();
 		var spawnSettings = BuildSpawnSettings();
+		var lootSettings = BuildLootSettings();
 
 		SetBusy(true, "Creating session…");
 
@@ -150,16 +272,18 @@ public partial class HostSetupMenu : Control
 			return;
 		}
 
-		var result = await ctx.Api.HostAsync(ctx.PlayerId, ctx.SecretToken, mode.WireName, max, winCondition, spawnSettings);
-		Callable.From(() => OnHostComplete(result, mode.DisplayName, max, winCondition, spawnSettings)).CallDeferred();
+		var result = await ctx.Api.HostAsync(ctx.PlayerId, ctx.SecretToken, mode.WireName, max,
+			winCondition, spawnSettings, lootSettings);
+		Callable.From(() => OnHostComplete(result, mode.DisplayName, max, winCondition, spawnSettings, lootSettings)).CallDeferred();
 	}
 
 	private void OnHostComplete(ApiResult<HostResponse> result, string modeDisplay, int max,
-		WinConditionDto winCondition, SpawnSettingsDto spawnSettings)
+		WinConditionDto winCondition, SpawnSettingsDto spawnSettings, LootSettingsDto lootSettings)
 	{
 		if (result.Ok && result.Value is { } r)
 		{
-			SessionContext.Instance.StartHostSession(r.SessionCode, modeDisplay, max, winCondition, spawnSettings);
+			SessionContext.Instance.StartHostSession(r.SessionCode, modeDisplay, max, winCondition,
+				spawnSettings, lootSettings);
 			GetTree().ChangeSceneToFile("res://src/ui/menus/SessionLobby.tscn");
 			return;
 		}
@@ -170,6 +294,7 @@ public partial class HostSetupMenu : Control
 		{
 			"invalid_win_condition" => $"Score must be {WinConditionDto.ScoreMin}–{WinConditionDto.ScoreMax}.",
 			"invalid_spawn_settings" => $"Splitter interval must be {SpawnSettingsDto.IntervalMin}–{SpawnSettingsDto.IntervalMax}s.",
+			"invalid_loot_settings" => "A loot table setting is out of range.",
 			"invalid_player_count" => "That player count isn't allowed for this mode.",
 			_ => $"Could not host: {result.ErrorCode}",
 		};
@@ -178,7 +303,10 @@ public partial class HostSetupMenu : Control
 
 	private void SetBusy(bool busy, string message)
 	{
-		_createButton.Disabled = busy;
+		_busy = busy;
+		// Not a plain assignment: an oversubscribed loot table also disables Create,
+		// and clearing busy must not re-enable it.
+		RefreshCreateEnabled();
 		_status.Text = message;
 		_status.Visible = !string.IsNullOrEmpty(message);
 	}

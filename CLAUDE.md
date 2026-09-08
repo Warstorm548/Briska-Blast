@@ -27,9 +27,9 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 
 | Component | Status |
 |---|---|
-| Server foundation | ✓ Complete (current v0.35.0 — see `ServerChangeLog.md`) |
-| Shared crate | ✓ Complete (v0.6.0 — see `SharedChangeLog.md`) |
-| Game client | In progress (v0.34.1 — see `GameChangeLog.md`) |
+| Server foundation | ✓ Complete (current v0.36.0 — see `ServerChangeLog.md`) |
+| Shared crate | ✓ Complete (v0.7.0 — see `SharedChangeLog.md`) |
+| Game client | In progress (v0.35.0 — see `GameChangeLog.md`) |
 | Launcher | In progress (v0.20.1 — see `LauncherChangeLog.md`) |
 
 **Build order:** Server → Game → Launcher (each depends on the previous).
@@ -45,6 +45,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Server endpoint design and WebRTC signaling flow | [`docs/architecture/protocol.md`](docs/architecture/protocol.md) |
 | Full networking, identity, and game design | [`docs/architecture/game-architecture-summary.md`](docs/architecture/game-architecture-summary.md) |
 | Extended game mode — rules, ball handoff, scoring | [`docs/architecture/extended-mode.md`](docs/architecture/extended-mode.md) |
+| Loot table & Full Barrier — drop weighting, every tunable, adding a second item | [`docs/architecture/loot-table-and-barrier.md`](docs/architecture/loot-table-and-barrier.md) |
 | Match lifecycle — MatchFlow state machine, lobby→game handoff, Preparing phase | [`docs/architecture/match-lifecycle.md`](docs/architecture/match-lifecycle.md) |
 | File integrity, repair & per-channel runtime cache (Verify/Repair/Reset, `files.json`, the Godot assembly-rename gotcha) | [`docs/architecture/runtime-cache-and-integrity.md`](docs/architecture/runtime-cache-and-integrity.md) |
 | Logging & observability (client per-run log files, WebRTC/handoff tracing, server per-session spans, `LOG_FORMAT`) | [`docs/architecture/observability-logging.md`](docs/architecture/observability-logging.md) |

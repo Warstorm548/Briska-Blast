@@ -78,6 +78,28 @@ public sealed class NetGameController : IDisposable
             Log.Warn("game.handoff", $"DROPPED ball={ev.BallId} peer={PeerName(ev.PeerId)} — channel not open (ball lost)");
     }
 
+    /// <summary>Award a loot item to the peer who earned it — they last hit the ball
+    /// that touched a pickup on our screen. Directed peer-to-peer send, deliberately
+    /// not server-relayed: this is the same channel ball handoffs already ride, and a
+    /// reward does not warrant being made more reliable than the balls themselves.
+    ///
+    /// A closed channel loses the award, logged the same way a lost handoff is. The
+    /// pickup is already consumed by then, so there is nothing to roll back — an
+    /// accepted failure mode, identical in shape to a dropped ball.</summary>
+    public void SendItemAward(string peerId, ItemId item)
+    {
+        bool sent = _transport.Send(peerId, GamePacket.WriteItemAward(item));
+        if (sent)
+            Log.Debug("game.loot", $"OUT award item={item} peer={PeerName(peerId)}");
+        else
+            Log.Warn("game.loot", $"DROPPED award item={item} peer={PeerName(peerId)} — channel not open (item lost)");
+    }
+
+    /// <summary>A peer awarded us a loot item we earned on their screen. Raised only
+    /// for a well-formed frame from a still-mapped peer; <c>GameScene</c> puts it in
+    /// the hotbar (which enforces our own stack cap) and refreshes the bar.</summary>
+    public event System.Action<ItemId>? ItemAwarded;
+
     /// <summary>Report a credited score to the server (server-relayed channel).
     /// Empty <see cref="ScoreEvent.ScoringPlayerId"/> is a self-goal or untouched
     /// ball — no point is awarded, so nothing is sent (the local serve still
@@ -95,11 +117,23 @@ public sealed class NetGameController : IDisposable
     private static string PeerName(string peerId) =>
         SessionContext.Instance?.DisplayNameFor(peerId) ?? peerId;
 
-    /// <summary>A packet arrived from a peer. Only ball handoffs are carried, and
-    /// one from a peer with no live edge mapping is discarded rather than guessed
-    /// at — that peer has already dropped, so the ball has nowhere to enter.</summary>
+    /// <summary>A packet arrived from a peer. Ball handoffs and loot awards are
+    /// carried; anything from a peer with no live edge mapping is discarded rather
+    /// than guessed at — that peer has already dropped, so a ball has nowhere to
+    /// enter and an award has no live sender to have come from.</summary>
     private void OnPeerData(string peerId, byte[] data)
     {
+        // A loot award earned on the sender's screen. Checked first because it is
+        // the cheaper parse, and because TryReadBallHandoff would reject it anyway.
+        if (GamePacket.TryReadItemAward(data, out var awarded))
+        {
+            if (!_peerToEdge.ContainsKey(peerId))
+                return; // peer no longer mapped (already dropped) — discard
+            Log.Debug("game.loot", $"IN  award item={awarded} peer={PeerName(peerId)}");
+            ItemAwarded?.Invoke(awarded);
+            return;
+        }
+
         if (!GamePacket.TryReadBallHandoff(data, out var pkt))
             return;
         if (!_peerToEdge.TryGetValue(peerId, out var entryEdge))

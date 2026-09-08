@@ -47,6 +47,24 @@ public partial class HotbarView : CanvasLayer
     private readonly TextureRect[] _icons = new TextureRect[Hotbar.SlotCount];
     private readonly ColorRect[] _flashes = new ColorRect[Hotbar.SlotCount];
 
+    /// <summary>Per-slot stack count, pinned to the slot's top-right corner.</summary>
+    private readonly Label[] _counts = new Label[Hotbar.SlotCount];
+
+    /// <summary>Active-effect readout, sitting to the RIGHT of the slot row rather
+    /// than inside any slot. That placement is load-bearing, not decorative: spending
+    /// an item's last charge clears its slot, and the effect it bought is still
+    /// running — a countdown drawn inside the slot would vanish exactly when the
+    /// player most needs to see it. One row per live effect, so a second item's timer
+    /// stacks underneath for free.</summary>
+    private VBoxContainer _effects = null!;
+    private Label _shieldEffect = null!;
+
+    /// <summary>Font size for the slot count, as a fraction of the slot's edge. The
+    /// bar scales with the viewport, so a fixed pt size would be wrong everywhere but
+    /// the design resolution.</summary>
+    private const float CountFontFrac = 26f / 96f;
+    private const float EffectFontFrac = 30f / 96f;
+
     /// <summary>Wall-clock deadline per slot; 0 means "not flashing".</summary>
     private readonly ulong[] _flashUntilMsec = new ulong[Hotbar.SlotCount];
 
@@ -122,7 +140,57 @@ public partial class HotbarView : CanvasLayer
             flash.SetAnchorsPreset(Control.LayoutPreset.FullRect);
             cell.AddChild(flash);
             _flashes[i] = flash;
+
+            // Stack count, top-right. Inset by the SAME frame thickness the icon
+            // uses, so it sits inside the teal interior and never paints over the
+            // 6px border. Added after the flash so a keypress still lights the whole
+            // slot including the number.
+            var count = new Label
+            {
+                Visible = false,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                MouseFilter = Control.MouseFilterEnum.Ignore,
+            };
+            count.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+            count.OffsetLeft = inset;
+            count.OffsetTop = inset;
+            count.OffsetRight = -inset;
+            count.OffsetBottom = -inset;
+            count.AddThemeFontSizeOverride("font_size", Mathf.RoundToInt(slot * CountFontFrac));
+            count.AddThemeColorOverride("font_color", new Color(1f, 1f, 1f));
+            // The interior is a mid-tone teal, so an unoutlined glyph loses contrast
+            // against the lighter centre of the slot art.
+            count.AddThemeColorOverride("font_outline_color", new Color(0f, 0f, 0f, 0.85f));
+            count.AddThemeConstantOverride("outline_size", Mathf.Max(1, Mathf.RoundToInt(slot * 0.03f)));
+            cell.AddChild(count);
+            _counts[i] = count;
         }
+
+        // Active-effect readout, right-aligned in the metallic backing beside the
+        // row. The row is centred, so at the design size this gutter is ~1040px —
+        // ample space, and it is otherwise empty.
+        _effects = new VBoxContainer
+        {
+            Alignment = BoxContainer.AlignmentMode.Center,
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+        };
+        _effects.SetAnchorsPreset(Control.LayoutPreset.RightWide);
+        _effects.OffsetLeft = -(slot * 5f);
+        _effects.OffsetRight = -inset * 2f;
+        strip.AddChild(_effects);
+
+        _shieldEffect = new Label
+        {
+            Visible = false,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+        };
+        _shieldEffect.AddThemeFontSizeOverride("font_size", Mathf.RoundToInt(slot * EffectFontFrac));
+        _shieldEffect.AddThemeColorOverride("font_color", new Color(0.62f, 0.92f, 1f));
+        _shieldEffect.AddThemeColorOverride("font_outline_color", new Color(0f, 0f, 0f, 0.85f));
+        _shieldEffect.AddThemeConstantOverride("outline_size", Mathf.Max(1, Mathf.RoundToInt(slot * 0.03f)));
+        _effects.AddChild(_shieldEffect);
     }
 
     public override void _Process(double delta)
@@ -179,11 +247,38 @@ public partial class HotbarView : CanvasLayer
             {
                 icon.Visible = false;
                 icon.Texture = null;
+                // A spent slot is cleared, not shown holding zero — so the count
+                // goes with the icon and the slot reads as free for any item.
+                _counts[i].Visible = false;
                 continue;
             }
 
             icon.Texture = SpriteRegistry.Instance.GetTexture(slot.Icon!.Value);
             icon.Visible = true;
+
+            // A lone item doesn't need a "1" cluttering the slot; the icon says it.
+            _counts[i].Text = slot.Count.ToString();
+            _counts[i].Visible = slot.Count > 1;
+        }
+    }
+
+    /// <summary>Refresh the active-effect readout beside the row. Driven from the
+    /// game state's effect timers rather than from slot contents — which is exactly
+    /// what keeps a running barrier on screen after its last charge was spent and its
+    /// slot cleared. Called every frame, like the play-field render.</summary>
+    public void SyncEffects(GameState state)
+    {
+        if (state.ShieldActive)
+        {
+            // Ceiling, so a barrier with 0.3s left still reads "1s" rather than
+            // showing 0 while it is demonstrably still blocking balls.
+            int secs = Mathf.CeilToInt(state.ShieldSecsRemaining);
+            _shieldEffect.Text = $"{ItemRegistry.DisplayName(ItemId.BarrierShield)}  {secs}s";
+            _shieldEffect.Visible = true;
+        }
+        else
+        {
+            _shieldEffect.Visible = false;
         }
     }
 

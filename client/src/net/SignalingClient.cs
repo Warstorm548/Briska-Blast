@@ -77,12 +77,13 @@ public partial class SignalingClient : Node
     public event Action<string, string>? PeerLeft;
     public event Action<string>? HostChanged;
     /// <summary>Match starting. Carries (gamemode, winCondition, spawnSettings,
-    /// playerCount, peers, iceServers). <c>winCondition</c> + <c>spawnSettings</c>
-    /// are the host-chosen rules every client applies. <c>iceServers</c> is the
-    /// match's server-minted STUN+TURN list (empty on old servers or when TURN is
-    /// off — the transport then keeps its STUN-only fallback); feed it to
+    /// lootSettings, playerCount, peers, iceServers). <c>winCondition</c>,
+    /// <c>spawnSettings</c> and <c>lootSettings</c> are the host-chosen rules every
+    /// client applies. <c>iceServers</c> is the match's server-minted STUN+TURN list
+    /// (empty on old servers or when TURN is off — the transport then keeps its
+    /// STUN-only fallback); feed it to
     /// <see cref="WebRtcMeshTransport.SetIceServers"/> before connecting.</summary>
-    public event Action<string, WinConditionDto, SpawnSettingsDto, int, string[], IceServerDto[]>? StartSignaling;
+    public event Action<string, WinConditionDto, SpawnSettingsDto, LootSettingsDto, int, string[], IceServerDto[]>? StartSignaling;
     public event Action<string>? SessionEnded;
     public event Action<string>? Kicked;
     /// <summary>Authoritative per-session score tally (player_id → points)
@@ -514,6 +515,7 @@ public partial class SignalingClient : Node
                         Str(root, "gamemode"),
                         ReadWinCondition(root, "win_condition"),
                         ReadSpawnSettings(root, "spawn_settings"),
+                        ReadLootSettings(root, "loot_settings"),
                         root.GetProperty("player_count").GetInt32(),
                         ReadStrings(root, "peers"),
                         ReadIceServers(root));
@@ -679,6 +681,33 @@ public partial class SignalingClient : Node
             return new SpawnSettingsDto(interval, chain);
         }
         return SpawnSettingsDto.Default;
+    }
+
+    /// <summary>Read a <c>loot_settings</c> object into a DTO. A missing/malformed
+    /// field degrades to the default so a client talking to a server that predates
+    /// the field still has a usable loot table. Note this only covers a stale
+    /// SERVER — a stale CLIENT never reads the field at all, which is why the
+    /// feature is gated on <c>min_game_version</c> rather than left to degrade.</summary>
+    private static LootSettingsDto ReadLootSettings(JsonElement obj, string name)
+    {
+        if (obj.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.Object)
+        {
+            int interval = el.TryGetProperty("drop_interval_secs", out var d) && d.TryGetInt32(out var iv)
+                ? iv
+                : LootSettingsDto.IntervalDefault;
+            bool enabled = el.TryGetProperty("barrier_enabled", out var e)
+                && (e.ValueKind == JsonValueKind.True || e.ValueKind == JsonValueKind.False)
+                ? e.ValueKind == JsonValueKind.True
+                : LootSettingsDto.BarrierEnabledDefault;
+            int weight = el.TryGetProperty("barrier_weight", out var w) && w.TryGetInt32(out var wv)
+                ? wv
+                : LootSettingsDto.BarrierWeightDefault;
+            int duration = el.TryGetProperty("barrier_duration_secs", out var s) && s.TryGetInt32(out var sv)
+                ? sv
+                : LootSettingsDto.BarrierDurationDefault;
+            return new LootSettingsDto(interval, enabled, weight, duration);
+        }
+        return LootSettingsDto.Default;
     }
 
     /// <summary>Read the <c>ice_servers</c> array (server-minted STUN+TURN

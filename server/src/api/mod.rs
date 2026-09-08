@@ -9,6 +9,7 @@ use deadpool_redis::redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shared::types::gamemode::GameMode;
+use shared::types::loot_settings::LootSettings;
 use shared::types::session::SessionStatus;
 use shared::types::spawn_settings::SpawnSettings;
 use shared::types::win_condition::WinCondition;
@@ -42,6 +43,11 @@ pub struct Session {
     /// readable across a deploy.
     #[serde(default)]
     pub spawn_settings: SpawnSettings,
+    /// Loot-table rules chosen by the host (drop cadence + per-item enable, weight
+    /// and duration). `#[serde(default)]` keeps a session written before this field
+    /// existed readable across a deploy.
+    #[serde(default)]
+    pub loot_settings: LootSettings,
     pub player_count: u8,
     pub joiners: Vec<JoinerEntry>,
     pub status: SessionStatus,

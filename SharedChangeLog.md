@@ -13,6 +13,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.0] — 2026-09-07
+
+Adds the loot-table rules type behind the game's first hotbar item.
+
+### Added
+
+- `LootSettings` (`types/loot_settings.rs`) — host-configured loot rules, serialized
+  flat as `{"drop_interval_secs":20,"barrier_enabled":true,"barrier_weight":50,
+  "barrier_duration_secs":30}`. Bounds exported as constants and hand-mirrored in
+  `client/src/net/Dto.cs`: drop interval 5–60s (default 20), weight 1–100
+  (default 50), Full Barrier duration 5–120s (default 30).
+- `LootSettings::subscribed_total` / `resolved_rates` / `nothing_rate` — the drop
+  odds. Weights are **buckets**: the total sums the *distinct* weights of enabled
+  items, and items tied on a weight split that bucket evenly. So a lone item at 50
+  drops on half of all rolls, and two items both at 50 drop on 25% of rolls each
+  rather than subscribing 100% between them. The remainder up to 100 is the chance
+  nothing drops.
+- `LootSettings::validate` + `LootSettingsError` — per-field range checks plus a hard
+  100% cap on the subscribed total. Unlike the other settings types this error names
+  the offending **field**, because the loot table has four independently-bounded
+  values and "invalid loot settings" alone would not tell a host which slider to move.
+- `loot_settings` field (`#[serde(default)]`) on `HostRequest`, `JoinResponse` and
+  `SessionPollResponse`, so an older client that omits it still hosts with defaults.
+
+The weighting maths lives here rather than client-side because this is the only place
+in the stack with a test runner that CI-adjacent work actually executes
+(`cargo test -p shared`); `LootTable.cs` mirrors it.
+
+---
+
 ## [0.6.0] — 2026-07-12
 
 Re-tunes the **Set Score** win condition bounds: default **100**, range

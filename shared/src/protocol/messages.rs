@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::gamemode::GameMode;
+use crate::types::loot_settings::LootSettings;
 use crate::types::session::SessionStatus;
 use crate::types::spawn_settings::SpawnSettings;
 use crate::types::win_condition::WinCondition;
@@ -67,6 +68,11 @@ pub struct HostRequest {
     /// defaults; an out-of-range value is rejected with `invalid_spawn_settings`.
     #[serde(default)]
     pub spawn_settings: SpawnSettings,
+    /// Loot-table rules (drop cadence + per-item enable/weight/duration). Optional
+    /// on the wire for the same reason as `spawn_settings`; an out-of-range value
+    /// is rejected with `invalid_loot_settings` (see `LootSettings::validate`).
+    #[serde(default)]
+    pub loot_settings: LootSettings,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -92,6 +98,8 @@ pub struct JoinResponse {
     pub win_condition: WinCondition,
     #[serde(default)]
     pub spawn_settings: SpawnSettings,
+    #[serde(default)]
+    pub loot_settings: LootSettings,
     pub player_count: u8,
     pub current_player_count: u8,
     pub joiners: Vec<JoinedPeer>,
@@ -104,6 +112,8 @@ pub struct SessionPollResponse {
     pub win_condition: WinCondition,
     #[serde(default)]
     pub spawn_settings: SpawnSettings,
+    #[serde(default)]
+    pub loot_settings: LootSettings,
     pub player_count: u8,
     pub current_player_count: u8,
     pub joiner_player_ids: Vec<String>,

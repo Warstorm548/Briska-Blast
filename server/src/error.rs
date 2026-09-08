@@ -16,6 +16,11 @@ pub enum AppError {
     InvalidPlayerCount { min: u8, max: u8, requested: u8 },
     InvalidWinCondition { min: u8, max: u8, requested: u8 },
     InvalidSpawnSettings { min: u8, max: u8, requested: u8 },
+    /// Unlike the three above, loot settings have several independently-bounded
+    /// fields plus a cap on their combined total, so this one names the offending
+    /// field — "invalid loot settings" alone would not tell a host which slider to
+    /// move. `requested` is u16 because the weight total can exceed a u8.
+    InvalidLootSettings { field: &'static str, min: u16, max: u16, requested: u16 },
     SessionFull { capacity: u8 },
     SessionNotStartable { reason: &'static str },
     Internal(String),
@@ -61,6 +66,16 @@ impl IntoResponse for AppError {
                 StatusCode::BAD_REQUEST,
                 json!({
                     "error": "invalid_spawn_settings",
+                    "min": min,
+                    "max": max,
+                    "requested": requested,
+                }),
+            ),
+            AppError::InvalidLootSettings { field, min, max, requested } => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid_loot_settings",
+                    "field": field,
                     "min": min,
                     "max": max,
                     "requested": requested,
@@ -132,6 +147,37 @@ mod tests {
         assert_eq!(body["min"], 5);
         assert_eq!(body["max"], 60);
         assert_eq!(body["requested"], 99);
+    }
+
+    #[tokio::test]
+    async fn invalid_loot_settings_returns_400_naming_the_field() {
+        let (status, body) = body_json(AppError::InvalidLootSettings {
+            field: "barrier_weight",
+            min: 1,
+            max: 100,
+            requested: 0,
+        })
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_loot_settings");
+        assert_eq!(body["field"], "barrier_weight");
+        assert_eq!(body["min"], 1);
+        assert_eq!(body["max"], 100);
+        assert_eq!(body["requested"], 0);
+    }
+
+    #[tokio::test]
+    async fn invalid_loot_settings_reports_an_oversubscribed_total() {
+        let (status, body) = body_json(AppError::InvalidLootSettings {
+            field: "weight_total",
+            min: 0,
+            max: 100,
+            requested: 130,
+        })
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["field"], "weight_total");
+        assert_eq!(body["requested"], 130);
     }
 
     #[tokio::test]
