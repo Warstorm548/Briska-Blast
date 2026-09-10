@@ -18,6 +18,7 @@
 //! (`self_update`'s own logic on Windows, `cleanup.rs` elsewhere).
 
 use super::github_client;
+use super::release_cache::{self, Freshness};
 use semver::Version;
 use std::path::Path;
 
@@ -46,20 +47,24 @@ pub enum UpdateCheckOutcome {
 }
 
 /// Query GitHub Releases for a newer `launcher-v*` than the running binary.
-/// Suitable for `iced::Task::perform`. Goes through `github_client` (our owned
-/// request) so the rate-limit safety net can see the status + headers; a closed
+/// Suitable for `iced::Task::perform`.
+///
+/// Goes through `release_cache`, so the boot check shares one request with every
+/// channel's `latest_release` while the rate-limit safety net still sees the
+/// response status and headers. Pass [`Freshness::Cached`] on boot and
+/// [`Freshness::Revalidate`] for the user-pressed "Check for Updates"; a closed
 /// gate or a confirmed `403`/`429` surfaces as the user-facing rate-limit message.
-pub async fn check_for_update() -> Result<UpdateCheckOutcome, String> {
+pub async fn check_for_update(freshness: Freshness) -> Result<UpdateCheckOutcome, String> {
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .map_err(|e| format!("invalid current version {:?}: {e}", env!("CARGO_PKG_VERSION")))?;
     tracing::debug!(%current, "querying GitHub Releases for launcher updates");
 
-    let releases = github_client::fetch_releases(REPO_OWNER, REPO_NAME)
+    let releases = release_cache::releases(REPO_OWNER, REPO_NAME, freshness)
         .await
         .map_err(|e| e.to_user_string())?;
 
     let mut best: Option<(Version, &github_client::Release)> = None;
-    for r in &releases {
+    for r in releases.iter() {
         // `tag_name` is the git tag string.
         let Some(stripped) = r.tag_name.strip_prefix(TAG_PREFIX) else {
             continue;

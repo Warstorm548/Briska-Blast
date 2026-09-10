@@ -231,8 +231,8 @@ prerequisite as the safety net.
 | Idea | Effect |
 |---|---|
 | **`per_page=100`** ✅ shipped v0.14.1 | One page instead of 30 → kills pagination (46 releases: 2 → 1 request/check). |
-| **Fetch the list once, share it** | Launcher self-update + all channels hit the *same* repo's `/releases`; one fetch serves them all. |
-| **ETag / `If-None-Match`** | A `304 Not Modified` doesn't count against the limit → warm rechecks are free. |
+| **Fetch the list once, share it** ✅ shipped v0.21.0 | Launcher self-update + all channels hit the *same* repo's `/releases`; one fetch serves them all. |
+| **ETag / `If-None-Match`** ✅ shipped v0.21.0 | ~~A `304` doesn't count against the limit → warm rechecks are free.~~ **This premise was wrong** — see the correction below. A `304` saves the ~363 KB body but still spends a request. |
 | **Delete old releases** | Stopgap only — helps solely below 30 total releases, temporary, made moot by `per_page`. Best deletion candidates: old `server-v*` dev releases (the launcher pages past them but never uses them). |
 
 **The punchline:** `per_page=100` + fetch-once collapse boot from **~6 requests to
@@ -240,6 +240,79 @@ prerequisite as the safety net.
 likely dissolves the rate-limit problem at current scale and demotes the safety net
 to defense-in-depth — but the safety net is still worth having, and is cheaper to
 ship first.
+
+### Fetch-once + ETag — SHIPPED (launcher v0.21.0, 2026-09-10)
+
+`updater/release_cache.rs` now sits in front of every releases consumer
+(`updater/github.rs`, `updater/branches/github.rs`, `updater/asset_fetch.rs`).
+
+- **Fetch-once:** a process-wide snapshot behind a `tokio` mutex, held *across*
+  the network call. That serialization is what collapses the concurrent boot
+  fan-out into one request rather than N racing for the same endpoint.
+- **ETag:** the snapshot and its validator persist to
+  `<data_dir>/releases-cache.json` (~38 KB — only the trimmed fields the launcher
+  parses, against the 363 KB the API returns), so even a **cold start** sends
+  `If-None-Match`. `If-None-Match` goes on **page 1 only**, and a validator is
+  stored **only for a single-page result**: an ETag identifies one page, and while
+  a *new* release always changes page 1 (newest-first), deleting or editing an
+  older release can leave page 1 byte-identical while page 2 moves. Discarding the
+  validator on a multi-page list forces the next fetch to be unconditional, which
+  is always correct.
+- **`Freshness::{Cached, Revalidate}`** splits the two needs. `Cached` (60 s TTL)
+  serves the boot fan-out and the install prompt. `Revalidate` always reaches
+  GitHub: both manual "Check for Updates" surfaces, and everything preceding a
+  download, so an install can never be aimed at a release that has moved.
+- **Stale-if-error** is limited to `Cached`: boot shows the last known versions
+  rather than blanking over a network blip, while a manual check still reports the
+  failure and keeps its existing rate-limit verdict.
+
+Measured against the live repo on 2026-09-09 (60 releases: 25 `game-v*`, 8
+`launcher-v*`, 27 server `v*`):
+
+| Scenario | Before | After |
+|---|---|---|
+| Boot, Stable + EA | 3 counted | **1 counted** |
+| Boot, Dev flagged | 4 counted | **1 counted** |
+| Manual channel check | 1 counted | 1 counted (body skipped when unchanged) |
+| Manual launcher check | 1 counted | 1 counted (body skipped when unchanged) |
+
+The saving is **fetch-once**, not the ETag. The safety net is unchanged and
+remains defense-in-depth. Remaining deferred item: **Version A**, the
+server-published manifest, which is the O(1)-regardless-of-playerbase endgame
+below — and which is now the *only* remaining lever, since the correction below
+removes the "free rechecks" one.
+
+### ⚠ Correction (2026-09-10): an unauthenticated `304` DOES count
+
+Part 4 above originally assumed a `304 Not Modified` is exempt from the rate
+limit. **That is only true for authenticated callers.** We are unauthenticated by
+design — a public client cannot ship a token — so the exemption never applied.
+
+Measured against the live API, three consecutive requests to the releases
+endpoint (one unconditional, two conditional):
+
+| Request | Status | `x-ratelimit-used` | `x-ratelimit-remaining` |
+|---|---|---|---|
+| 1, unconditional | `200` | 1 | 59 |
+| 2, `If-None-Match` | `304` | 2 | 58 |
+| 3, `If-None-Match` | `304` | 3 | 57 |
+
+So the ETag buys **bandwidth** (~363 KB per revalidation collapsing to an empty
+body), not budget. It is still worth keeping — a conditional request costs no more
+than an unconditional one — but it must not be described as free. Every claim of
+"zero counted requests on boot" that came out of the original assumption has been
+corrected in the code comments, `LauncherChangeLog.md`, and this document.
+
+**Implication for the eventual fix:** the per-user floor is 1 counted request per
+launch and cannot go lower while GitHub is the source of truth. Version A is
+therefore the only way to break the O(users) relationship.
+
+**Not on this budget:** the in-app changelog viewer (also v0.21.0) fetches
+`GameChangeLog.md` / `LauncherChangeLog.md` from `raw.githubusercontent.com`.
+Raw files are served by a separate CDN — the responses carry no `x-ratelimit-*`
+headers at all — so those requests spend none of the 60/hour core budget and are
+deliberately **not** behind the gate. See
+[`../launcher/launcher-changelog-viewer.md`](../launcher/launcher-changelog-viewer.md).
 
 ### The eventual permanent fix (bigger project)
 

@@ -5,20 +5,26 @@
 //! dispatcher plus the shared helpers and lifecycle hooks (`boot`, `view`,
 //! `theme`, `title`).
 
-mod handlers;
+/// `pub(crate)` so the view layer can reuse the changelog handler's shared
+/// selection helpers (window size, channel filter, open-set seeding) rather
+/// than re-deriving that logic per surface.
+pub(crate) mod handlers;
 mod message;
 mod state;
 
 pub use message::{CenterView, Message, SettingsTab};
 pub use state::{AppState, ChannelUpdateStatus};
 
-use handlers::{firewall, identity, install, launcher_update, maintenance, nav, play};
+use handlers::{
+    changelog, firewall, identity, install, launcher_update, maintenance, nav, play,
+};
 
 use crate::channel::Channel;
 use crate::server_api;
 use crate::ui;
 use crate::ui::theme::{BAR_HEIGHT, ZONE_GAP};
 use crate::updater;
+use crate::updater::release_cache::Freshness;
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Task, Theme};
 use shared::protocol::messages::RegisterRequest;
@@ -63,7 +69,10 @@ pub(crate) fn latest_release_tasks(state: &AppState) -> Vec<Task<Message>> {
         .copied()
         .map(|channel| {
             Task::perform(
-                crate::updater::branches::latest_release(channel),
+                // Cached: every channel here wants the same list within
+                // milliseconds, so `release_cache` collapses the whole fan-out
+                // (plus the self-update check below) into one request.
+                crate::updater::branches::latest_release(channel, Freshness::Cached),
                 move |result| Message::LatestReleaseFetched { channel, result },
             )
         })
@@ -132,7 +141,7 @@ pub fn boot() -> (AppState, Task<Message>) {
     }
 
     let mut tasks: Vec<Task<Message>> = vec![Task::perform(
-        updater::check_for_update(),
+        updater::check_for_update(Freshness::Cached),
         Message::LauncherUpdateCheckDone,
     )];
 
@@ -146,6 +155,13 @@ pub fn boot() -> (AppState, Task<Message>) {
         crate::rendezvous::game_is_running(),
         Message::BootGameProbe,
     ));
+
+    // Changelog refresh + channel filter. Deliberately outside the
+    // awaiting_username gate below: the two file fetches hit GitHub's raw CDN
+    // (no rate-limit budget), and the filter reads the same release snapshot the
+    // self-update check above already pays for, so none of this adds a counted
+    // request or depends on identity.
+    tasks.extend(changelog::boot_tasks());
 
     if state.identity.username.trim().is_empty() {
         // Gate the entire identity flow behind the welcome screen so the
@@ -174,6 +190,16 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         Message::SettingsTabSelected(t) => nav::settings_tab_selected(state, t),
         Message::UsernameDraftChanged(s) => nav::username_draft_changed(state, s),
         Message::WelcomeDraftChanged(s) => nav::welcome_draft_changed(state, s),
+
+        // ---- changelog viewer ----
+        Message::ChangelogRefreshed { kind, result } => {
+            changelog::refreshed(state, kind, result)
+        }
+        Message::ChangelogToggled { kind, version } => {
+            changelog::toggled(state, kind, version)
+        }
+        Message::ChangelogShippedLoaded(result) => changelog::shipped_loaded(state, result),
+        Message::OpenUrl(url) => changelog::open_url(url),
 
         // ---- launcher self-update ----
         Message::CheckForUpdatesPressed => launcher_update::check_for_updates_pressed(state),

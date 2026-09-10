@@ -13,6 +13,10 @@ pub enum SettingsTab {
     ChannelManagement,
     Graphics,
     LauncherOptions,
+    /// Launcher changelog history, anchored at the running version. The game's
+    /// equivalent is the default center view rather than a Settings tab,
+    /// because it is per-channel and follows the channel picker.
+    LauncherChangelog,
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +112,30 @@ pub enum Message {
         channel: Channel,
         result: Result<Option<crate::updater::branches::GameRelease>, String>,
     },
+    /// A background changelog refresh from GitHub's raw file CDN finished.
+    /// `Ok(Some(entries))` replaces the loaded copy, `Ok(None)` is a `304`
+    /// (nothing changed), and `Err` leaves the bundled/cached copy in place —
+    /// a stale changelog is cosmetic, so a failure is logged, not surfaced.
+    ChangelogRefreshed {
+        kind: crate::changelog::Kind,
+        result: Result<Option<Vec<crate::changelog::parse::Entry>>, String>,
+    },
+    /// User clicked a changelog entry's header row to expand or collapse it.
+    ChangelogToggled {
+        kind: crate::changelog::Kind,
+        version: semver::Version,
+    },
+    /// Per-channel shipped-version sets landed; drives the changelog's channel
+    /// filter. Read off the shared release snapshot, so it costs no request.
+    ChangelogShippedLoaded(
+        Result<
+            std::collections::BTreeMap<Channel, std::collections::BTreeSet<semver::Version>>,
+            String,
+        >,
+    ),
+    /// Open a URL in the user's browser — the "View the full changelog on
+    /// GitHub" button and any link clicked inside a rendered entry.
+    OpenUrl(String),
     GameSavePressed(Channel),
     /// User asked to open a channel's log folder (`data/log<channel>`) so they
     /// can hand the game's per-run logs to the developer.

@@ -1,6 +1,6 @@
 [package]
 name = "launcher"
-version = "0.20.1"
+version = "0.21.0"
 edition = "2021"
 description = "BriskaBlast Launcher — manages install, update, and launch of the BriskaBlast game across stable, ea, and dev channels."
 license = "AGPL-3.0-or-later"
@@ -10,7 +10,10 @@ name = "briskablast-launcher"
 path = "src/main.rs"
 
 [dependencies]
-iced               = { version = "0.14", features = ["tokio"] }
+# `markdown` renders the changelog entries (headings, lists, code, links) that
+# the in-app changelog viewer shows. Changelogs are markdown at the source, so
+# rendering them properly beats flattening them to plain text.
+iced               = { version = "0.14", features = ["tokio", "markdown"] }
 serde              = { version = "1",    features = ["derive"] }
 serde_json         = "1"
 tracing            = "0.1"

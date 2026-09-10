@@ -8,17 +8,27 @@
 //!
 //! Footprint: fetches one page of up to `PER_PAGE` (=100, GitHub's max) releases,
 //! still following `Link: rel="next"` for correctness if the repo ever exceeds
-//! that. At the current ~46 releases that's **one request per check** instead of
-//! two. The remaining Part 4 reductions are still deferred: sharing a single fetch
-//! across the self-update check + every channel (fetch-once), and ETag /
-//! `If-None-Match` conditional requests (a `304` doesn't count against the limit).
+//! that. At the current 60 releases that's **one request per check** instead of
+//! two.
+//!
+//! This module owns the *transport*; [`super::release_cache`] owns the sharing.
+//! Together they close out Part 4 of the design doc: the cache collapses the boot
+//! fan-out to a single call (fetch-once) and passes the stored `ETag` in here so
+//! an unchanged repo answers `304` with no body.
+//!
+//! **A `304` still costs a request here.** GitHub exempts conditional requests
+//! from the rate limit only for *authenticated* callers; we are unauthenticated
+//! (a public client cannot ship a token), and measurement against the live API
+//! confirms `x-ratelimit-used` increments on an unauthenticated `304`. So the
+//! `ETag` buys **bandwidth** — ~363 KB of JSON down to an empty body — not
+//! budget. The budget saving comes entirely from fetch-once.
 //!
 //! `self_update` is still used elsewhere for the launcher's binary self-update
 //! swap and stale-artifact cleanup; only the *list fetch* is taken in-house.
 
 use crate::ratelimit::{self, Gate};
 use reqwest::header::HeaderMap;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// GitHub's maximum page size for the releases endpoint. One page covers the
@@ -32,7 +42,11 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One GitHub Release, trimmed to the fields the discovery code reads. Unknown
 /// JSON fields are ignored by serde, so the full API payload deserializes fine.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// `Serialize` is what lets [`super::release_cache`] persist the list to disk:
+/// the trimmed form is ~38 KB against the 363 KB the API actually returns, so the
+/// cache stores only what the launcher can read back.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Release {
     /// The git tag string, e.g. `game-v0.2.0-dev.1` / `launcher-v0.14.0`.
     pub tag_name: String,
@@ -43,7 +57,7 @@ pub struct Release {
     pub assets: Vec<Asset>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Asset {
     pub name: String,
     /// The GitHub REST API asset endpoint
@@ -78,11 +92,37 @@ impl FetchError {
     }
 }
 
-/// List every release for `owner/repo`, paginating at 30/page. Consults the
-/// rate-limit gate before sending (returns `RateLimited` without a request when
-/// blocked), records the rate-limit headers off every response (Layer B), and
-/// arms a cooldown on a confirmed `403`/`429` (Layer A).
-pub async fn fetch_releases(owner: &str, repo: &str) -> Result<Vec<Release>, FetchError> {
+/// Result of a conditional release-list fetch.
+#[derive(Debug)]
+pub enum FetchOutcome {
+    /// The list changed (or we had no `ETag` to offer). Carries the full list and
+    /// the new `ETag` to store for next time, if GitHub sent one.
+    Fresh {
+        releases: Vec<Release>,
+        etag: Option<String>,
+    },
+    /// GitHub answered `304 Not Modified` — the caller's cached list is still
+    /// current, and no body was transferred. Still counts as one request against
+    /// the unauthenticated hourly limit (see the module docs).
+    NotModified,
+}
+
+/// List every release for `owner/repo`, paginating at [`PER_PAGE`]/page.
+/// Consults the rate-limit gate before sending (returns `RateLimited` without a
+/// request when blocked), records the rate-limit headers off every response
+/// (Layer B), and arms a cooldown on a confirmed `403`/`429` (Layer A).
+///
+/// When `if_none_match` is `Some`, the **first page only** is requested
+/// conditionally. That restriction is deliberate: an `ETag` identifies one page,
+/// and GitHub returns releases newest-first, so any newly published release
+/// necessarily changes page 1. Combined with only storing a validator for
+/// single-page results, a `304` therefore proves the whole cached list is
+/// unchanged, while a `200` means we must re-read every page anyway.
+pub async fn fetch_releases(
+    owner: &str,
+    repo: &str,
+    if_none_match: Option<&str>,
+) -> Result<FetchOutcome, FetchError> {
     // Gate first — a local file read, never a GitHub request.
     if let Gate::Blocked { resume_at } = ratelimit::gate() {
         tracing::info!(resume_at, "rate-limit gate closed; skipping GitHub release fetch");
@@ -99,11 +139,19 @@ pub async fn fetch_releases(owner: &str, repo: &str) -> Result<Vec<Release>, Fet
     let mut url =
         format!("https://api.github.com/repos/{owner}/{repo}/releases?per_page={PER_PAGE}");
     let mut all: Vec<Release> = Vec::new();
+    let mut fresh_etag: Option<String> = None;
+    let mut first_page = true;
 
     loop {
-        let resp = client
+        let mut req = client
             .get(&url)
-            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json");
+        if first_page {
+            if let Some(etag) = if_none_match {
+                req = req.header(reqwest::header::IF_NONE_MATCH, etag);
+            }
+        }
+        let resp = req
             .send()
             .await
             // A transport error means we never got an HTTP response — treat as a
@@ -123,11 +171,35 @@ pub async fn fetch_releases(owner: &str, repo: &str) -> Result<Vec<Release>, Fet
             RateSignal::Healthy { remaining, reset } => ratelimit::note_response(remaining, reset),
         }
 
+        // Checked before `is_success` — a 304 is NOT a success status, so letting
+        // it fall through would report "nothing changed" as an HTTP error. Only
+        // reachable on the first page (we only send the header there), and only
+        // for a single-page list (see the ETag capture below), so the caller's
+        // whole cached list is still current.
+        if status == reqwest::StatusCode::NOT_MODIFIED {
+            tracing::debug!("GitHub release list unchanged (304) — no body transferred");
+            return Ok(FetchOutcome::NotModified);
+        }
+
         if !status.is_success() {
             return Err(FetchError::Other(format!(
                 "GitHub returned HTTP {} for {url}",
                 status.as_u16()
             )));
+        }
+
+        if first_page {
+            // Keep the validator ONLY for a single-page result. It validates
+            // page 1 alone, but the snapshot we cache is every page joined —
+            // and deleting or editing an older release leaves page 1 byte-identical
+            // while pages 2+ change. A later `304` would then "prove" the aggregate
+            // was current when it was not. Storing `None` for a multi-page list
+            // makes the next fetch unconditional, which is always correct.
+            fresh_etag = if next.is_none() {
+                parse_etag(resp.headers())
+            } else {
+                None
+            };
         }
 
         let page: Vec<Release> = resp
@@ -136,13 +208,20 @@ pub async fn fetch_releases(owner: &str, repo: &str) -> Result<Vec<Release>, Fet
             .map_err(|e| FetchError::Other(format!("release list parse: {e}")))?;
         all.extend(page);
 
+        first_page = false;
         match next {
             Some(n) => url = n,
             None => break,
         }
     }
 
-    Ok(all)
+    // Past page 1 the stored ETag would no longer describe what we hold, so a
+    // multi-page result deliberately keeps only page 1's validator — which is
+    // exactly the one the next conditional request will send.
+    Ok(FetchOutcome::Fresh {
+        releases: all,
+        etag: fresh_etag,
+    })
 }
 
 /// One GitHub API response classified for the rate-limit net.
@@ -189,6 +268,13 @@ fn parse_header<T: std::str::FromStr>(headers: &HeaderMap, name: &str) -> Option
     headers.get(name)?.to_str().ok()?.trim().parse().ok()
 }
 
+/// Copy the response `ETag` verbatim. GitHub's releases endpoint returns a **weak**
+/// validator (`W/"…"`); `If-None-Match` must echo the received value byte-for-byte,
+/// so this deliberately does no unquoting or `W/` stripping.
+fn parse_etag(headers: &HeaderMap) -> Option<String> {
+    Some(headers.get(reqwest::header::ETAG)?.to_str().ok()?.to_string())
+}
+
 /// Extract the `rel="next"` URL from a GitHub `Link` header, if present.
 fn parse_link_next(headers: &HeaderMap) -> Option<String> {
     let link = headers.get(reqwest::header::LINK)?.to_str().ok()?;
@@ -226,6 +312,23 @@ mod tests {
         assert_eq!(parse_header::<u32>(&h, "x-ratelimit-remaining"), Some(37));
         assert_eq!(parse_header::<i64>(&h, "x-ratelimit-reset"), Some(1_700_000_000));
         assert_eq!(parse_header::<u32>(&h, "x-ratelimit-used"), None);
+    }
+
+    /// The validator must survive a round-trip verbatim: GitHub's releases
+    /// endpoint sends a weak ETag, and stripping the `W/` or the quotes would
+    /// make the next `If-None-Match` fail to match, silently costing a request.
+    #[test]
+    fn etag_is_copied_verbatim() {
+        let weak = headers(&[("etag", "W/\"63b5d2306cb3c2a1fd3f17cd9dac28b9\"")]);
+        assert_eq!(
+            parse_etag(&weak).as_deref(),
+            Some("W/\"63b5d2306cb3c2a1fd3f17cd9dac28b9\"")
+        );
+        // Strong validators pass through untouched too.
+        let strong = headers(&[("etag", "\"abc123\"")]);
+        assert_eq!(parse_etag(&strong).as_deref(), Some("\"abc123\""));
+        // Absent header -> nothing to store; the next fetch is unconditional.
+        assert_eq!(parse_etag(&HeaderMap::new()), None);
     }
 
     #[test]

@@ -109,6 +109,59 @@ pub fn ratelimit_path() -> io::Result<PathBuf> {
     Ok(data_dir()?.join("ratelimits.json"))
 }
 
+/// `<data_dir>/releases-cache.json` — the shared GitHub Releases list plus the
+/// `ETag` that lets the next launch revalidate it for free. See
+/// `updater/release_cache.rs`.
+pub fn releases_cache_path() -> io::Result<PathBuf> {
+    Ok(data_dir()?.join("releases-cache.json"))
+}
+
+/// `<data_dir>/changelogs/` — the refreshed `GameChangeLog.md` /
+/// `LauncherChangeLog.md` plus their `etags.json` sidecar. Stored as plain
+/// markdown rather than packed into JSON so the cache stays readable on disk.
+/// See `changelog/fetch.rs`.
+///
+/// Resolves the path **without creating it**, because the boot-time read runs
+/// inside `AppState::default()` and a read should not have a filesystem side
+/// effect. [`changelog_dir_created`] is the write-side variant.
+pub fn changelog_dir() -> io::Result<PathBuf> {
+    Ok(data_dir()?.join("changelogs"))
+}
+
+/// [`changelog_dir`], created if absent. Used only on the persist path.
+pub fn changelog_dir_created() -> io::Result<PathBuf> {
+    let dir = changelog_dir()?;
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// Atomic write: a uuid-suffixed sibling tmp, then rename over `path`.
+///
+/// The unique tmp name avoids clobbering between concurrent writers (the boot
+/// fan-out has several), and rename is atomic on POSIX and NTFS, so a torn file
+/// is never observable by a reader. Shared by every small state file under
+/// [`data_dir`] — `ratelimits.json` and `releases-cache.json` — so they cannot
+/// drift apart on durability.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+
+    // Append rather than replace the extension, so `ratelimits.json` stages as
+    // `ratelimits.json.tmp-<uuid>` and the helper stays agnostic about suffixes.
+    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(format!(".tmp-{}", uuid::Uuid::new_v4()));
+    let tmp = path.with_file_name(tmp_name);
+    {
+        let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+        f.write_all(bytes).map_err(|e| e.to_string())?;
+        f.sync_all().map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        // Best-effort cleanup of the orphaned tmp on a failed rename.
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })
+}
+
 /// `<data_dir>/saves/<channel>/`. Created on first call. Reserved for the
 /// existing `Settings → Game Channel Management → Game Save` button row once
 /// it gets a real implementation; exposing the path here is in scope so

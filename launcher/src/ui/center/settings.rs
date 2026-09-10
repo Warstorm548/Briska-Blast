@@ -36,6 +36,7 @@ fn tab_bar(active: SettingsTab) -> Element<'static, Message> {
         tab_button("Game Channel Management", SettingsTab::ChannelManagement, active),
         tab_button("Game Graphics Settings", SettingsTab::Graphics, active),
         tab_button("Launcher Options", SettingsTab::LauncherOptions, active),
+        tab_button("Launcher Changelog", SettingsTab::LauncherChangelog, active),
     ]
     .spacing(ZONE_GAP)
     .into()
@@ -89,7 +90,38 @@ fn body<'a>(state: &'a AppState, active: SettingsTab) -> Element<'a, Message> {
             .padding(24)
             .into(),
         SettingsTab::LauncherOptions => super::launcher_update::content(state),
+        // Launcher history, anchored at the running version. No channel filter:
+        // there is one launcher, not one per channel. Like the Graphics arm
+        // above, nothing here may use a Fill height — the caller's `scroll_area`
+        // owns the scroll axis.
+        SettingsTab::LauncherChangelog => launcher_changelog_section(state),
     }
+}
+
+/// The Launcher Changelog tab body: the last [`WINDOW`] launcher releases at or
+/// below the running version, newest first.
+///
+/// [`WINDOW`]: crate::app::handlers::changelog::WINDOW
+fn launcher_changelog_section(state: &AppState) -> Element<'_, Message> {
+    use crate::app::handlers::changelog as handler;
+    use crate::changelog::Kind;
+
+    let running = semver::Version::parse(env!("CARGO_PKG_VERSION"))
+        .unwrap_or_else(|_| semver::Version::new(0, 0, 0));
+    let entries = crate::changelog::anchored(
+        state.changelog.entries(Kind::Launcher),
+        None,
+        &running,
+        handler::WINDOW,
+    );
+    let open = handler::open_set(state, Kind::Launcher, &entries);
+
+    column![
+        text(format!("Running: v{running}")).size(13),
+        super::changelog::view(Kind::Launcher, &entries, &open, "No changelog entries yet."),
+    ]
+    .spacing(ZONE_GAP * 2)
+    .into()
 }
 
 fn channels_section(state: &AppState) -> Element<'_, Message> {

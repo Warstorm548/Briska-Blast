@@ -95,9 +95,6 @@ pub fn content(state: &AppState) -> Element<'_, Message> {
         text("Cannot update while the game is running.")
             .size(14)
             .into()
-    } else if !state.launcher_release_notes.is_empty() {
-        let preview: String = state.launcher_release_notes.chars().take(220).collect();
-        text(preview).size(13).into()
     } else {
         Space::new().height(Length::Fixed(1.0)).into()
     };
@@ -107,8 +104,49 @@ pub fn content(state: &AppState) -> Element<'_, Message> {
         availability_cell,
         buttons,
         status_line,
+        // Below the button row, matching the game update prompt.
+        incoming_changelog(state, current),
     ]
     .spacing(ZONE_GAP * 3)
+    .align_x(Alignment::Center)
+    .into()
+}
+
+/// The launcher entries between the running version and the one on offer, so
+/// the user reads what the update contains before starting it.
+///
+/// No channel filter — there is one launcher, and `check_for_update` already
+/// ranks every `launcher-v*` tag together regardless of suffix.
+fn incoming_changelog<'a>(state: &'a AppState, current: &str) -> Element<'a, Message> {
+    use crate::app::handlers::changelog as handler;
+    use crate::changelog::Kind;
+
+    if !state.launcher_update_available || state.launcher_available_version.is_empty() {
+        return Space::new().height(Length::Fixed(1.0)).into();
+    }
+    let Ok(target) = semver::Version::parse(&state.launcher_available_version) else {
+        return Space::new().height(Length::Fixed(1.0)).into();
+    };
+    let running = semver::Version::parse(current).ok();
+
+    let entries = crate::changelog::range(
+        state.changelog.entries(Kind::Launcher),
+        None,
+        running.as_ref(),
+        &target,
+        handler::WINDOW,
+    );
+    if entries.is_empty() {
+        return Space::new().height(Length::Fixed(1.0)).into();
+    }
+    let open = handler::open_set(state, Kind::Launcher, &entries);
+
+    column![
+        text(format!("What's new in v{target}")).size(16),
+        container(super::changelog::view(Kind::Launcher, &entries, &open, ""))
+            .width(Length::Fixed(420.0)),
+    ]
+    .spacing(ZONE_GAP * 2)
     .align_x(Alignment::Center)
     .into()
 }

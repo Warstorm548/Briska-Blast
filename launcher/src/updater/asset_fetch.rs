@@ -4,7 +4,7 @@
 //! `self_update` only knows how to swap a bare binary matched by target
 //! triple; the bundle/AppImage paths instead need "the asset with *this name
 //! suffix* from the `launcher-v<version>` release, streamed to *this* path".
-//! Discovery reuses `github_client::fetch_releases` and the download mirrors
+//! Discovery reuses `release_cache::releases` and the download mirrors
 //! the game installer's pattern (`branches/installer/download.rs`): explicit
 //! `Accept: application/octet-stream` (the API returns JSON metadata without
 //! it), the rate-limit gate + `inspect` on the response, and a magic-byte
@@ -38,16 +38,21 @@ pub(super) struct ReleaseAsset {
 }
 
 /// Find the asset whose name ends with `suffix` on the `launcher-v<version>`
-/// release. Goes through `github_client` so the rate-limit safety net sees
-/// the request.
+/// release. Goes through `release_cache` so the rate-limit safety net sees the
+/// request and the list is shared with every other consumer.
+///
+/// Revalidates rather than trusting a warm snapshot: the URL this returns is
+/// downloaded and swapped over the running launcher, so it must describe the
+/// release as it exists right now.
 pub(super) async fn find_release_asset(
     version: &str,
     suffix: &str,
 ) -> Result<ReleaseAsset, String> {
     let tag = format!("{}{version}", super::github::TAG_PREFIX);
-    let releases = github_client::fetch_releases(
+    let releases = super::release_cache::releases(
         super::github::REPO_OWNER,
         super::github::REPO_NAME,
+        super::release_cache::Freshness::Revalidate,
     )
     .await
     .map_err(|e| e.to_user_string())?;

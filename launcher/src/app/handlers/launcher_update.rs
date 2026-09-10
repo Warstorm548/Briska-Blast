@@ -2,6 +2,7 @@
 //! rename-trick binary swap.
 
 use crate::app::{AppState, Message};
+use crate::updater::release_cache::Freshness;
 use crate::updater::{self, UpdateCheckOutcome};
 use iced::Task;
 
@@ -18,7 +19,13 @@ pub(crate) fn check_for_updates_pressed(state: &mut AppState) -> Task<Message> {
         }
         state.update_check_in_flight = true;
         state.last_self_update_error = None;
-        return Task::perform(updater::check_for_update(), Message::LauncherUpdateCheckDone);
+        // Revalidate: the user explicitly asked, so this must reach GitHub even
+        // with a warm snapshot. It spends a request either way; an unchanged repo
+        // just answers `304` without re-sending the body.
+        return Task::perform(
+            updater::check_for_update(Freshness::Revalidate),
+            Message::LauncherUpdateCheckDone,
+        );
     }
     Task::none()
 }
@@ -32,12 +39,19 @@ pub(crate) fn update_check_done(
         Ok(UpdateCheckOutcome::Available { version, notes }) => {
             state.launcher_update_available = true;
             state.launcher_available_version = version;
-            state.launcher_release_notes = notes;
+            // The release body is no longer displayed — the Launcher Update
+            // view now renders the changelog entries between the running and
+            // target versions, which is real content. Launcher releases publish
+            // an empty body anyway, so the old preview never showed anything.
+            let _ = notes;
+            // Re-seed the accordion onto the newly known target version.
+            state
+                .changelog_open
+                .remove(&crate::changelog::Kind::Launcher);
         }
         Ok(UpdateCheckOutcome::UpToDate) => {
             state.launcher_update_available = false;
             state.launcher_available_version.clear();
-            state.launcher_release_notes.clear();
         }
         Err(e) => {
             tracing::warn!(error = %e, "launcher update check failed");

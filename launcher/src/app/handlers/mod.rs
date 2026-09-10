@@ -4,6 +4,7 @@
 //! `recompute_branch_updates_available`, `launch_game`, …) live in `super`
 //! and are called via `crate::app::…`.
 
+pub(crate) mod changelog;
 pub(crate) mod firewall;
 pub(crate) mod identity;
 pub(crate) mod install;

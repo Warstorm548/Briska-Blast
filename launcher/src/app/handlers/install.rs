@@ -5,6 +5,7 @@
 use crate::app::{recompute_branch_updates_available, AppState, CenterView, Message};
 use crate::channel::Channel;
 use crate::identity;
+use crate::updater::release_cache::Freshness;
 use futures_util::StreamExt;
 use iced::Task;
 
@@ -79,6 +80,9 @@ pub(crate) fn update_pressed(state: &mut AppState) -> Task<Message> {
             }
         };
     tracing::debug!(?channel, action = %action_label, "opening install prompt");
+    // The prompt lists entries *newer* than the installed version, a disjoint
+    // window from the changelog pane's. Re-seed so its top entry opens.
+    state.changelog_open.remove(&crate::changelog::Kind::Game);
     state.center_view = CenterView::InstallPrompt {
         channel,
         install_root,
@@ -89,7 +93,9 @@ pub(crate) fn update_pressed(state: &mut AppState) -> Task<Message> {
     // only when the cache is empty (rare — button is disabled then).
     if available_str.is_none() {
         return Task::perform(
-            crate::updater::branches::latest_release(channel),
+            // Cached: this only fills a display field on the prompt. The
+            // pre-download re-resolve in `install_confirmed` revalidates.
+            crate::updater::branches::latest_release(channel, Freshness::Cached),
             move |result| Message::InstallPromptLatestFetched { channel, result },
         );
     }
@@ -251,7 +257,10 @@ pub(crate) fn install_confirmed(state: &mut AppState) -> Task<Message> {
     // vanishing or drifting version between the check and now. Then hand off to
     // the shared streamed-download helper (also used by Repair).
     let resolve = async move {
-        let fresh = crate::updater::branches::latest_release(channel).await?;
+        // Revalidate: this is the drift guard between the check and the actual
+        // download, so trusting a warm snapshot would defeat its entire purpose.
+        let fresh =
+            crate::updater::branches::latest_release(channel, Freshness::Revalidate).await?;
         let Some(release) = fresh else {
             return Err("release disappeared from GitHub between check and install".to_string());
         };
@@ -535,10 +544,12 @@ pub(crate) fn latest_release_fetched(
     }
     match result {
         Ok(Some(release)) => {
+            state.available_notes.insert(channel, release.body);
             state.available_versions.insert(channel, release.version);
         }
         Ok(None) => {
             state.available_versions.remove(&channel);
+            state.available_notes.remove(&channel);
             tracing::info!(?channel, "no game release published for this channel yet");
         }
         Err(e) => {
@@ -588,7 +599,10 @@ pub(crate) fn check_channel_update_pressed(
         .channel_update_status
         .insert(channel, crate::app::ChannelUpdateStatus::Checking);
     Task::perform(
-        crate::updater::branches::latest_release(channel),
+        // Revalidate: the user pressed the button, so the verdict box must
+        // reflect a real check. It spends a request either way; an unchanged
+        // repo just answers `304` without re-sending the body.
+        crate::updater::branches::latest_release(channel, Freshness::Revalidate),
         move |result| Message::ChannelUpdateCheckDone { channel, result },
     )
 }
@@ -620,12 +634,14 @@ pub(crate) fn channel_update_check_done(
                 installed.as_ref(),
                 Some(&release.version),
             );
+            state.available_notes.insert(channel, release.body);
             state.available_versions.insert(channel, release.version);
             status
         }
         Ok(None) => {
             // No release published for this channel — nothing newer than disk.
             state.available_versions.remove(&channel);
+            state.available_notes.remove(&channel);
             tracing::info!(?channel, "no game release published for this channel yet");
             crate::app::ChannelUpdateStatus::from_check(installed.as_ref(), None)
         }
