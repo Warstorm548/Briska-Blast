@@ -19,6 +19,7 @@ use crate::server_api;
 use crate::ui;
 use crate::ui::theme::{BAR_HEIGHT, ZONE_GAP};
 use crate::updater;
+use crate::updater::release_cache::Freshness;
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Task, Theme};
 use shared::protocol::messages::RegisterRequest;
@@ -63,7 +64,10 @@ pub(crate) fn latest_release_tasks(state: &AppState) -> Vec<Task<Message>> {
         .copied()
         .map(|channel| {
             Task::perform(
-                crate::updater::branches::latest_release(channel),
+                // Cached: every channel here wants the same list within
+                // milliseconds, so `release_cache` collapses the whole fan-out
+                // (plus the self-update check below) into one request.
+                crate::updater::branches::latest_release(channel, Freshness::Cached),
                 move |result| Message::LatestReleaseFetched { channel, result },
             )
         })
@@ -132,7 +136,7 @@ pub fn boot() -> (AppState, Task<Message>) {
     }
 
     let mut tasks: Vec<Task<Message>> = vec![Task::perform(
-        updater::check_for_update(),
+        updater::check_for_update(Freshness::Cached),
         Message::LauncherUpdateCheckDone,
     )];
 

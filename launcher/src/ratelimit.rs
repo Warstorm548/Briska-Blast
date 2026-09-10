@@ -25,7 +25,6 @@
 
 use crate::paths;
 use serde::{Deserialize, Serialize};
-use std::io::Write;
 use std::path::Path;
 
 /// Clock-skew pad added to GitHub's reset before we resume (seconds). The reset
@@ -182,23 +181,13 @@ fn current_blocked_until() -> Option<i64> {
     load_at(&path)?.blocked_until
 }
 
-/// Atomic write: a uuid-suffixed sibling tmp then rename. The unique tmp name
-/// avoids clobbering between the concurrent boot fan-out writers (one self-update
-/// check + one per visible channel all land here). Rename is atomic on POSIX and
-/// NTFS, so a torn file is never observable.
+/// Atomic write via the shared [`paths::write_atomic`] helper — a uuid-suffixed
+/// sibling tmp then rename, so a torn file is never observable and the concurrent
+/// boot fan-out writers (one self-update check + one per visible channel) can't
+/// clobber each other's staging file.
 fn save_at(path: &Path, state: &RateLimitState) -> Result<(), String> {
-    let tmp = path.with_extension(format!("json.tmp-{}", uuid::Uuid::new_v4()));
     let json = serde_json::to_vec_pretty(state).map_err(|e| e.to_string())?;
-    {
-        let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
-        f.write_all(&json).map_err(|e| e.to_string())?;
-        f.sync_all().map_err(|e| e.to_string())?;
-    }
-    std::fs::rename(&tmp, path).map_err(|e| {
-        // Best-effort cleanup of the orphaned tmp on a failed rename.
-        let _ = std::fs::remove_file(&tmp);
-        e.to_string()
-    })
+    paths::write_atomic(path, &json)
 }
 
 #[cfg(test)]

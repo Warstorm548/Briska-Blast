@@ -5,6 +5,7 @@
 use crate::app::{recompute_branch_updates_available, AppState, CenterView, Message};
 use crate::channel::Channel;
 use crate::identity;
+use crate::updater::release_cache::Freshness;
 use futures_util::StreamExt;
 use iced::Task;
 
@@ -89,7 +90,9 @@ pub(crate) fn update_pressed(state: &mut AppState) -> Task<Message> {
     // only when the cache is empty (rare — button is disabled then).
     if available_str.is_none() {
         return Task::perform(
-            crate::updater::branches::latest_release(channel),
+            // Cached: this only fills a display field on the prompt. The
+            // pre-download re-resolve in `install_confirmed` revalidates.
+            crate::updater::branches::latest_release(channel, Freshness::Cached),
             move |result| Message::InstallPromptLatestFetched { channel, result },
         );
     }
@@ -251,7 +254,10 @@ pub(crate) fn install_confirmed(state: &mut AppState) -> Task<Message> {
     // vanishing or drifting version between the check and now. Then hand off to
     // the shared streamed-download helper (also used by Repair).
     let resolve = async move {
-        let fresh = crate::updater::branches::latest_release(channel).await?;
+        // Revalidate: this is the drift guard between the check and the actual
+        // download, so trusting a warm snapshot would defeat its entire purpose.
+        let fresh =
+            crate::updater::branches::latest_release(channel, Freshness::Revalidate).await?;
         let Some(release) = fresh else {
             return Err("release disappeared from GitHub between check and install".to_string());
         };
@@ -588,7 +594,10 @@ pub(crate) fn check_channel_update_pressed(
         .channel_update_status
         .insert(channel, crate::app::ChannelUpdateStatus::Checking);
     Task::perform(
-        crate::updater::branches::latest_release(channel),
+        // Revalidate: the user pressed the button, so the verdict box must
+        // reflect a real check. Normally still free — an unchanged repo
+        // answers `304`, which costs nothing against the rate limit.
+        crate::updater::branches::latest_release(channel, Freshness::Revalidate),
         move |result| Message::ChannelUpdateCheckDone { channel, result },
     )
 }

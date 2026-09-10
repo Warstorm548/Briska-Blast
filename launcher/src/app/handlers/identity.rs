@@ -50,7 +50,13 @@ pub(crate) fn register_done(
                     // visible_channels was Stable+Ea only).
                     recompute_branch_updates_available(state);
                     return Task::perform(
-                        crate::updater::branches::latest_release(Channel::Dev),
+                        // Cached: this lands moments after boot's fan-out, so
+                        // it reads the snapshot that already covers Dev rather
+                        // than spending a second request.
+                        crate::updater::branches::latest_release(
+                            Channel::Dev,
+                            crate::updater::release_cache::Freshness::Cached,
+                        ),
                         |result| Message::LatestReleaseFetched {
                             channel: Channel::Dev,
                             result,

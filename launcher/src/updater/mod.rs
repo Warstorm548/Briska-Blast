@@ -36,3 +36,8 @@ mod macos_bundle;
 /// back-off safety net). Private to `updater`; reachable from `branches::github`
 /// (a descendant module) and `github` (a sibling).
 mod github_client;
+/// Shared, conditional release list: one fetch per launch across the self-update
+/// check and every channel, revalidated with `If-None-Match` so an unchanged repo
+/// costs nothing against the rate limit. Every releases consumer goes through here
+/// rather than calling `github_client` directly.
+pub mod release_cache;

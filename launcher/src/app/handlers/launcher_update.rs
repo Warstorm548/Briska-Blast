@@ -2,6 +2,7 @@
 //! rename-trick binary swap.
 
 use crate::app::{AppState, Message};
+use crate::updater::release_cache::Freshness;
 use crate::updater::{self, UpdateCheckOutcome};
 use iced::Task;
 
@@ -18,7 +19,13 @@ pub(crate) fn check_for_updates_pressed(state: &mut AppState) -> Task<Message> {
         }
         state.update_check_in_flight = true;
         state.last_self_update_error = None;
-        return Task::perform(updater::check_for_update(), Message::LauncherUpdateCheckDone);
+        // Revalidate: the user explicitly asked, so this must reach GitHub even
+        // with a warm snapshot. It is normally still free — an unchanged repo
+        // answers `304`, which does not count against the rate limit.
+        return Task::perform(
+            updater::check_for_update(Freshness::Revalidate),
+            Message::LauncherUpdateCheckDone,
+        );
     }
     Task::none()
 }

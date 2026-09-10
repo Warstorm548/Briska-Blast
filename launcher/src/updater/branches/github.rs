@@ -10,7 +10,7 @@
 //! users must not even reach the GitHub API for the dev channel.
 
 use crate::channel::Channel;
-use crate::updater::github_client;
+use crate::updater::release_cache::{self, Freshness};
 use semver::Version;
 
 const REPO_OWNER: &str = "Warstorm548";
@@ -43,16 +43,22 @@ pub struct ReleaseAsset {
 /// Fetch the highest-version game release for `channel`. Returns `Ok(None)`
 /// when no matching release exists upstream yet (expected during pre-release
 /// development before the first `game-v*` tag is pushed).
-pub async fn latest_release(channel: Channel) -> Result<Option<GameRelease>, String> {
-    // Goes through `github_client` (our owned request) so the rate-limit safety
-    // net sees the status + headers; a closed gate or a confirmed `403`/`429`
-    // surfaces as the user-facing rate-limit message.
-    let releases = github_client::fetch_releases(REPO_OWNER, REPO_NAME)
+///
+/// Goes through `release_cache`, so the boot fan-out's per-channel calls share a
+/// single request and the rate-limit safety net still sees the status + headers.
+/// `freshness` is [`Freshness::Cached`] for the boot fan-out and the install
+/// prompt, and [`Freshness::Revalidate`] for a manual check or a pre-download
+/// re-resolve.
+pub async fn latest_release(
+    channel: Channel,
+    freshness: Freshness,
+) -> Result<Option<GameRelease>, String> {
+    let releases = release_cache::releases(REPO_OWNER, REPO_NAME, freshness)
         .await
         .map_err(|e| e.to_user_string())?;
 
     let mut best: Option<GameRelease> = None;
-    for r in releases {
+    for r in releases.iter() {
         let Some(stripped) = r.tag_name.strip_prefix(TAG_PREFIX) else {
             continue;
         };
@@ -63,16 +69,16 @@ pub async fn latest_release(channel: Channel) -> Result<Option<GameRelease>, Str
             best = Some(GameRelease {
                 version: v,
                 tag: r.tag_name.clone(),
-                body: r.body.unwrap_or_default(),
+                body: r.body.clone().unwrap_or_default(),
                 assets: r
                     .assets
-                    .into_iter()
+                    .iter()
                     // `Asset.url` is the GitHub REST API asset endpoint the
                     // installer downloads from (Accept: octet-stream) — same URL
                     // self_update handed us before.
                     .map(|a| ReleaseAsset {
-                        name: a.name,
-                        download_url: a.url,
+                        name: a.name.clone(),
+                        download_url: a.url.clone(),
                     })
                     .collect(),
             });
@@ -86,14 +92,17 @@ pub async fn latest_release(channel: Channel) -> Result<Option<GameRelease>, Str
 /// latest, so a "repair" never becomes a stealth update. Returns `Ok(None)`
 /// when no release with that exact version still exists for the channel (e.g.
 /// it was deleted from GitHub) so the caller can surface a clean message.
+/// Always revalidates: this resolves the asset URLs a Repair is about to
+/// download, so a stale cached entry could aim the reinstall at a release that
+/// has since been edited or removed.
 pub async fn release_for_version(
     channel: Channel,
     target: &Version,
 ) -> Result<Option<GameRelease>, String> {
-    let releases = github_client::fetch_releases(REPO_OWNER, REPO_NAME)
+    let releases = release_cache::releases(REPO_OWNER, REPO_NAME, Freshness::Revalidate)
         .await
         .map_err(|e| e.to_user_string())?;
-    for r in releases {
+    for r in releases.iter() {
         let Some(stripped) = r.tag_name.strip_prefix(TAG_PREFIX) else {
             continue;
         };
@@ -104,13 +113,13 @@ pub async fn release_for_version(
             return Ok(Some(GameRelease {
                 version: v,
                 tag: r.tag_name.clone(),
-                body: r.body.unwrap_or_default(),
+                body: r.body.clone().unwrap_or_default(),
                 assets: r
                     .assets
-                    .into_iter()
+                    .iter()
                     .map(|a| ReleaseAsset {
-                        name: a.name,
-                        download_url: a.url,
+                        name: a.name.clone(),
+                        download_url: a.url.clone(),
                     })
                     .collect(),
             }));
