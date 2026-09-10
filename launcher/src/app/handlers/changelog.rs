@@ -64,10 +64,11 @@ pub(crate) fn shipped_loaded(
     result: Result<BTreeMap<Channel, BTreeSet<Version>>, String>,
 ) -> Task<Message> {
     match result {
-        Ok(map) => state.changelog_shipped = map,
+        Ok(map) => state.changelog_shipped = Some(map),
         Err(e) => {
-            // Leaving the map empty means "no filter yet" rather than "nothing
-            // shipped", so the pane still renders — see `shipped_for`.
+            // Left as `None`, i.e. Pending: without the release list we cannot
+            // tell which versions reached this channel, and showing the file
+            // unfiltered would put dev-only entries in front of a Stable user.
             tracing::warn!(error = %e, "could not derive per-channel changelog versions");
         }
     }
@@ -85,7 +86,18 @@ pub(crate) fn toggled(state: &mut AppState, kind: Kind, version: Version) -> Tas
 /// Open a URL in the user's default browser. `open` is sync, so it runs on the
 /// blocking pool rather than stalling the UI thread — mirroring how the
 /// Settings folder buttons already call it.
+///
+/// **Only `http` and `https` are honoured.** Most of what reaches here is a link
+/// inside a rendered changelog entry, and that markdown is fetched from the
+/// network at runtime — so the URL is data the launcher did not author. Handing
+/// an arbitrary scheme to `open::that` delegates to the OS shell, where
+/// `file://`, a UNC path, or a registered protocol handler can launch something
+/// rather than browse to it. Anything else is dropped with a log line.
 pub(crate) fn open_url(url: String) -> Task<Message> {
+    if !is_browsable(&url) {
+        tracing::warn!(%url, "refusing to open url — only http/https are allowed");
+        return Task::none();
+    }
     Task::future(async move {
         let target = url.clone();
         let result = tokio::task::spawn_blocking(move || open::that(&target)).await;
@@ -98,16 +110,39 @@ pub(crate) fn open_url(url: String) -> Task<Message> {
     .discard()
 }
 
-/// The channel filter for `channel`, or `None` when it is not known yet.
+/// True only for an absolute `http`/`https` URL. Parsed with the same `url`
+/// crate `reqwest` already depends on, so scheme detection is not a string
+/// comparison that a crafted input could slip past.
+fn is_browsable(url: &str) -> bool {
+    reqwest::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
+}
+
+/// Whether the per-channel changelog filter is known yet.
 ///
-/// An absent or empty set means "not derived yet" and must read as *no filter*.
-/// Treating it as "nothing shipped" would blank the pane on every boot until
-/// the release list lands, which is the wrong failure direction for a viewer.
-pub(crate) fn shipped_for(state: &AppState, channel: Channel) -> Option<&BTreeSet<Version>> {
-    state
-        .changelog_shipped
-        .get(&channel)
-        .filter(|s| !s.is_empty())
+/// The two states must stay distinct. Treating "not loaded" as "no filter" would
+/// show the *unfiltered* changelog, and because one file covers every channel
+/// that means showing a Stable user entries that only ever shipped to dev. That
+/// is not hypothetical: the repo currently has dev-only game releases, so
+/// Stable's shipped set is legitimately empty.
+pub(crate) enum Filter<'a> {
+    /// The release list has not been read yet, or reading it failed. Callers
+    /// withhold game entries rather than showing them unfiltered.
+    Pending,
+    /// Derived. Filter against this set — an **empty** set correctly means "this
+    /// channel has no releases yet", and so hides every entry.
+    Ready(&'a BTreeSet<Version>),
+}
+
+/// The channel filter for `channel`.
+pub(crate) fn shipped_for(state: &AppState, channel: Channel) -> Filter<'_> {
+    /// A loaded map always carries every channel, but a missing entry is
+    /// treated as "no releases" rather than "no filter" — the safe direction.
+    static NONE_SHIPPED: std::sync::LazyLock<BTreeSet<Version>> =
+        std::sync::LazyLock::new(BTreeSet::new);
+    match state.changelog_shipped.as_ref() {
+        None => Filter::Pending,
+        Some(map) => Filter::Ready(map.get(&channel).unwrap_or(&NONE_SHIPPED)),
+    }
 }
 
 /// The set of expanded versions for `kind`, seeded so the newest visible entry
@@ -199,23 +234,84 @@ mod tests {
         assert!(open_set(&state, Kind::Game, &[]).is_empty());
     }
 
-    /// An undelivered or empty filter must read as "no filter", never as
-    /// "nothing shipped" — otherwise the pane blanks on every boot.
+    /// "Not loaded" and "loaded but this channel has shipped nothing" are
+    /// different answers. Collapsing them would drop the filter and show the
+    /// unfiltered file — which, with the repo's dev-only game releases, means
+    /// showing a Stable user entries that never reached Stable.
     #[test]
-    fn missing_or_empty_filter_reads_as_no_filter() {
+    fn pending_and_empty_shipped_sets_are_distinct() {
         let mut state = AppState::default();
-        assert!(shipped_for(&state, Channel::Stable).is_none());
+        // Nothing loaded yet.
+        assert!(matches!(
+            shipped_for(&state, Channel::Stable),
+            Filter::Pending
+        ));
 
-        state
-            .changelog_shipped
-            .insert(Channel::Stable, BTreeSet::new());
-        assert!(shipped_for(&state, Channel::Stable).is_none());
+        // Loaded, and this channel genuinely has no releases: a real filter
+        // that happens to match nothing, NOT an absent filter.
+        state.changelog_shipped = Some(BTreeMap::from([(Channel::Stable, BTreeSet::new())]));
+        let Filter::Ready(set) = shipped_for(&state, Channel::Stable) else {
+            panic!("a loaded empty set must be Ready, not Pending");
+        };
+        assert!(set.is_empty());
 
-        state.changelog_shipped.insert(
+        // Loaded with content.
+        state.changelog_shipped = Some(BTreeMap::from([(
             Channel::Stable,
             BTreeSet::from([Version::parse("1.0.0").unwrap()]),
-        );
-        assert!(shipped_for(&state, Channel::Stable).is_some());
+        )]));
+        let Filter::Ready(set) = shipped_for(&state, Channel::Stable) else {
+            panic!("a loaded non-empty set must be Ready");
+        };
+        assert_eq!(set.len(), 1);
+    }
+
+    /// A loaded map always carries every channel, but a missing entry must fall
+    /// to "nothing shipped" rather than "no filter" — the safe direction.
+    #[test]
+    fn missing_channel_in_a_loaded_map_filters_everything() {
+        let state = AppState {
+            changelog_shipped: Some(BTreeMap::new()),
+            ..Default::default()
+        };
+        let Filter::Ready(set) = shipped_for(&state, Channel::Dev) else {
+            panic!("a loaded map must be Ready even when the channel is absent");
+        };
+        assert!(set.is_empty());
+    }
+
+    /// Changelog markdown is fetched at runtime, so a link inside an entry is
+    /// untrusted input. Only real http/https URLs may reach the OS shell.
+    #[test]
+    fn only_http_and_https_urls_are_browsable() {
+        assert!(is_browsable("https://github.com/Warstorm548/Briska-Blast"));
+        assert!(is_browsable("http://example.test/notes"));
+
+        // Schemes that would make `open::that` launch rather than browse.
+        assert!(!is_browsable("file:///etc/passwd"));
+        assert!(!is_browsable("file://server/share/payload.exe"));
+        assert!(!is_browsable("javascript:alert(1)"));
+        assert!(!is_browsable("ms-msdt:/id"));
+        assert!(!is_browsable("data:text/html,<script>"));
+        // Not absolute URLs at all.
+        assert!(!is_browsable("\\\\server\\share"));
+        assert!(!is_browsable("/usr/bin/sh"));
+        assert!(!is_browsable("not a url"));
+        assert!(!is_browsable(""));
+        // Scheme matching is exact, not prefix-based.
+        assert!(!is_browsable("httpsx://example.test"));
+    }
+
+    /// A failed derivation must stay Pending, so callers withhold entries
+    /// instead of falling back to the unfiltered changelog.
+    #[test]
+    fn failed_shipped_load_stays_pending() {
+        let mut state = AppState::default();
+        let _ = shipped_loaded(&mut state, Err("offline".into()));
+        assert!(matches!(
+            shipped_for(&state, Channel::Stable),
+            Filter::Pending
+        ));
     }
 
     /// A refresh that lands a newer version must drop the seeded open set, so

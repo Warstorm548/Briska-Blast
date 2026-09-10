@@ -16,12 +16,17 @@
 //!   the request, the rest read the snapshot it just stored.
 //! * **Conditional revalidation.** The snapshot (and its `ETag`) is persisted to
 //!   `<data_dir>/releases-cache.json`, so a *cold* process starts warm and its very
-//!   first request already carries `If-None-Match`. GitHub answers `304` when
-//!   nothing changed, and **a 304 does not count against the rate limit**.
+//!   first request already carries `If-None-Match`. GitHub answers `304` with no
+//!   body when nothing changed.
 //!
-//! Net effect: a returning user whose repo has not changed spends **zero** counted
-//! requests on boot, and a manual "Check for Updates" press is likewise free while
-//! still being a real check.
+//! Net effect on the budget: a returning user's boot goes from **3 counted requests
+//! (Stable + EA) or 4 (Dev flagged) down to 1**. That saving comes from fetch-once.
+//!
+//! **The `ETag` saves bandwidth, not budget.** GitHub only exempts conditional
+//! requests from the rate limit for *authenticated* callers; a public client cannot
+//! ship a token, and measurement against the live API confirms `x-ratelimit-used`
+//! increments on an unauthenticated `304`. What it does buy is ~363 KB of JSON per
+//! revalidation collapsing to an empty body, which is still worth having.
 //!
 //! Fails soft in the same spirit as `crate::ratelimit`: a missing or corrupt cache
 //! file just means "no snapshot", never a broken update check.
@@ -48,8 +53,8 @@ pub enum Freshness {
     /// Always send a conditional request, even with a warm snapshot. Used where a
     /// stale answer would be wrong: a manual update check (the user explicitly
     /// asked), and anything that precedes a download (so an install can never be
-    /// aimed at a release that has moved). Usually still free — it normally
-    /// answers `304`.
+    /// aimed at a release that has moved). This always spends a request — the
+    /// conditional form only avoids re-downloading the body.
     Revalidate,
 }
 

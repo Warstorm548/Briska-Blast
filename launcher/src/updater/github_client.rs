@@ -14,8 +14,14 @@
 //! This module owns the *transport*; [`super::release_cache`] owns the sharing.
 //! Together they close out Part 4 of the design doc: the cache collapses the boot
 //! fan-out to a single call (fetch-once) and passes the stored `ETag` in here so
-//! an unchanged repo answers `304` — which GitHub does **not** count against the
-//! 60/hour budget.
+//! an unchanged repo answers `304` with no body.
+//!
+//! **A `304` still costs a request here.** GitHub exempts conditional requests
+//! from the rate limit only for *authenticated* callers; we are unauthenticated
+//! (a public client cannot ship a token), and measurement against the live API
+//! confirms `x-ratelimit-used` increments on an unauthenticated `304`. So the
+//! `ETag` buys **bandwidth** — ~363 KB of JSON down to an empty body — not
+//! budget. The budget saving comes entirely from fetch-once.
 //!
 //! `self_update` is still used elsewhere for the launcher's binary self-update
 //! swap and stale-artifact cleanup; only the *list fetch* is taken in-house.
@@ -96,7 +102,8 @@ pub enum FetchOutcome {
         etag: Option<String>,
     },
     /// GitHub answered `304 Not Modified` — the caller's cached list is still
-    /// current. **This response does not count against the rate limit.**
+    /// current, and no body was transferred. Still counts as one request against
+    /// the unauthenticated hourly limit (see the module docs).
     NotModified,
 }
 
@@ -108,7 +115,8 @@ pub enum FetchOutcome {
 /// When `if_none_match` is `Some`, the **first page only** is requested
 /// conditionally. That restriction is deliberate: an `ETag` identifies one page,
 /// and GitHub returns releases newest-first, so any newly published release
-/// necessarily changes page 1. A `304` there therefore proves the whole list is
+/// necessarily changes page 1. Combined with only storing a validator for
+/// single-page results, a `304` therefore proves the whole cached list is
 /// unchanged, while a `200` means we must re-read every page anyway.
 pub async fn fetch_releases(
     owner: &str,
@@ -164,11 +172,12 @@ pub async fn fetch_releases(
         }
 
         // Checked before `is_success` — a 304 is NOT a success status, so letting
-        // it fall through would report the free "nothing changed" answer as an
-        // HTTP error. Only reachable on the first page (we only send the header
-        // there), so the caller's whole cached list is still current.
+        // it fall through would report "nothing changed" as an HTTP error. Only
+        // reachable on the first page (we only send the header there), and only
+        // for a single-page list (see the ETag capture below), so the caller's
+        // whole cached list is still current.
         if status == reqwest::StatusCode::NOT_MODIFIED {
-            tracing::debug!("GitHub release list unchanged (304) — no rate-limit cost");
+            tracing::debug!("GitHub release list unchanged (304) — no body transferred");
             return Ok(FetchOutcome::NotModified);
         }
 
@@ -180,7 +189,17 @@ pub async fn fetch_releases(
         }
 
         if first_page {
-            fresh_etag = parse_etag(resp.headers());
+            // Keep the validator ONLY for a single-page result. It validates
+            // page 1 alone, but the snapshot we cache is every page joined —
+            // and deleting or editing an older release leaves page 1 byte-identical
+            // while pages 2+ change. A later `304` would then "prove" the aggregate
+            // was current when it was not. Storing `None` for a multi-page list
+            // makes the next fetch unconditional, which is always correct.
+            fresh_etag = if next.is_none() {
+                parse_etag(resp.headers())
+            } else {
+                None
+            };
         }
 
         let page: Vec<Release> = resp

@@ -192,13 +192,20 @@ fn incoming_changelog<'a>(
         .get(&channel)
         .and_then(|c| c.parsed_installed_version());
 
-    let entries = crate::changelog::range(
-        state.changelog.entries(Kind::Game),
-        handler::shipped_for(state, channel),
-        installed.as_ref(),
-        &target,
-        handler::WINDOW,
-    );
+    // Same rule as the channel pane: no filter yet means no entries, never the
+    // unfiltered file. An empty list here falls through to the release-body
+    // fallback below, which is authoritative for exactly this version and so
+    // carries no channel ambiguity — the better answer while the filter loads.
+    let entries = match handler::shipped_for(state, channel) {
+        handler::Filter::Ready(shipped) => crate::changelog::range(
+            state.changelog.entries(Kind::Game),
+            Some(shipped),
+            installed.as_ref(),
+            &target,
+            handler::WINDOW,
+        ),
+        handler::Filter::Pending => Vec::new(),
+    };
 
     let heading = if installed.is_some() {
         format!("What's new in v{target}")

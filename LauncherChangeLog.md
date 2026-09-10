@@ -47,13 +47,15 @@ that only ever shipped to dev.
   The self-update check and every visible channel each used to issue their own
   request for the identical list, so a returning user's boot cost 3 requests
   (Stable + EA) or 4 (Dev flagged) out of GitHub's unauthenticated 60-per-hour
-  budget, each pulling the same 363 KB. They now share a single snapshot.
+  budget, each pulling the same 363 KB. They now share a single snapshot, so a
+  boot costs **1 request** regardless of how many channels are visible.
 - **Update checks revalidate instead of re-downloading.** The snapshot and its
   `ETag` persist to `releases-cache.json`, so even a cold start sends
-  `If-None-Match` and an unchanged repo answers `304` — which GitHub does not
-  count against the limit. A returning user whose repo has not changed now spends
-  **zero** counted requests on boot, and a manual "Check for Updates" is likewise
-  free while still being a real check.
+  `If-None-Match` and an unchanged repo answers `304` with no body — roughly
+  363 KB of transfer saved per revalidation. Note that a `304` still **costs a
+  request**: GitHub only exempts conditional requests from the rate limit for
+  *authenticated* callers, and a public client cannot ship a token. The budget
+  saving comes from sharing the fetch, not from the `ETag`.
 - Anything that precedes a download (install, repair, the macOS/Linux self-update
   asset lookup) always revalidates, so an install can never be aimed at a release
   that has moved. On boot only, a failed fetch falls back to the cached list

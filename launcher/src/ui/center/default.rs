@@ -27,12 +27,25 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
         return placeholder();
     };
 
-    let entries = crate::changelog::anchored(
-        state.changelog.entries(Kind::Game),
-        handler::shipped_for(state, channel),
-        &installed,
-        handler::WINDOW,
-    );
+    // Until the per-channel filter is derived, show nothing rather than the
+    // unfiltered file — one changelog covers every channel, so unfiltered means
+    // putting dev-only entries in front of a Stable user.
+    let (entries, empty_note) = match handler::shipped_for(state, channel) {
+        handler::Filter::Ready(shipped) => (
+            crate::changelog::anchored(
+                state.changelog.entries(Kind::Game),
+                Some(shipped),
+                &installed,
+                handler::WINDOW,
+            ),
+            "No changelog entries published for this channel yet.",
+        ),
+        handler::Filter::Pending => (
+            Vec::new(),
+            "Loading release history\u{2026} (needs the GitHub release list to \
+             tell which versions shipped to this channel)",
+        ),
+    };
     let open = handler::open_set(state, Kind::Game, &entries);
 
     let header = column![
@@ -42,12 +55,7 @@ pub fn view(state: &AppState) -> Element<'_, Message> {
     .spacing(ZONE_GAP)
     .align_x(Alignment::Center);
 
-    let body = super::changelog::view(
-        Kind::Game,
-        &entries,
-        &open,
-        "No changelog entries for this channel yet.",
-    );
+    let body = super::changelog::view(Kind::Game, &entries, &open, empty_note);
 
     container(
         column![header, super::scroll_area(body)]

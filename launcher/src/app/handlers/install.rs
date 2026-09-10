@@ -600,8 +600,8 @@ pub(crate) fn check_channel_update_pressed(
         .insert(channel, crate::app::ChannelUpdateStatus::Checking);
     Task::perform(
         // Revalidate: the user pressed the button, so the verdict box must
-        // reflect a real check. Normally still free — an unchanged repo
-        // answers `304`, which costs nothing against the rate limit.
+        // reflect a real check. It spends a request either way; an unchanged
+        // repo just answers `304` without re-sending the body.
         crate::updater::branches::latest_release(channel, Freshness::Revalidate),
         move |result| Message::ChannelUpdateCheckDone { channel, result },
     )

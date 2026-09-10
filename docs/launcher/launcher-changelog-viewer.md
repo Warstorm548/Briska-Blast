@@ -55,10 +55,15 @@ good cache with it would be worse than staying stale.
 
 **These fetches do not touch the GitHub API rate limit.**
 `raw.githubusercontent.com` is a plain file CDN, separate from `api.github.com`;
-its responses carry no `x-ratelimit-*` headers at all. So unlike
+its responses carry no `x-ratelimit-*` headers at all. Verified by measurement:
+three raw changelog fetches between two probes of the releases endpoint left
+`x-ratelimit-used` incremented only by the probes themselves. So unlike
 `updater/release_cache.rs`, this module is deliberately **not** behind
 `crate::ratelimit`'s gate — gating it would make the changelog stale for no
-benefit. See
+benefit.
+
+Note the contrast with the REST API, where a conditional `304` **does** still
+cost a request for an unauthenticated caller. See
 [`../planning/launcher-github-ratelimit-safety-net.md`](../planning/launcher-github-ratelimit-safety-net.md).
 
 ### Why the `dev` branch
@@ -91,8 +96,26 @@ to a channel is derived from the shared release list
 hidden. So a Stable user never reads about a version that only ever existed on
 dev. This costs no request: it reads the snapshot `release_cache` already holds.
 
-An undelivered or empty filter reads as **no filter**, never as "nothing shipped"
-— otherwise the pane would blank on every boot until the release list landed.
+**"Not derived yet" and "derived, and this channel has nothing" are different
+states, and must stay that way.** Collapsing them into "no filter" would render
+the file *unfiltered*, which means showing a Stable user entries that only ever
+reached dev. That is a live case, not a hypothetical: the repo currently has
+dev-only game releases, so Stable's shipped set is legitimately empty.
+
+- Filter not derived yet, or its derivation failed → the channel pane withholds
+  entries and says so, and the update prompt falls back to the release body
+  (which is authoritative for exactly the version being installed, so it carries
+  no channel ambiguity).
+- Filter derived → apply it. An **empty** set correctly hides every entry.
+
+### Links are restricted to http/https
+
+A link inside a rendered entry is markdown the launcher fetched from the network,
+so it is data the launcher did not author. Every URL — both in-entry links and the
+"full changelog" button — is parsed and rejected unless its scheme is exactly
+`http` or `https`, because `open::that` hands anything else to the OS shell, where
+`file://`, a UNC path, or a registered protocol handler can launch rather than
+browse.
 
 ---
 

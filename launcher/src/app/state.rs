@@ -105,9 +105,15 @@ pub struct AppState {
     /// Base versions actually released per channel, derived from the shared
     /// release list. The changelog file is shared across channels and its
     /// headings carry no channel marker, so this is what keeps a Stable user
-    /// from reading about a version that only ever shipped to dev. Empty until
-    /// the boot task lands, which reads as "no filter yet".
-    pub changelog_shipped: BTreeMap<Channel, std::collections::BTreeSet<semver::Version>>,
+    /// from reading about a version that only ever shipped to dev.
+    ///
+    /// `None` until the boot task lands (or if it failed) — deliberately
+    /// distinct from a loaded map whose entry for a channel is **empty**, which
+    /// legitimately means "that channel has no releases yet". Conflating the two
+    /// would drop the filter and show the *unfiltered* changelog, which is a
+    /// live case: the repo currently has dev-only game releases, so Stable's set
+    /// is genuinely empty.
+    pub changelog_shipped: Option<BTreeMap<Channel, std::collections::BTreeSet<semver::Version>>>,
     /// GitHub release body for each channel's latest release, kept beside
     /// `available_versions`. Used only as the update prompt's fallback when the
     /// changelog has no section for the version being installed — which is what
@@ -200,7 +206,7 @@ impl Default for AppState {
             // paint always has something to show even with no network.
             changelog: crate::changelog::Store::load(),
             changelog_open: BTreeMap::new(),
-            changelog_shipped: BTreeMap::new(),
+            changelog_shipped: None,
             available_notes: BTreeMap::new(),
         }
     }
