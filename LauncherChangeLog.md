@@ -5,6 +5,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.21.0] — 2026-09-10
+
+**Changelogs now live in the launcher, and update checks stopped costing so much.**
+Two independent pieces of work that happen to share one dependency: the shared
+GitHub Releases list.
+
+### Added
+
+- **In-app changelogs.** The center pane is now the focused channel's game
+  changelog, anchored at the version that channel has **installed** — that entry
+  on top, the nine before it, nothing newer. Switching between Stable, EA and Dev
+  re-anchors to that channel's install. A channel with nothing installed keeps the
+  previous "no menu selected" placeholder. Entries render collapsed with the
+  newest one open, as real markdown rather than flattened text, and each pane
+  links out to the complete file on GitHub.
+- **What's in an update, before you take it.** The game update prompt now lists
+  every changelog entry between what you have and what you are about to install
+  (capped at ten, so a long skip stays readable), below the Cancel/Confirm row.
+  The Launcher Update view does the same for launcher releases.
+- **A Launcher Changelog tab** under Settings, showing the last ten launcher
+  releases at or below the running version.
+- **Release bodies now carry the changelog.** Both release workflows slice the
+  matching section out of `GameChangeLog.md` / `LauncherChangeLog.md` and publish
+  it as the release body. Previously launcher releases published nothing at all
+  and game releases published only an auto-generated commit list. The launcher
+  uses this as its fallback when its own changelog copy predates the release, and
+  it makes the GitHub Releases page readable.
+
+Changelog text comes from three sources in order: a background refresh from
+GitHub's raw file CDN at the `dev` branch, a disk cache of that refresh under
+`<data_dir>/changelogs/`, and a copy compiled into the binary. Raw file requests
+are served by different infrastructure from the REST API and spend none of the
+rate-limit budget below. Because one changelog file covers every channel, entries
+are filtered against the release tags so a Stable user never reads about a version
+that only ever shipped to dev.
+
+### Changed
+
+- **One shared GitHub Releases fetch per launch instead of one per consumer.**
+  The self-update check and every visible channel each used to issue their own
+  request for the identical list, so a returning user's boot cost 3 requests
+  (Stable + EA) or 4 (Dev flagged) out of GitHub's unauthenticated 60-per-hour
+  budget, each pulling the same 363 KB. They now share a single snapshot.
+- **Update checks revalidate instead of re-downloading.** The snapshot and its
+  `ETag` persist to `releases-cache.json`, so even a cold start sends
+  `If-None-Match` and an unchanged repo answers `304` — which GitHub does not
+  count against the limit. A returning user whose repo has not changed now spends
+  **zero** counted requests on boot, and a manual "Check for Updates" is likewise
+  free while still being a real check.
+- Anything that precedes a download (install, repair, the macOS/Linux self-update
+  asset lookup) always revalidates, so an install can never be aimed at a release
+  that has moved. On boot only, a failed fetch falls back to the cached list
+  rather than blanking the version UI over a brief network drop; a manual check
+  still reports the failure, and the rate-limit back-off behaviour is unchanged.
+
+### Removed
+
+- The Launcher Update view's 220-character release-notes preview, superseded by
+  the changelog block. It had never displayed anything, because launcher releases
+  published an empty body.
+
+---
+
 ## [0.20.1] — 2026-07-04
 
 Verification target for the 0.20.0 per-OS self-update work — **no functional changes**.

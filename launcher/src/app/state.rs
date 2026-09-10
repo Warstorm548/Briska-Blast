@@ -14,7 +14,6 @@ pub struct AppState {
     pub branch_updates_available: Vec<Channel>,
     pub launcher_update_available: bool,
     pub launcher_available_version: String,
-    pub launcher_release_notes: String,
     pub update_check_in_flight: bool,
     pub self_update_in_flight: bool,
     pub last_self_update_error: Option<String>,
@@ -94,6 +93,26 @@ pub struct AppState {
     /// switch (`nav::channel_picked`) drops completed verdicts so the box resets
     /// to the em-dash, but keeps any in-flight `Checking` sentinel.
     pub channel_update_status: BTreeMap<Channel, ChannelUpdateStatus>,
+    /// Parsed game + launcher changelogs. Seeded on boot from the disk cache or
+    /// the compiled-in copy (never a network read), then replaced in place when
+    /// the background refresh from GitHub's raw file CDN lands.
+    pub changelog: crate::changelog::Store,
+    /// Which changelog entries are expanded, per changelog. Seeded with the top
+    /// entry so a pane opens showing the newest body and the rest collapsed;
+    /// re-seeded when the focused channel changes (`nav::channel_picked`),
+    /// because the anchored list is then a different set of versions.
+    pub changelog_open: BTreeMap<crate::changelog::Kind, HashSet<semver::Version>>,
+    /// Base versions actually released per channel, derived from the shared
+    /// release list. The changelog file is shared across channels and its
+    /// headings carry no channel marker, so this is what keeps a Stable user
+    /// from reading about a version that only ever shipped to dev. Empty until
+    /// the boot task lands, which reads as "no filter yet".
+    pub changelog_shipped: BTreeMap<Channel, std::collections::BTreeSet<semver::Version>>,
+    /// GitHub release body for each channel's latest release, kept beside
+    /// `available_versions`. Used only as the update prompt's fallback when the
+    /// changelog has no section for the version being installed — which is what
+    /// happens when the local changelog copy predates the pending release.
+    pub available_notes: BTreeMap<Channel, String>,
 }
 
 /// Result of a manual per-channel update check. The check refreshes
@@ -157,7 +176,6 @@ impl Default for AppState {
             branch_updates_available: Vec::new(),
             launcher_update_available: false,
             launcher_available_version: String::new(),
-            launcher_release_notes: String::new(),
             update_check_in_flight: false,
             self_update_in_flight: false,
             last_self_update_error: None,
@@ -178,6 +196,12 @@ impl Default for AppState {
             firewall_status: BTreeMap::new(),
             firewall_prompt_dismissed: HashSet::new(),
             channel_update_status: BTreeMap::new(),
+            // Local-only load: disk cache or the compiled-in copy, so a first
+            // paint always has something to show even with no network.
+            changelog: crate::changelog::Store::load(),
+            changelog_open: BTreeMap::new(),
+            changelog_shipped: BTreeMap::new(),
+            available_notes: BTreeMap::new(),
         }
     }
 }

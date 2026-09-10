@@ -5,14 +5,19 @@
 //! dispatcher plus the shared helpers and lifecycle hooks (`boot`, `view`,
 //! `theme`, `title`).
 
-mod handlers;
+/// `pub(crate)` so the view layer can reuse the changelog handler's shared
+/// selection helpers (window size, channel filter, open-set seeding) rather
+/// than re-deriving that logic per surface.
+pub(crate) mod handlers;
 mod message;
 mod state;
 
 pub use message::{CenterView, Message, SettingsTab};
 pub use state::{AppState, ChannelUpdateStatus};
 
-use handlers::{firewall, identity, install, launcher_update, maintenance, nav, play};
+use handlers::{
+    changelog, firewall, identity, install, launcher_update, maintenance, nav, play,
+};
 
 use crate::channel::Channel;
 use crate::server_api;
@@ -151,6 +156,13 @@ pub fn boot() -> (AppState, Task<Message>) {
         Message::BootGameProbe,
     ));
 
+    // Changelog refresh + channel filter. Deliberately outside the
+    // awaiting_username gate below: the two file fetches hit GitHub's raw CDN
+    // (no rate-limit budget), and the filter reads the same release snapshot the
+    // self-update check above already pays for, so none of this adds a counted
+    // request or depends on identity.
+    tasks.extend(changelog::boot_tasks());
+
     if state.identity.username.trim().is_empty() {
         // Gate the entire identity flow behind the welcome screen so the
         // server's first record of this user carries their chosen name.
@@ -178,6 +190,16 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         Message::SettingsTabSelected(t) => nav::settings_tab_selected(state, t),
         Message::UsernameDraftChanged(s) => nav::username_draft_changed(state, s),
         Message::WelcomeDraftChanged(s) => nav::welcome_draft_changed(state, s),
+
+        // ---- changelog viewer ----
+        Message::ChangelogRefreshed { kind, result } => {
+            changelog::refreshed(state, kind, result)
+        }
+        Message::ChangelogToggled { kind, version } => {
+            changelog::toggled(state, kind, version)
+        }
+        Message::ChangelogShippedLoaded(result) => changelog::shipped_loaded(state, result),
+        Message::OpenUrl(url) => changelog::open_url(url),
 
         // ---- launcher self-update ----
         Message::CheckForUpdatesPressed => launcher_update::check_for_updates_pressed(state),

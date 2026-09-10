@@ -300,12 +300,58 @@ jobs:
       contents: write
 
     steps:
+      # Needed only to read LauncherChangeLog.md for the release body below.
+      # MUST run before download-artifact: checkout defaults to `clean: true`,
+      # which would wipe an already-downloaded artifacts/ directory.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
 
+      # Slice this version's section out of the changelog for the release body.
+      # The three build jobs each compute a version but declare no job-level
+      # `outputs:`, so it is re-derived here from the tag. Changelog headings are
+      # base versions, so the -ea.N / -dev.N suffix is stripped — same shape as
+      # release-server.yml's `sed 's/-.*//'`.
+      - name: Extract changelog section
+        run: |
+          set -uo pipefail
+          TAG="${GITHUB_REF_NAME#launcher-v}"
+          VERSION="${TAG%%-*}"
+          : > release-notes.md
+          if [ -f LauncherChangeLog.md ]; then
+            # index(...)==1 is an exact prefix test, so the dots in a version
+            # are never treated as regex wildcards.
+            awk -v ver="$VERSION" '
+              index($0, "## [" ver "]") == 1 { found = 1; next }
+              found && index($0, "## [") == 1 { exit }
+              found { buf[n++] = $0 }
+              END {
+                # Trim blank padding at both ends, plus the "---" rule that
+                # separates entries in the source file.
+                s = 0
+                while (s < n && buf[s] ~ /^[[:space:]]*$/) s++
+                while (n > s && buf[n-1] ~ /^[[:space:]]*$/) n--
+                if (n > s && buf[n-1] ~ /^[[:space:]]*-{3,}[[:space:]]*$/) n--
+                while (n > s && buf[n-1] ~ /^[[:space:]]*$/) n--
+                for (i = s; i < n; i++) print buf[i]
+              }
+            ' LauncherChangeLog.md > release-notes.md
+          fi
+          if [ -s release-notes.md ]; then
+            echo "Release body: $(wc -l < release-notes.md) lines for v$VERSION"
+          else
+            # A tag cut before its changelog entry was written must still
+            # publish — an empty body is exactly today's behaviour.
+            echo "::warning::No LauncherChangeLog.md section for $VERSION; publishing with an empty body"
+          fi
+
       - uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
           files: artifacts/**/*
+          body_path: release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

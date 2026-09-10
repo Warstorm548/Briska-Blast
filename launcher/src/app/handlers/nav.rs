@@ -25,6 +25,10 @@ pub(crate) fn channel_picked(state: &mut AppState, c: Channel) -> Task<Message> 
         state
             .channel_update_status
             .retain(|_, status| matches!(status, ChannelUpdateStatus::Checking));
+        // The changelog pane is anchored at the *new* channel's installed
+        // version, so its visible window is a different set of entries. Drop
+        // the seeded open set to re-seed on the new top entry.
+        state.changelog_open.remove(&crate::changelog::Kind::Game);
     }
     state.selected_channel = c;
     Task::none()
@@ -58,6 +62,9 @@ pub(crate) fn open_launcher_update(state: &mut AppState) -> Task<Message> {
 
 pub(crate) fn close_center_menu(state: &mut AppState) -> Task<Message> {
     state.center_view = CenterView::Default;
+    // Returning to the changelog pane, whose window differs from whatever the
+    // menu being closed was showing — re-seed so its top entry opens.
+    state.changelog_open.remove(&crate::changelog::Kind::Game);
     Task::none()
 }
 

@@ -402,17 +402,65 @@ jobs:
       contents: write
 
     steps:
+      # Needed only to read GameChangeLog.md for the release body below. Checks
+      # out the tagged revision, so the notes match what shipped.
+      # MUST run before download-artifact: checkout defaults to `clean: true`,
+      # which would wipe an already-downloaded artifacts/ directory.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       # No `name:` — download the artifact bundle from `build` (now carries
       # Linux + Windows + macOS, all cross-exported on the Linux runner).
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
 
+      # Slice this version's section out of the changelog and use it as the
+      # release body. The launcher reads release bodies as its offline fallback
+      # when its own changelog copy predates the release (see
+      # docs/launcher/launcher-changelog-viewer.md), and it makes the Releases
+      # page readable instead of a bare commit list.
+      - name: Extract changelog section
+        run: |
+          set -uo pipefail
+          VERSION='${{ needs.build.outputs.version }}'
+          : > release-notes.md
+          if [ -f GameChangeLog.md ]; then
+            # index(...)==1 is an exact prefix test, so the dots in a version
+            # are never treated as regex wildcards.
+            awk -v ver="$VERSION" '
+              index($0, "## [" ver "]") == 1 { found = 1; next }
+              found && index($0, "## [") == 1 { exit }
+              found { buf[n++] = $0 }
+              END {
+                # Trim blank padding at both ends, plus the "---" rule that
+                # separates entries in the source file.
+                s = 0
+                while (s < n && buf[s] ~ /^[[:space:]]*$/) s++
+                while (n > s && buf[n-1] ~ /^[[:space:]]*$/) n--
+                if (n > s && buf[n-1] ~ /^[[:space:]]*-{3,}[[:space:]]*$/) n--
+                while (n > s && buf[n-1] ~ /^[[:space:]]*$/) n--
+                for (i = s; i < n; i++) print buf[i]
+              }
+            ' GameChangeLog.md > release-notes.md
+          fi
+          if [ -s release-notes.md ]; then
+            echo "Release body: $(wc -l < release-notes.md) lines for v$VERSION"
+          else
+            # A tag cut before its changelog entry was written must still
+            # publish — an empty body is exactly today's behaviour.
+            echo "::warning::No GameChangeLog.md section for $VERSION; publishing with an empty body"
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
+          # Auto-generated notes are appended below an explicit body, so the
+          # curated changelog leads and the commit list follows.
           generate_release_notes: true
+          body_path: release-notes.md
           files: |
             artifacts/**/briskablast-client-*-linux.tar.gz
             artifacts/**/briskablast-client-*-windows.zip

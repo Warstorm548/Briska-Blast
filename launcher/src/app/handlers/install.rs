@@ -80,6 +80,9 @@ pub(crate) fn update_pressed(state: &mut AppState) -> Task<Message> {
             }
         };
     tracing::debug!(?channel, action = %action_label, "opening install prompt");
+    // The prompt lists entries *newer* than the installed version, a disjoint
+    // window from the changelog pane's. Re-seed so its top entry opens.
+    state.changelog_open.remove(&crate::changelog::Kind::Game);
     state.center_view = CenterView::InstallPrompt {
         channel,
         install_root,
@@ -541,10 +544,12 @@ pub(crate) fn latest_release_fetched(
     }
     match result {
         Ok(Some(release)) => {
+            state.available_notes.insert(channel, release.body);
             state.available_versions.insert(channel, release.version);
         }
         Ok(None) => {
             state.available_versions.remove(&channel);
+            state.available_notes.remove(&channel);
             tracing::info!(?channel, "no game release published for this channel yet");
         }
         Err(e) => {
@@ -629,12 +634,14 @@ pub(crate) fn channel_update_check_done(
                 installed.as_ref(),
                 Some(&release.version),
             );
+            state.available_notes.insert(channel, release.body);
             state.available_versions.insert(channel, release.version);
             status
         }
         Ok(None) => {
             // No release published for this channel — nothing newer than disk.
             state.available_versions.remove(&channel);
+            state.available_notes.remove(&channel);
             tracing::info!(?channel, "no game release published for this channel yet");
             crate::app::ChannelUpdateStatus::from_check(installed.as_ref(), None)
         }

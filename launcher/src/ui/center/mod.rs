@@ -6,6 +6,9 @@ use iced::widget::scrollable;
 use iced::{Element, Length};
 
 pub mod change_username;
+/// Shared changelog accordion, used by the default view, the install/update
+/// prompt, the Launcher Update view, and the Launcher Changelog settings tab.
+pub mod changelog;
 pub mod default;
 pub mod firewall_prompt;
 pub mod install_prompt;

@@ -13,6 +13,10 @@
 pub mod branches;
 pub use cleanup::cleanup_stale_update_artifacts;
 pub use github::{check_for_update, run_self_update, UpdateCheckOutcome};
+/// The release type `release_cache::releases` hands back. Re-exported rather
+/// than opening `github_client`, which stays private, so callers outside
+/// `updater` can name what that public signature already returns.
+pub use github_client::Release;
 
 /// Linux AppImage self-update. An AppImage runs from a read-only squashfs
 /// mount, so the in-place binary swap is impossible — the outer `.AppImage`

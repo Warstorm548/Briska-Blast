@@ -157,8 +157,83 @@ fn content<'a>(
         path_row,
         buttons,
         status_line,
+        // Below the Cancel/Confirm row on purpose: the user reads what they are
+        // about to get *after* seeing the action, and a long changelog never
+        // pushes the buttons off screen.
+        incoming_changelog(state, channel, available),
     ]
     .spacing(ZONE_GAP * 3)
+    .align_x(Alignment::Center)
+    .into()
+}
+
+/// Everything the user is about to receive: entries newer than what is
+/// installed, up to and including the version being installed, capped at the
+/// shared window so a long skip stays readable.
+///
+/// Falls back to the release's own GitHub body when the local changelog has no
+/// section for the target — which is what happens when the bundled or cached
+/// copy predates the pending release.
+fn incoming_changelog<'a>(
+    state: &'a AppState,
+    channel: Channel,
+    available: Option<&'a str>,
+) -> Element<'a, Message> {
+    use crate::app::handlers::changelog as handler;
+    use crate::changelog::Kind;
+
+    let Some(target) = available.and_then(|v| semver::Version::parse(v).ok()) else {
+        // Still resolving the latest release, or it failed — nothing to show.
+        return Space::new().height(Length::Fixed(1.0)).into();
+    };
+    let installed = state
+        .identity
+        .channels
+        .get(&channel)
+        .and_then(|c| c.parsed_installed_version());
+
+    let entries = crate::changelog::range(
+        state.changelog.entries(Kind::Game),
+        handler::shipped_for(state, channel),
+        installed.as_ref(),
+        &target,
+        handler::WINDOW,
+    );
+
+    let heading = if installed.is_some() {
+        format!("What's new in v{target}")
+    } else {
+        format!("What's in v{target}")
+    };
+
+    if entries.is_empty() {
+        let fallback = state
+            .available_notes
+            .get(&channel)
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
+        let Some(notes) = fallback else {
+            return Space::new().height(Length::Fixed(1.0)).into();
+        };
+        return column![
+            text(heading).size(16),
+            container(text(notes.to_string()).size(13))
+                .style(theme::bordered)
+                .padding(12)
+                .width(Length::Fixed(420.0)),
+        ]
+        .spacing(ZONE_GAP * 2)
+        .align_x(Alignment::Center)
+        .into();
+    }
+
+    let open = handler::open_set(state, Kind::Game, &entries);
+    column![
+        text(heading).size(16),
+        container(super::changelog::view(Kind::Game, &entries, &open, ""))
+            .width(Length::Fixed(420.0)),
+    ]
+    .spacing(ZONE_GAP * 2)
     .align_x(Alignment::Center)
     .into()
 }

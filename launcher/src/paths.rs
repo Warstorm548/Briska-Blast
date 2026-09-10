@@ -116,6 +116,16 @@ pub fn releases_cache_path() -> io::Result<PathBuf> {
     Ok(data_dir()?.join("releases-cache.json"))
 }
 
+/// `<data_dir>/changelogs/` — the refreshed `GameChangeLog.md` /
+/// `LauncherChangeLog.md` plus their `etags.json` sidecar. Created on first
+/// call. Stored as plain markdown rather than packed into JSON so the cache
+/// stays readable on disk. See `changelog/fetch.rs`.
+pub fn changelog_dir() -> io::Result<PathBuf> {
+    let dir = data_dir()?.join("changelogs");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 /// Atomic write: a uuid-suffixed sibling tmp, then rename over `path`.
 ///
 /// The unique tmp name avoids clobbering between concurrent writers (the boot

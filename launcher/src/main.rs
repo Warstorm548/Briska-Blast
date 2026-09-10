@@ -8,6 +8,9 @@
 
 mod app;
 mod channel;
+/// In-app game + launcher changelogs: bundled baseline, disk cache, and a
+/// conditional refresh from GitHub's raw file CDN (not the rate-limited API).
+mod changelog;
 mod firewall;
 mod game_launch;
 mod identity;

@@ -15,7 +15,7 @@ use semver::Version;
 
 const REPO_OWNER: &str = "Warstorm548";
 const REPO_NAME: &str = "Briska-Blast";
-const TAG_PREFIX: &str = "game-v";
+pub(crate) const TAG_PREFIX: &str = "game-v";
 
 /// One game release matching a channel filter.
 #[derive(Debug, Clone)]
@@ -92,6 +92,18 @@ pub async fn latest_release(
 /// latest, so a "repair" never becomes a stealth update. Returns `Ok(None)`
 /// when no release with that exact version still exists for the channel (e.g.
 /// it was deleted from GitHub) so the caller can surface a clean message.
+/// The whole shared release list, for callers that need more than "the latest
+/// one" — currently `crate::changelog`'s channel filter, which maps release tags
+/// back to the plain versions each channel actually shipped. Reads the same
+/// snapshot as [`latest_release`], so it costs no extra request.
+pub(crate) async fn all_releases(
+    freshness: Freshness,
+) -> Result<std::sync::Arc<Vec<crate::updater::Release>>, String> {
+    release_cache::releases(REPO_OWNER, REPO_NAME, freshness)
+        .await
+        .map_err(|e| e.to_user_string())
+}
+
 /// Always revalidates: this resolves the asset URLs a Repair is about to
 /// download, so a stale cached entry could aim the reinstall at a release that
 /// has since been edited or removed.
@@ -138,7 +150,7 @@ pub async fn release_for_version(
 /// `1.2.3-pre-dev.1`) doesn't accidentally classify a non-channel build as
 /// belonging to dev. The first identifier must equal the channel marker
 /// exactly; the second must be a non-empty numeric counter; nothing after.
-fn parse_for_channel(stripped: &str, channel: Channel) -> Option<Version> {
+pub(crate) fn parse_for_channel(stripped: &str, channel: Channel) -> Option<Version> {
     let v = Version::parse(stripped).ok()?;
     match channel {
         Channel::Stable => {
