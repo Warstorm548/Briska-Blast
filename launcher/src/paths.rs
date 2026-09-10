@@ -117,11 +117,20 @@ pub fn releases_cache_path() -> io::Result<PathBuf> {
 }
 
 /// `<data_dir>/changelogs/` — the refreshed `GameChangeLog.md` /
-/// `LauncherChangeLog.md` plus their `etags.json` sidecar. Created on first
-/// call. Stored as plain markdown rather than packed into JSON so the cache
-/// stays readable on disk. See `changelog/fetch.rs`.
+/// `LauncherChangeLog.md` plus their `etags.json` sidecar. Stored as plain
+/// markdown rather than packed into JSON so the cache stays readable on disk.
+/// See `changelog/fetch.rs`.
+///
+/// Resolves the path **without creating it**, because the boot-time read runs
+/// inside `AppState::default()` and a read should not have a filesystem side
+/// effect. [`changelog_dir_created`] is the write-side variant.
 pub fn changelog_dir() -> io::Result<PathBuf> {
-    let dir = data_dir()?.join("changelogs");
+    Ok(data_dir()?.join("changelogs"))
+}
+
+/// [`changelog_dir`], created if absent. Used only on the persist path.
+pub fn changelog_dir_created() -> io::Result<PathBuf> {
+    let dir = changelog_dir()?;
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }

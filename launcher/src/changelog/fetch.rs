@@ -88,7 +88,7 @@ pub fn read_etag(kind: Kind) -> Option<String> {
 /// Store the refreshed text and its validator. Best-effort: a write failure is
 /// logged and ignored, costing only a re-fetch next launch.
 pub fn persist(kind: Kind, text: &str, etag: Option<&str>) {
-    let dir = match paths::changelog_dir() {
+    let dir = match paths::changelog_dir_created() {
         Ok(d) => d,
         Err(e) => {
             tracing::warn!(error = %e, "changelog dir unavailable; skipping persist");
