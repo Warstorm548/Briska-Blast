@@ -30,7 +30,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Server foundation | ✓ Complete (current v0.36.1 — see `ServerChangeLog.md`) |
 | Shared crate | ✓ Complete (v0.7.1 — see `SharedChangeLog.md`) |
 | Game client | In progress (v0.35.1 — see `GameChangeLog.md`) |
-| Launcher | In progress (v0.21.0 — see `LauncherChangeLog.md`) |
+| Launcher | In progress (v0.22.0 — see `LauncherChangeLog.md`) |
 
 **Build order:** Server → Game → Launcher (each depends on the previous).
 
@@ -51,6 +51,7 @@ Packages: `client`, `launcher`, `server`, `shared`, `tools`.
 | Logging & observability (client per-run log files, WebRTC/handoff tracing, server per-session spans, `LOG_FORMAT`) | [`docs/architecture/observability-logging.md`](docs/architecture/observability-logging.md) |
 | Asset/sprite registry (sprite lookup table, `AssetId` + category, adding a sprite) | [`docs/architecture/asset-registry.md`](docs/architecture/asset-registry.md) |
 | Launcher self-update and version enforcement | [`docs/launcher/launcher-update-and-version-validation.md`](docs/launcher/launcher-update-and-version-validation.md) |
+| Update progress (step plan, manifest weighting) & post-update relaunch | [`docs/launcher/launcher-update-progress-and-relaunch.md`](docs/launcher/launcher-update-progress-and-relaunch.md) |
 | In-app changelog viewer — sources, channel filtering, anchoring, CI release bodies | [`docs/launcher/launcher-changelog-viewer.md`](docs/launcher/launcher-changelog-viewer.md) |
 | Launcher UI layout, identity file, channel gating, state variants | [`docs/launcher/launcher-foundation.md`](docs/launcher/launcher-foundation.md) |
 | Dev branch and release channel rules | [`docs/dev/devtools.md`](docs/dev/devtools.md) |
