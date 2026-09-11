@@ -207,6 +207,9 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
             launcher_update::update_check_done(state, result)
         }
         Message::StartLauncherUpdatePressed => launcher_update::start_update_pressed(state),
+        Message::SelfUpdateProgress(progress) => {
+            launcher_update::self_update_progress(state, progress)
+        }
         Message::SelfUpdateDone(result) => launcher_update::self_update_done(state, result),
 
         // ---- identity: register / username / welcome ----

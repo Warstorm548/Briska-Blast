@@ -10,7 +10,10 @@
 //! the caller exits for relaunch as on every other platform.
 
 use super::asset_fetch;
+use crate::updater::branches::InstallProgress;
+use crate::updater::plan::Phase;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Asset-name suffix the release workflow gives the AppImage artifact
 /// (`briskablast-launcher-<ver>-linux.AppImage`).
@@ -20,7 +23,14 @@ const ASSET_SUFFIX: &str = "-linux.AppImage";
 /// On success the file on disk is the new version; caller must exit for
 /// relaunch. On any error the old AppImage is untouched and the staging file
 /// is removed best-effort.
-pub(super) async fn update_appimage(version: &str, appimage_path: &Path) -> Result<(), String> {
+pub(super) async fn update_appimage<F>(
+    version: &str,
+    appimage_path: &Path,
+    on_progress: &Arc<F>,
+) -> Result<(), String>
+where
+    F: Fn(InstallProgress) + Send + Sync + 'static,
+{
     let dir = appimage_path
         .parent()
         .ok_or_else(|| format!("AppImage path {} has no parent", appimage_path.display()))?;
@@ -33,7 +43,7 @@ pub(super) async fn update_appimage(version: &str, appimage_path: &Path) -> Resu
     let asset = asset_fetch::find_release_asset(version, ASSET_SUFFIX).await?;
     let staging = dir.join(format!(".{file_name}.staging-{}", uuid::Uuid::new_v4()));
 
-    let result = stage_and_swap(&asset, &staging, appimage_path).await;
+    let result = stage_and_swap(&asset, &staging, appimage_path, on_progress).await;
     if result.is_err() {
         if let Err(cleanup) = tokio::fs::remove_file(&staging).await {
             if cleanup.kind() != std::io::ErrorKind::NotFound {
@@ -44,12 +54,39 @@ pub(super) async fn update_appimage(version: &str, appimage_path: &Path) -> Resu
     result
 }
 
-async fn stage_and_swap(
+async fn stage_and_swap<F>(
     asset: &asset_fetch::ReleaseAsset,
     staging: &Path,
     appimage_path: &Path,
-) -> Result<(), String> {
-    asset_fetch::download_to_file(asset, staging, asset_fetch::ELF_MAGIC).await?;
+    on_progress: &Arc<F>,
+) -> Result<(), String>
+where
+    F: Fn(InstallProgress) + Send + Sync + 'static,
+{
+    let cb = Arc::clone(on_progress);
+    asset_fetch::download_to_file(asset, staging, asset_fetch::ELF_MAGIC, move |now, total| {
+        let fraction = if total > 0 {
+            (now as f32 / total as f32).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        cb(InstallProgress::Phase {
+            phase: Phase::Downloading,
+            fraction,
+            bytes_now: now,
+            bytes_total: total,
+        });
+    })
+    .await?;
+
+    // The swap itself is two syscalls. It gets its own step so the label says
+    // what is happening rather than freezing on a finished download.
+    on_progress(InstallProgress::Phase {
+        phase: Phase::Installing,
+        fraction: 0.0,
+        bytes_now: 0,
+        bytes_total: 0,
+    });
 
     // The AppImage must be executable or the next launch is a cryptic
     // "permission denied" from the shell / desktop entry.
@@ -64,6 +101,12 @@ async fn stage_and_swap(
         .await
         .map_err(|e| format!("swap AppImage into place: {e}"))?;
 
+    on_progress(InstallProgress::Phase {
+        phase: Phase::Installing,
+        fraction: 1.0,
+        bytes_now: 0,
+        bytes_total: 0,
+    });
     tracing::info!(path = %appimage_path.display(), "AppImage self-update swap complete");
     Ok(())
 }

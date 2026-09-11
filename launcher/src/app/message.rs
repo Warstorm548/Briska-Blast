@@ -143,6 +143,10 @@ pub enum Message {
     StartLauncherUpdatePressed,
     CheckForUpdatesPressed,
     LauncherUpdateCheckDone(Result<UpdateCheckOutcome, String>),
+    /// Download / swap progress from the launcher's own self-update. Carries
+    /// the same event type the game installer emits, so one handler folds both
+    /// into the bottom-bar plan.
+    SelfUpdateProgress(crate::updater::branches::InstallProgress),
     SelfUpdateDone(Result<(), String>),
     RegisterDone {
         channel: Channel,

@@ -5,27 +5,29 @@
 //! one greater than the running version.
 //!
 //! Application is per-OS (dispatched in [`run_self_update`]):
-//! * **Windows** — `self_update`'s rename-trick: rename the running exe, drop
-//!   the downloaded one in its place.
+//! * **Windows** — the rename trick ([`super::binary_swap`]): rename the
+//!   running exe, drop the downloaded one in its place.
 //! * **macOS** — whole-bundle swap ([`super::macos_bundle`]) when running from
-//!   a `.app`; the rename-trick only for a bare binary.
+//!   a `.app`; the rename trick only for a bare binary.
 //! * **Linux** — outer-file replacement ([`super::appimage`]) when running as
-//!   an AppImage; the rename-trick for a user-writable bare binary; a
+//!   an AppImage; the rename trick for a user-writable bare binary; a
 //!   "download the new .deb" message for system-wide (`/usr/…`) installs.
 //!
-//! In every case the caller must `std::process::exit(0)` immediately after a
-//! successful swap; leftovers are cleaned up on the next launcher run
-//! (`self_update`'s own logic on Windows, `cleanup.rs` elsewhere).
+//! In every case the caller must start the replacement process
+//! ([`super::relaunch`]) and then `std::process::exit(0)` immediately after a
+//! successful swap; leftovers are cleaned up by `cleanup.rs` on the next run,
+//! which is why the replacement waits for this process to exit first.
 
 use super::github_client;
 use super::release_cache::{self, Freshness};
+use crate::updater::branches::InstallProgress;
 use semver::Version;
 use std::path::Path;
+use std::sync::Arc;
 
 pub(super) const REPO_OWNER: &str = "Warstorm548";
 pub(super) const REPO_NAME: &str = "Briska-Blast";
 pub(super) const TAG_PREFIX: &str = "launcher-v";
-const BIN_NAME: &str = "briskablast-launcher";
 
 /// User-facing refusal for installs the unelevated swap can never write to
 /// (the .deb lands the binary in root-owned `/usr/bin`).
@@ -95,18 +97,30 @@ pub async fn check_for_update(freshness: Freshness) -> Result<UpdateCheckOutcome
 }
 
 /// Apply the update for `version` using the platform-appropriate swap (see
-/// module docs). Returns Ok(()) on a successful swap; caller MUST then
-/// `std::process::exit(0)` because the launcher on disk has been replaced.
-pub async fn run_self_update(version: String) -> Result<(), String> {
+/// module docs), reporting progress through `on_progress`.
+///
+/// Returns Ok(()) on a successful swap; the caller MUST then start the
+/// replacement (`super::relaunch::spawn_replacement`) and
+/// `std::process::exit(0)`, because the launcher on disk has been replaced and
+/// this process is still running the old code.
+///
+/// `on_progress` emits the same [`InstallProgress`] events the game installer
+/// does, so both drive the one bottom-bar plan renderer.
+pub async fn run_self_update<F>(version: String, on_progress: F) -> Result<(), String>
+where
+    F: Fn(InstallProgress) + Send + Sync + 'static,
+{
+    let on_progress = Arc::new(on_progress);
+
     #[cfg(target_os = "macos")]
     {
         // Installed the normal way (.dmg → .app), the running exe is at
         // <bundle>.app/Contents/MacOS/…: replace the whole bundle so the
         // ad-hoc signature seal stays valid. A bare binary (no bundle)
-        // falls through to the self_update rename-trick below.
+        // falls through to the binary swap below.
         let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
         if let Some(bundle) = bundle_root(&exe) {
-            return super::macos_bundle::update_bundle(&version, &bundle).await;
+            return super::macos_bundle::update_bundle(&version, &bundle, &on_progress).await;
         }
     }
     #[cfg(target_os = "linux")]
@@ -116,7 +130,7 @@ pub async fn run_self_update(version: String) -> Result<(), String> {
         // replaced instead of the running binary.
         if let Ok(appimage) = std::env::var("APPIMAGE") {
             let path = std::path::PathBuf::from(appimage);
-            return super::appimage::update_appimage(&version, &path).await;
+            return super::appimage::update_appimage(&version, &path, &on_progress).await;
         }
         // System-wide (.deb) install: refuse up front with a useful message
         // instead of letting the swap die on permission-denied.
@@ -127,9 +141,7 @@ pub async fn run_self_update(version: String) -> Result<(), String> {
         }
     }
 
-    let result = tokio::task::spawn_blocking(move || run_self_update_blocking(&version))
-        .await
-        .map_err(|e| format!("self-update join error: {e}"))?;
+    let result = super::binary_swap::swap_binary(&version, &on_progress).await;
     // Safety net for writable-looking installs that still aren't (e.g. a
     // root-owned copy outside /usr): map the raw permission error to the
     // same actionable message as the up-front check.
@@ -170,29 +182,6 @@ pub(super) fn bundle_root(exe: &Path) -> Option<std::path::PathBuf> {
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn is_system_installed(exe: &Path) -> bool {
     exe.starts_with("/usr")
-}
-
-fn run_self_update_blocking(version: &str) -> Result<(), String> {
-    let tag = format!("{TAG_PREFIX}{version}");
-    tracing::info!(target = %tag, "starting self-update binary swap");
-
-    let status = self_update::backends::github::Update::configure()
-        .repo_owner(REPO_OWNER)
-        .repo_name(REPO_NAME)
-        .bin_name(BIN_NAME)
-        .current_version(env!("CARGO_PKG_VERSION"))
-        .target_version_tag(&tag)
-        // GUI process — keep self_update from drawing its own indicatif bar.
-        .show_download_progress(false)
-        .show_output(false)
-        .no_confirm(true)
-        .build()
-        .map_err(|e| format!("update build: {e}"))?
-        .update()
-        .map_err(|e| format!("update run: {e}"))?;
-
-    tracing::info!(?status, "self-update finished");
-    Ok(())
 }
 
 #[cfg(test)]

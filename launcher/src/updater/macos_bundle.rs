@@ -21,7 +21,10 @@
 //! mopped up by `cleanup.rs` on the next launch.
 
 use super::asset_fetch;
+use crate::updater::branches::InstallProgress;
+use crate::updater::plan::Phase;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Asset-name suffix the release workflow gives the signed-bundle tarball
 /// (`briskablast-launcher-<ver>-macos-app.tar.gz`). Deliberately does not
@@ -32,7 +35,14 @@ const ASSET_SUFFIX: &str = "-macos-app.tar.gz";
 /// Replace the live bundle at `bundle` with `version`'s. On success the .app
 /// on disk is the new version; caller must exit for relaunch. On any error
 /// the live bundle is untouched and staging is removed best-effort.
-pub(super) async fn update_bundle(version: &str, bundle: &Path) -> Result<(), String> {
+pub(super) async fn update_bundle<F>(
+    version: &str,
+    bundle: &Path,
+    on_progress: &Arc<F>,
+) -> Result<(), String>
+where
+    F: Fn(InstallProgress) + Send + Sync + 'static,
+{
     let parent = bundle
         .parent()
         .ok_or_else(|| format!("bundle {} has no parent directory", bundle.display()))?;
@@ -48,7 +58,8 @@ pub(super) async fn update_bundle(version: &str, bundle: &Path) -> Result<(), St
         .await
         .map_err(|e| format!("create staging dir: {e}"))?;
 
-    let result = stage_and_swap(&asset, &staging, parent, bundle, bundle_name).await;
+    let result =
+        stage_and_swap(&asset, &staging, parent, bundle, bundle_name, on_progress).await;
     if result.is_err() {
         // Best-effort: the live bundle is untouched on every error path, a
         // leaked staging dir is just disk noise (and next-launch cleanup
@@ -60,15 +71,47 @@ pub(super) async fn update_bundle(version: &str, bundle: &Path) -> Result<(), St
     result
 }
 
-async fn stage_and_swap(
+async fn stage_and_swap<F>(
     asset: &asset_fetch::ReleaseAsset,
     staging: &Path,
     parent: &Path,
     bundle: &Path,
     bundle_name: &str,
-) -> Result<(), String> {
+    on_progress: &Arc<F>,
+) -> Result<(), String>
+where
+    F: Fn(InstallProgress) + Send + Sync + 'static,
+{
     let tarball = staging.join(&asset.name);
-    asset_fetch::download_to_file(asset, &tarball, asset_fetch::GZIP_MAGIC).await?;
+    let cb = Arc::clone(on_progress);
+    asset_fetch::download_to_file(
+        asset,
+        &tarball,
+        asset_fetch::GZIP_MAGIC,
+        move |now, total| {
+            let fraction = if total > 0 {
+                (now as f32 / total as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            cb(InstallProgress::Phase {
+                phase: Phase::Downloading,
+                fraction,
+                bytes_now: now,
+                bytes_total: total,
+            });
+        },
+    )
+    .await?;
+
+    // Extract, re-sign and swap all sit under one step: the user cannot act
+    // on the difference, and the whole thing is short next to the download.
+    on_progress(InstallProgress::Phase {
+        phase: Phase::Installing,
+        fraction: 0.0,
+        bytes_now: 0,
+        bytes_total: 0,
+    });
 
     // Extraction + codesign are blocking work.
     let staging_owned = staging.to_path_buf();
@@ -107,6 +150,12 @@ async fn stage_and_swap(
     if let Err(e) = tokio::fs::remove_dir_all(staging).await {
         tracing::warn!(error = %e, path = %staging.display(), "could not remove staging dir after swap (non-fatal)");
     }
+    on_progress(InstallProgress::Phase {
+        phase: Phase::Installing,
+        fraction: 1.0,
+        bytes_now: 0,
+        bytes_total: 0,
+    });
     tracing::info!(bundle = %bundle.display(), "macOS bundle self-update swap complete");
     Ok(())
 }

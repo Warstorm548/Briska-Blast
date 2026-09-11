@@ -28,6 +28,9 @@ pub(super) const GZIP_MAGIC: &[u8] = &[0x1f, 0x8b];
 /// ELF magic — an AppImage is an ELF with an appended squashfs.
 #[cfg(target_os = "linux")]
 pub(super) const ELF_MAGIC: &[u8] = &[0x7f, b'E', b'L', b'F'];
+/// PK\x03\x04 — the Windows self-update asset is a zip holding the new exe.
+#[cfg(target_os = "windows")]
+pub(super) const ZIP_MAGIC: &[u8] = &[0x50, 0x4b, 0x03, 0x04];
 
 /// One asset resolved off a `launcher-v<version>` release.
 pub(super) struct ReleaseAsset {
@@ -82,11 +85,19 @@ fn pick_asset<'a>(
 /// Stream `asset` to `dest`, then verify the file starts with
 /// `expected_magic`. On any error the (partial) `dest` file is left for the
 /// caller's staging-dir cleanup.
-pub(super) async fn download_to_file(
+///
+/// `on_progress` receives `(bytes_so_far, bytes_total)` per chunk, with a total
+/// of `0` when the CDN omitted `Content-Length`. It is what lets a self-update
+/// drive the same stepped progress bar a game install does.
+pub(super) async fn download_to_file<F>(
     asset: &ReleaseAsset,
     dest: &Path,
     expected_magic: &[u8],
-) -> Result<(), String> {
+    on_progress: F,
+) -> Result<(), String>
+where
+    F: Fn(u64, u64),
+{
     // Rate-limit gate: the asset endpoint is a counted core-API request.
     if let crate::ratelimit::Gate::Blocked { resume_at } = crate::ratelimit::gate() {
         return Err(format!(
@@ -123,17 +134,22 @@ pub(super) async fn download_to_file(
         .error_for_status()
         .map_err(|e| format!("download HTTP error: {e}"))?;
 
+    // Read before the body is consumed — `content_length` is only available
+    // while the response still owns its headers.
+    let total = resp.content_length().unwrap_or(0);
     let mut file = tokio::fs::File::create(dest)
         .await
         .map_err(|e| format!("create download file: {e}"))?;
     let mut stream = resp.bytes_stream();
     let mut downloaded: u64 = 0;
+    on_progress(0, total);
     while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(|e| format!("download chunk: {e}"))?;
         file.write_all(&bytes)
             .await
             .map_err(|e| format!("write chunk: {e}"))?;
         downloaded += bytes.len() as u64;
+        on_progress(downloaded, total);
     }
     // Fully close before re-opening for the magic check (mirrors the game
     // installer's flush/sync/shutdown sequence).

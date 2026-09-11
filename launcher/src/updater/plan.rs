@@ -150,17 +150,25 @@ impl UpdatePlan {
     /// is no `files.json` for a single executable, so there is no verify step —
     /// the download's magic-byte check is the integrity gate.
     ///
+    /// Takes no size, unlike [`UpdatePlan::game`], and deliberately so. Both
+    /// steps would scale with the same asset size, so their *ratio* — which is
+    /// all the bar reads — is identical whatever that size turns out to be.
+    /// Asking for a number that cannot change the outcome would mean spending a
+    /// GitHub request to look it up for nothing. The percentage shown within
+    /// the download step is still measured from the real transfer.
+    ///
     /// The swap is effectively instantaneous next to the download, so it gets a
-    /// nominal weight rather than a measured one: without it the second step
-    /// would own zero of the bar and the label would flash past at 100%.
-    pub fn launcher(download_bytes: u64) -> Self {
+    /// nominal weight: without one the second step would own none of the bar
+    /// and its label would flash past.
+    pub fn launcher() -> Self {
+        // Arbitrary but fixed scale; only the 500:1 ratio between the two is
+        // meaningful. The swap is two syscalls against a multi-megabyte fetch.
+        const NOMINAL: u64 = 100_000;
         Self::single_component(
             "launcher",
             &[
-                (Phase::Downloading, download_bytes),
-                // ~2% of the download's cost — visible, but not a lie about how
-                // long a rename takes.
-                (Phase::Installing, download_bytes / 50),
+                (Phase::Downloading, NOMINAL),
+                (Phase::Installing, NOMINAL / 50),
             ],
         )
     }
@@ -253,7 +261,7 @@ mod tests {
     /// without anything being told how long a self-update is.
     #[test]
     fn launcher_plan_has_two_steps() {
-        let plan = UpdatePlan::launcher(5_000_000);
+        let plan = UpdatePlan::launcher();
         assert_eq!(plan.len(), 2);
         assert_eq!(plan.label(0, 0.10), "Downloading 1/2  10%");
         assert_eq!(plan.label(1, 0.20), "Installing 2/2  20%");
