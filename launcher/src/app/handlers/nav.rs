@@ -22,18 +22,20 @@ fn cap_username(s: &str) -> String {
 /// game is running that picker renders as a static label, so a mid-game switch
 /// cannot reach here and cannot rewrite the file.
 pub(crate) fn channel_picked(state: &mut AppState, c: Channel) -> Task<Message> {
-    if select_channel(state, c) {
-        // Best-effort and synchronous: a few dozen bytes under the per-user
-        // data root. A failure is logged inside, never surfaced — losing the
-        // next launch's starting channel is not worth an error dialog, and the
-        // selection the user just made is applied either way.
-        crate::preferences::save_selected_channel(c);
-    }
+    select_channel(state, c);
+    // Persisted on EVERY pick, including one that does not move the selection.
+    // A re-pick of the channel already showing is still the user answering the
+    // question, and it can genuinely differ from what is on disk: boot shows
+    // the fallback while a remembered Dev is parked, so a user who picks Stable
+    // during that window is choosing Stable over a file that still says `dev`.
+    // Skipping the write there would let the next launch snap back to Dev and
+    // overrule them. Best-effort and synchronous — a few dozen bytes under the
+    // per-user data root, and a failure is logged inside rather than surfaced.
+    crate::preferences::save_selected_channel(c);
     Task::none()
 }
 
-/// Apply a channel selection to state, returning `true` when it actually
-/// changed anything.
+/// Apply a channel selection to state.
 ///
 /// Split from [`channel_picked`] so the two callers can differ on persistence:
 /// a user pick writes the memory file, while the boot restore (the dev-flag
@@ -41,14 +43,14 @@ pub(crate) fn channel_picked(state: &mut AppState, c: Channel) -> Task<Message> 
 /// already says, and rewriting it there would be a pointless disk touch. It
 /// also keeps this transition unit-testable without writing to the real data
 /// dir, which is what the tests below rely on.
-pub(crate) fn select_channel(state: &mut AppState, c: Channel) -> bool {
+pub(crate) fn select_channel(state: &mut AppState, c: Channel) {
     // Either way the boot restore is settled: this call is either the restore
     // itself, or the user reaching for the picker before the dev handshake
     // landed — and a deliberate pick must always beat a queued snap.
     state.pending_channel_restore = None;
 
     if c == state.selected_channel {
-        return false;
+        return;
     }
     // Reset the verdict box for the newly-focused channel: drop completed
     // verdicts so it shows the em-dash, but keep any in-flight `Checking`
@@ -65,7 +67,6 @@ pub(crate) fn select_channel(state: &mut AppState, c: Channel) -> bool {
     // the seeded open set to re-seed on the new top entry.
     state.changelog_open.remove(&crate::changelog::Kind::Game);
     state.selected_channel = c;
-    true
 }
 
 pub(crate) fn open_settings(state: &mut AppState) -> Task<Message> {
@@ -152,7 +153,7 @@ mod tests {
             ChannelUpdateStatus::UpToDate(Version::new(0, 12, 1)),
         );
 
-        let _ = select_channel(&mut state, Channel::Ea);
+        select_channel(&mut state, Channel::Ea);
 
         assert_eq!(state.selected_channel, Channel::Ea);
         assert!(
@@ -169,7 +170,7 @@ mod tests {
             .channel_update_status
             .insert(Channel::Stable, ChannelUpdateStatus::Checking);
 
-        let _ = select_channel(&mut state, Channel::Ea);
+        select_channel(&mut state, Channel::Ea);
 
         // The sentinel survives so the button stays deduped (no duplicate
         // request) and "Checking…" returns if the user switches back mid-flight.
@@ -189,14 +190,16 @@ mod tests {
             ..AppState::default() // selected = Stable
         };
 
-        let _ = select_channel(&mut state, Channel::Ea);
+        select_channel(&mut state, Channel::Ea);
 
         assert_eq!(state.selected_channel, Channel::Ea);
         assert_eq!(state.pending_channel_restore, None);
     }
 
     /// Even a no-op re-pick counts as the user settling the question — it is
-    /// still a hand on the picker, so the queued snap is cancelled.
+    /// still a hand on the picker, so the queued snap is cancelled. This is the
+    /// case that must also reach the disk: the selection does not move, but the
+    /// file still says Dev, and `channel_picked` writes regardless.
     #[test]
     fn re_picking_the_same_channel_still_cancels_a_pending_restore() {
         let mut state = AppState {
@@ -204,19 +207,10 @@ mod tests {
             ..AppState::default() // selected = Stable
         };
 
-        let changed = select_channel(&mut state, Channel::Stable);
+        select_channel(&mut state, Channel::Stable);
 
-        assert!(!changed, "a no-op re-pick must not report a change");
+        assert_eq!(state.selected_channel, Channel::Stable);
         assert_eq!(state.pending_channel_restore, None);
-    }
-
-    /// The return value is what gates the disk write, so it has to track
-    /// whether anything actually moved.
-    #[test]
-    fn select_channel_reports_whether_it_changed_anything() {
-        let mut state = AppState::default(); // selected = Stable
-        assert!(select_channel(&mut state, Channel::Ea));
-        assert!(!select_channel(&mut state, Channel::Ea));
     }
 
     #[test]
@@ -227,7 +221,7 @@ mod tests {
             .insert(Channel::Stable, ChannelUpdateStatus::Checking);
 
         // No-op re-selection must not wipe an in-flight check.
-        let _ = select_channel(&mut state, Channel::Stable);
+        select_channel(&mut state, Channel::Stable);
 
         assert_eq!(
             state.channel_update_status.get(&Channel::Stable),

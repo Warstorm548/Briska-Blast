@@ -27,11 +27,14 @@ pub const FALLBACK: Channel = Channel::Stable;
 
 /// On-disk shape of `preferences.json`.
 ///
-/// `#[serde(default)]` on the container is what keeps the file
-/// forward-compatible in both directions: a file written by an older build
-/// (field absent) still loads, and unknown fields written by a *newer* build
-/// are ignored rather than failing the parse. An older launcher reading a newer
-/// file therefore keeps whatever settings it understands.
+/// `#[serde(default)]` on the container is half of what keeps the file
+/// forward-compatible: a file written by an older build (field absent) still
+/// loads, and unknown fields written by a *newer* build are ignored rather than
+/// failing the parse. The other half is on the write side — [`save_at`] merges
+/// into the existing document instead of serialising this struct over the top,
+/// so an older launcher changing the channel does not delete a newer one's
+/// settings. Reading through this struct and writing through the merge is
+/// deliberate; do not "simplify" the write to a plain serialise.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
@@ -88,10 +91,7 @@ pub fn save_selected_channel(channel: Channel) {
             return;
         }
     };
-    let prefs = Preferences {
-        selected_channel: channel,
-    };
-    if let Err(e) = save_at(&path, &prefs) {
+    if let Err(e) = save_at(&path, channel) {
         tracing::warn!(error = %e, "failed to persist preferences.json (non-fatal)");
     }
 }
@@ -132,7 +132,7 @@ fn resolve(path: &Path, outcome: LoadOutcome) -> Channel {
             // Self-heal, best-effort. If even this write fails the next launch
             // simply repeats the same fallback, so a read-only data dir
             // degrades to "always Stable" rather than to a broken launcher.
-            if let Err(e) = save_at(path, &Preferences::default()) {
+            if let Err(e) = save_at(path, FALLBACK) {
                 tracing::warn!(error = %e, "could not rewrite a clean preferences.json");
             }
             FALLBACK
@@ -140,12 +140,32 @@ fn resolve(path: &Path, outcome: LoadOutcome) -> Channel {
     }
 }
 
-/// Atomic write via the shared [`paths::write_atomic`] helper — a uuid-suffixed
+/// Write `channel` into the file, **merging** rather than replacing.
+///
+/// The merge is what makes the forward compatibility on the read side mean
+/// anything: a field written by a newer launcher must survive a channel change
+/// made by an older one, and serialising a whole `Preferences` over the top
+/// would silently drop every key this build does not know about. With one field
+/// in the struct that is theoretical, but it stops being theoretical the moment
+/// a second setting lands, and it is far easier to get right now than to
+/// remember later.
+///
+/// Atomic via the shared [`paths::write_atomic`] helper — a uuid-suffixed
 /// sibling tmp then rename — so a torn file is never observable by the next
 /// launch's read, and this file keeps the same durability property every other
 /// remembered file under the data root already has.
-fn save_at(path: &Path, prefs: &Preferences) -> Result<(), String> {
-    let json = serde_json::to_vec_pretty(prefs).map_err(|e| e.to_string())?;
+fn save_at(path: &Path, channel: Channel) -> Result<(), String> {
+    let mut doc = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .filter(serde_json::Value::is_object)
+        // Missing, unreadable, or not a JSON object at all: there is nothing
+        // worth preserving, so start from a clean one. This is also the shape
+        // the self-heal path takes, which is why a corrupt file is replaced
+        // outright while a merely *wrong* one keeps its other keys.
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+    doc["selected_channel"] = serde_json::to_value(channel).map_err(|e| e.to_string())?;
+    let json = serde_json::to_vec_pretty(&doc).map_err(|e| e.to_string())?;
     paths::write_atomic(path, &json)
 }
 
@@ -165,13 +185,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("preferences.json");
         for channel in Channel::all() {
-            save_at(
-                &path,
-                &Preferences {
-                    selected_channel: channel,
-                },
-            )
-            .unwrap();
+            save_at(&path, channel).unwrap();
             assert_eq!(read(&path), channel);
         }
     }
@@ -243,6 +257,59 @@ mod tests {
         fs::write(&path, b"{}").unwrap();
         assert!(matches!(load_at(&path), LoadOutcome::Loaded(_)));
         assert_eq!(read(&path), FALLBACK);
+    }
+
+    /// The write side of forward compatibility, and the regression guard for it:
+    /// changing the channel must not delete a setting written by a newer build.
+    #[test]
+    fn saving_a_channel_preserves_unknown_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("preferences.json");
+        fs::write(
+            &path,
+            b"{\"selected_channel\":\"stable\",\"theme\":\"dark\",\"window_w\":1280}",
+        )
+        .unwrap();
+
+        save_at(&path, Channel::Ea).unwrap();
+
+        assert_eq!(read(&path), Channel::Ea);
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(doc["selected_channel"], "ea");
+        assert_eq!(doc["theme"], "dark", "a newer build's setting must survive");
+        assert_eq!(doc["window_w"], 1280);
+    }
+
+    /// The flip side: a file with nothing worth keeping is replaced outright,
+    /// so corruption cannot survive by being merged into.
+    #[test]
+    fn saving_over_a_corrupt_file_replaces_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("preferences.json");
+        fs::write(&path, b"\x00\xff not json").unwrap();
+
+        save_at(&path, Channel::Ea).unwrap();
+
+        assert_eq!(read(&path), Channel::Ea);
+    }
+
+    /// A file that parses as an object but names a channel this build does not
+    /// know is *wrong*, not corrupt — the self-heal resets the channel while
+    /// leaving the rest of the user's settings alone.
+    #[test]
+    fn self_heal_keeps_other_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("preferences.json");
+        let raw = b"{\"selected_channel\":\"banana\",\"theme\":\"dark\"}";
+        fs::write(&path, raw).unwrap();
+
+        assert_eq!(read(&path), FALLBACK);
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(doc["selected_channel"], "stable");
+        assert_eq!(doc["theme"], "dark");
     }
 
     /// Forward compatibility: a file written by a future launcher that remembers

@@ -109,14 +109,23 @@ The launcher remembers the last channel the user picked and comes up on it, rath
 than always starting on Stable. The value lives in `<data_dir>/preferences.json`
 (`launcher/src/preferences.rs`) next to `identity.json`, is read once at boot and
 rewritten on every pick, and is written temp-then-rename like every other file under
-the data root.
+the data root. *Every* pick writes, including one that does not move the selection:
+a user who re-picks the channel already showing is still answering the question, and
+during the dev park below that answer genuinely differs from what is on disk.
+
+Writes **merge** into the existing document rather than serialising the struct over
+the top, so a setting written by a newer launcher is not deleted by an older one
+changing the channel. Reads go through the struct, writes go through the merge —
+that asymmetry is deliberate.
 
 **Fallback is Stable, always.** A file that is missing, unreadable, corrupt,
 truncated, or that names something which is not one of this build's channels resolves
 to Stable. `load_selected_channel` returns a bare `Channel` rather than a `Result`
 precisely so no caller can skip that. A file which is *present but unusable* is also
-rewritten clean on the spot, so a crash or a kill during a write self-heals on the
-next launch instead of failing the same way forever.
+repaired on the spot, so a crash or a kill during a write self-heals on the next
+launch instead of failing the same way forever. Repair keeps whatever is still
+usable: a file naming an unknown channel has only its channel reset, while one that
+is not a JSON object at all has nothing worth preserving and is replaced.
 
 **Interaction with the dev gate.** Dev is not in `visible_channels` at boot — it
 appears only once the dev server's `/register` reports `dev_flag = true`, which lands
