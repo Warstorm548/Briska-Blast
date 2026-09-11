@@ -5,6 +5,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.23.0] — 2026-09-11
+
+**The launcher now starts on the channel you last played, instead of dropping you
+back on Stable every time.**
+
+### Added
+
+- **The channel you pick is remembered.** Select Stable, EA or Dev and the next
+  launch comes up on it. The choice is written the moment you make it, into a new
+  `preferences.json` in the same per-user data folder as your identity — not beside
+  the launcher binary — so updating or reinstalling the launcher never loses it. It
+  is a general preferences file rather than a single-purpose one, so anything else
+  worth remembering later goes in there instead of adding a file per setting.
+- **A broken preferences file repairs itself.** Missing, unreadable, corrupt,
+  truncated, or naming a channel that does not exist all resolve to Stable, and a
+  bad file that is actually there is rewritten clean on the spot. Stable is the
+  fallback because it is the one channel every user can see, so a damaged file can
+  never leave the picker showing a row you are not entitled to. None of this is
+  surfaced as an error — a launcher has to boot even when its preferences are
+  garbage, which is also what makes a crash part-way through writing the file
+  recover on its own rather than failing the same way on every later launch.
+
+### Notes for future work
+
+The dev channel is the one case that cannot be restored instantly, because it stays
+hidden until the dev server confirms your dev flag, and that answer arrives a moment
+after the window is already on screen. A remembered Dev therefore opens on Stable and
+switches to Dev when the handshake completes, which is a brief but visible change.
+Avoiding it would mean either trusting a cached copy of the flag across launches or
+holding the first paint on a network round-trip, and neither is worth it for the
+fraction of a second involved. If the dev server is unreachable the selection simply
+stays on Stable for that launch.
+
+---
+
 ## [0.22.0] — 2026-09-11
 
 **You can now see what an update is doing, and the launcher comes back on its own

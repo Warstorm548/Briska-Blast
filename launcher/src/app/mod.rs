@@ -20,6 +20,7 @@ use handlers::{
 };
 
 use crate::channel::Channel;
+use crate::preferences;
 use crate::server_api;
 use crate::ui;
 use crate::ui::theme::{BAR_HEIGHT, ZONE_GAP};
@@ -35,6 +36,52 @@ pub(crate) fn recompute_visible_channels(state: &mut AppState) {
         v.push(Channel::Dev);
     }
     state.visible_channels = v;
+}
+
+/// Decide which channel a launch starts on, from the channel remembered in
+/// `preferences.json` and the channels visible at that moment.
+///
+/// Returns `(selected, pending)`. A remembered channel that is currently
+/// visible is selected outright. One that is not — in practice only Dev, which
+/// stays hidden until the dev server's `/register` confirms the flag (§3 of the
+/// foundation doc) — falls back to [`preferences::FALLBACK`] and is parked as
+/// `pending` for the dev handshake to apply once the flag lands.
+///
+/// Pure on purpose: `boot()` itself reads the real data dir and spawns tasks,
+/// so keeping the decision here is what makes it unit-testable.
+fn resolve_boot_channel(remembered: Channel, visible: &[Channel]) -> (Channel, Option<Channel>) {
+    if visible.contains(&remembered) {
+        (remembered, None)
+    } else {
+        (preferences::FALLBACK, Some(remembered))
+    }
+}
+
+/// Second half of the boot channel restore: settle a channel that was parked by
+/// [`resolve_boot_channel`], now that the dev-flag handshake has resolved.
+///
+/// Called from **both** `RegisterDone { Dev, .. }` arms in `handlers::identity`.
+/// On a confirmed flag the parked channel is now visible and gets selected; on a
+/// denied flag or an unreachable dev server it is simply dropped, because a
+/// restore that can no longer happen must not linger into a later handler and
+/// move the selection unexpectedly.
+pub(crate) fn apply_pending_channel_restore(state: &mut AppState) {
+    let Some(pending) = state.pending_channel_restore.take() else {
+        return;
+    };
+    if state.visible_channels.contains(&pending) {
+        // Routed through the shared selection helper so the verdict-box reset
+        // and changelog re-seed happen exactly as they would on a manual pick.
+        // Deliberately NOT `channel_picked`: this is applying what the memory
+        // file already says, so writing it back would be a pointless disk touch.
+        handlers::nav::select_channel(state, pending);
+        tracing::debug!(%pending, "restored remembered channel after the dev handshake");
+    } else {
+        tracing::debug!(
+            %pending,
+            "remembered channel is still not visible — staying on the fallback"
+        );
+    }
 }
 
 pub(crate) fn register_request_for(state: &AppState, channel: Channel) -> RegisterRequest {
@@ -139,6 +186,14 @@ pub fn boot() -> (AppState, Task<Message>) {
     if let Some(id) = loaded {
         state.identity = id;
     }
+
+    // Channel memory: come up on whatever the user last picked rather than
+    // always on Stable. `load_selected_channel` has already collapsed every
+    // untrustworthy file into the fallback, so there is nothing to handle here.
+    let (selected, pending) =
+        resolve_boot_channel(preferences::load_selected_channel(), &state.visible_channels);
+    state.selected_channel = selected;
+    state.pending_channel_restore = pending;
 
     let mut tasks: Vec<Task<Message>> = vec![Task::perform(
         updater::check_for_update(Freshness::Cached),
@@ -382,4 +437,94 @@ pub fn theme(_state: &AppState) -> Theme {
 
 pub fn title(_state: &AppState) -> String {
     String::from("BriskaBlast Launcher")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A remembered channel that is already visible is restored as-is, with
+    /// nothing left pending.
+    #[test]
+    fn visible_remembered_channel_is_restored_directly() {
+        let visible = [Channel::Stable, Channel::Ea];
+        assert_eq!(
+            resolve_boot_channel(Channel::Ea, &visible),
+            (Channel::Ea, None)
+        );
+        assert_eq!(
+            resolve_boot_channel(Channel::Stable, &visible),
+            (Channel::Stable, None)
+        );
+    }
+
+    /// Dev is hidden at boot on every launch, flagged user or not, because the
+    /// flag only arrives with the dev `/register` response. It must therefore
+    /// start on the fallback and park Dev for the handshake to pick up.
+    #[test]
+    fn hidden_remembered_channel_is_parked_as_pending() {
+        let visible = [Channel::Stable, Channel::Ea];
+        assert_eq!(
+            resolve_boot_channel(Channel::Dev, &visible),
+            (preferences::FALLBACK, Some(Channel::Dev))
+        );
+    }
+
+    /// Once Dev is visible — the path a *second* resolution would take — it is
+    /// restored outright with nothing pending.
+    #[test]
+    fn dev_is_restored_directly_when_already_visible() {
+        let visible = [Channel::Stable, Channel::Ea, Channel::Dev];
+        assert_eq!(
+            resolve_boot_channel(Channel::Dev, &visible),
+            (Channel::Dev, None)
+        );
+    }
+
+    /// The flag confirmed: Dev is now visible, so the parked selection applies.
+    #[test]
+    fn pending_restore_applies_once_the_channel_is_visible() {
+        let mut state = AppState {
+            pending_channel_restore: Some(Channel::Dev),
+            dev_flag: true,
+            ..AppState::default() // selected = Stable
+        };
+        recompute_visible_channels(&mut state);
+
+        apply_pending_channel_restore(&mut state);
+
+        assert_eq!(state.selected_channel, Channel::Dev);
+        assert_eq!(state.pending_channel_restore, None);
+    }
+
+    /// The flag was denied, or the dev server was unreachable. The selection
+    /// stays on the fallback and the park is dropped, so it cannot fire later.
+    #[test]
+    fn pending_restore_is_dropped_when_the_channel_stays_hidden() {
+        let mut state = AppState {
+            pending_channel_restore: Some(Channel::Dev),
+            ..AppState::default() // selected = Stable, dev_flag false
+        };
+
+        apply_pending_channel_restore(&mut state);
+
+        assert_eq!(state.selected_channel, preferences::FALLBACK);
+        assert_eq!(state.pending_channel_restore, None);
+    }
+
+    /// The common case — Stable or EA restored at boot, nothing parked — must
+    /// leave the user's current selection completely alone.
+    #[test]
+    fn no_pending_restore_leaves_the_selection_untouched() {
+        let mut state = AppState {
+            selected_channel: Channel::Ea,
+            dev_flag: true,
+            ..AppState::default()
+        };
+        recompute_visible_channels(&mut state);
+
+        apply_pending_channel_restore(&mut state);
+
+        assert_eq!(state.selected_channel, Channel::Ea);
+    }
 }

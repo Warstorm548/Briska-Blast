@@ -109,6 +109,14 @@ pub fn ratelimit_path() -> io::Result<PathBuf> {
     Ok(data_dir()?.join("ratelimits.json"))
 }
 
+/// `<data_dir>/preferences.json` — launcher-local UI preferences. Currently
+/// just the last channel the user selected, so the next launch comes up where
+/// they left off. Sits next to `identity.json` under the per-user data root.
+/// See `preferences.rs`.
+pub fn preferences_path() -> io::Result<PathBuf> {
+    Ok(data_dir()?.join("preferences.json"))
+}
+
 /// `<data_dir>/releases-cache.json` — the shared GitHub Releases list plus the
 /// `ETag` that lets the next launch revalidate it for free. See
 /// `updater/release_cache.rs`.
@@ -140,8 +148,8 @@ pub fn changelog_dir_created() -> io::Result<PathBuf> {
 /// The unique tmp name avoids clobbering between concurrent writers (the boot
 /// fan-out has several), and rename is atomic on POSIX and NTFS, so a torn file
 /// is never observable by a reader. Shared by every small state file under
-/// [`data_dir`] — `ratelimits.json` and `releases-cache.json` — so they cannot
-/// drift apart on durability.
+/// [`data_dir`] — `ratelimits.json`, `releases-cache.json` and
+/// `preferences.json` — so they cannot drift apart on durability.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
 

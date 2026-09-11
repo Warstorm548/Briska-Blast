@@ -9,6 +9,14 @@ use std::collections::{BTreeMap, HashSet};
 pub struct AppState {
     pub identity: Identity,
     pub selected_channel: Channel,
+    /// A remembered channel from `preferences.json` that could not be selected
+    /// at boot because it was not visible yet. Only ever `Some(Channel::Dev)`
+    /// in practice: Dev stays hidden until the dev server's `/register` reports
+    /// `dev_flag = true`, which lands well after the first paint. The dev
+    /// handshake applies it if the flag confirms and clears it if it does not,
+    /// and any manual pick cancels it — so the restore can never overrule a
+    /// choice the user made with their own hands. `None` once resolved.
+    pub pending_channel_restore: Option<Channel>,
     pub visible_channels: Vec<Channel>,
     pub server_reachable: BTreeMap<Channel, bool>,
     pub branch_updates_available: Vec<Channel>,
@@ -215,7 +223,11 @@ impl Default for AppState {
                 username: String::new(),
                 channels: BTreeMap::new(),
             },
+            // Boot overwrites this from `preferences.json`; the default stays
+            // a plain constant so `AppState::default()` has no filesystem
+            // dependency (several handler tests construct it directly).
             selected_channel: Channel::Stable,
+            pending_channel_restore: None,
             visible_channels,
             server_reachable: BTreeMap::new(),
             // Empty by default; populated by `recompute_branch_updates_available`

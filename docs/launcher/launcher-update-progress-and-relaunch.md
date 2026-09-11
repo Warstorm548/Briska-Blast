@@ -216,11 +216,11 @@ by which point the parent is gone.
 ### What a self-update does *not* touch
 
 Everything the launcher remembers lives in the per-user data directory, never beside
-the binary: `identity.json` (player ids + tokens), `ratelimits.json`,
-`releases-cache.json`, `changelogs/`, `saves/`. The swap replaces only the executable,
-the `.app` bundle, or the outer AppImage. Every one of those files is also written
-temp-then-rename, so an abrupt exit can lose the newest write but never leave a torn
-file.
+the binary: `identity.json` (player ids + tokens), `preferences.json` (the remembered
+channel selection), `ratelimits.json`, `releases-cache.json`, `changelogs/`, `saves/`.
+The swap replaces only the executable, the `.app` bundle, or the outer AppImage. Every
+one of those files is also written temp-then-rename, so an abrupt exit can lose the
+newest write but never leave a torn file.
 
 ### Binary swap
 

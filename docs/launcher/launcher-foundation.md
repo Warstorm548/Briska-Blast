@@ -103,6 +103,40 @@ The dev flag is the access right to **launch + download + install** the dev bran
 
 The "dev-server unreachable" and "not dev-flagged" cases look identical in the UI (no dev row). The distinction surfaces only in the **Server status** panel of the left rail (see §6), so the dev team can see when their own dev server is down without leaking the existence of the channel to users.
 
+### Remembered channel selection
+
+The launcher remembers the last channel the user picked and comes up on it, rather
+than always starting on Stable. The value lives in `<data_dir>/preferences.json`
+(`launcher/src/preferences.rs`) next to `identity.json`, is read once at boot and
+rewritten on every pick, and is written temp-then-rename like every other file under
+the data root. *Every* pick writes, including one that does not move the selection:
+a user who re-picks the channel already showing is still answering the question, and
+during the dev park below that answer genuinely differs from what is on disk.
+
+Writes **merge** into the existing document rather than serialising the struct over
+the top, so a setting written by a newer launcher is not deleted by an older one
+changing the channel. Reads go through the struct, writes go through the merge —
+that asymmetry is deliberate.
+
+**Fallback is Stable, always.** A file that is missing, unreadable, corrupt,
+truncated, or that names something which is not one of this build's channels resolves
+to Stable. `load_selected_channel` returns a bare `Channel` rather than a `Result`
+precisely so no caller can skip that. A file which is *present but unusable* is also
+repaired on the spot, so a crash or a kill during a write self-heals on the next
+launch instead of failing the same way forever. Repair keeps whatever is still
+usable: a file naming an unknown channel has only its channel reset, while one that
+is not a JSON object at all has nothing worth preserving and is replaced.
+
+**Interaction with the dev gate.** Dev is not in `visible_channels` at boot — it
+appears only once the dev server's `/register` reports `dev_flag = true`, which lands
+after the first paint. A remembered Dev therefore starts on Stable and is *parked*
+(`AppState::pending_channel_restore`); the dev handshake applies it if the flag
+confirms, and drops it if the flag is denied or the dev server is unreachable. There
+is a brief visible Stable → Dev switch on each launch as a result. A manual pick at
+any point cancels the park, so a restore can never overrule a choice the user made
+themselves. The restore applies the selection without rewriting the file, since it is
+only echoing back what the file already said.
+
 ### Update banner filtering
 
 The "Updates available: ..." banner lists only channels the user can currently see. An unflagged user with stable + ea installed sees "Updates available: stable, ea" — never "stable, ea, dev". Leaking `dev` here would defeat the visibility gate.
