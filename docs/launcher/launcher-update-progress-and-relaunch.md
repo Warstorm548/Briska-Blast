@@ -119,6 +119,13 @@ exactly one place. Having the installer count steps too would mean two places ha
 agree. The self-update emits the same type, so one handler
 (`handlers::install::apply_progress`) folds both into the bar.
 
+**Hash progress is reported through each file, not only between files.** A shipped
+manifest is a handful of entries and the `.pck` is nearly all of the bytes, so
+boundary-only reporting would leave the Verifying step pinned near zero for
+virtually the whole pass. `hash_file_blocking` takes a per-read callback, throttled
+to one progress event per `HASH_PROGRESS_INTERVAL` (8 MiB), and the running total
+settles on the manifest's own figure at each file boundary.
+
 **Extraction progress is measured from outside.** `tar.unpack` and `zip.extract` are
 single opaque calls with no callback, and re-implementing them entry-by-entry would
 put the macOS bundle's symlinks and exec bits — on which its ad-hoc signature
@@ -136,6 +143,23 @@ report that something broken had already replaced something that worked.
 
 A release with no `files.json` at all still installs: `verify_install` falls back to
 its historic exe-exists check, exactly as Settings → Verify does.
+
+### One job at a time
+
+`active_update` is a single shared slot, and a finished self-update calls
+`process::exit(0)`. A self-update starting during a game install would therefore
+both scramble the bar (the install's phases would resolve against a two-step plan)
+and kill that install partway through its staging-swap.
+
+Game installs, repairs and the launcher self-update are consequently **mutually
+exclusive**, enforced in both directions:
+
+- `start_update_pressed` refuses while `install_in_progress` is set; the Start
+  Update button is disabled with it.
+- `install_confirmed` and `repair_confirmed` refuse while `self_update_in_flight`
+  is set; the bottom-bar button shows `Updating launcher…`, disabled.
+- Completion handlers clear `active_update` only when the other job is not
+  running — defence in depth, since the guards above already prevent overlap.
 
 ---
 

@@ -51,6 +51,20 @@ after updating itself.**
   `self_update` was delegating the swap to anyway. The result on disk is
   identical.
 
+### Fixed
+
+- A launcher self-update and a game install can no longer run at once. They share
+  one progress bar, and a finished self-update closes the launcher — which would
+  have killed an install partway through swapping the new files into place. Each
+  now refuses to start while the other is running, and the button that would have
+  started it is disabled rather than silently doing nothing.
+- The integrity check reports progress *through* the large game pack rather than
+  only when it finishes, so the Verifying stage no longer appears stuck at zero
+  for almost its whole duration.
+- An update whose download size is unknown — which happens on the first run after
+  upgrading the launcher, before the release list is refreshed — no longer leaves
+  the bar pinned at zero for the entire download and then jumping.
+
 ### Notes for future work
 
 The step list is built per job from release data rather than compiled in, which

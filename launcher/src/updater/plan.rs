@@ -136,10 +136,23 @@ impl UpdatePlan {
     /// A game channel install or update: download the archive, extract it into
     /// staging, then verify staging against `files.json` before the swap.
     pub fn game(download_bytes: u64, installed_bytes: u64) -> Self {
+        // A `releases-cache.json` written before the asset `size` field existed
+        // deserializes it as zero, which is a realistic first-run state right
+        // after upgrading the launcher. Left alone, a zero download weight
+        // against a known install size gives the *longest* phase none of the
+        // bar: it would sit at 0% for the whole download and then leap. Stand in
+        // the install size — same release, and only the ratio between steps is
+        // read. With both zero the plan still falls back to evenly-weighted
+        // steps (see `overall_fraction`).
+        let download_weight = if download_bytes > 0 {
+            download_bytes
+        } else {
+            installed_bytes
+        };
         Self::single_component(
             "game",
             &[
-                (Phase::Downloading, download_bytes),
+                (Phase::Downloading, download_weight),
                 (Phase::Installing, installed_bytes),
                 (Phase::Verifying, installed_bytes),
             ],
@@ -337,6 +350,21 @@ mod tests {
         assert_eq!(plan.overall_fraction(0, 0.0), 0.0);
         assert!((plan.overall_fraction(1, 0.0) - 1.0 / 3.0).abs() < 1e-6);
         assert!((plan.overall_fraction(2, 1.0) - 1.0).abs() < 1e-6);
+    }
+
+    /// A releases cache predating the asset `size` field reports zero. The
+    /// download must still own its share of the bar, or it would sit at 0% for
+    /// the longest phase of the job and then leap.
+    #[test]
+    fn unknown_download_size_still_weights_the_download_step() {
+        let plan = UpdatePlan::game(0, 120_000_000);
+        let after_download = plan.overall_fraction(1, 0.0);
+        assert!(
+            after_download > 0.5,
+            "download should still own most of the bar, got {after_download}"
+        );
+        // And it must not have collapsed into the even-split fallback.
+        assert!((after_download - 1.0 / 3.0).abs() > 1e-3);
     }
 
     /// The compressed-size fallback still produces a usable three-step plan

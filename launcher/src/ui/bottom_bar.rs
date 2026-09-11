@@ -26,6 +26,7 @@ fn update_cell(state: &AppState) -> Element<'_, Message> {
     //
     // Full table:
     //   game running OR install in flight → "Running"/"Installing…" disabled
+    //   launcher self-update in flight    → "Updating launcher…"      disabled
     //   not installed  + available Some(v) → "Install <C> Game"          enabled
     //   not installed  + available None    → "Install <C> Game"          disabled
     //   installed v_i  + available v_a > i → "Update to vX.Y.Z"          enabled
@@ -52,6 +53,10 @@ fn update_cell(state: &AppState) -> Element<'_, Message> {
 
     let (label, enabled): (String, bool) = if state.game_running {
         ("Running".to_string(), false)
+    } else if state.self_update_in_flight {
+        // Mutually exclusive with a game install: the two share this progress
+        // cell, and a finished self-update exits the process.
+        ("Updating launcher\u{2026}".to_string(), false)
     } else if state.install_in_progress.is_some() {
         // Any in-flight install disables the button — not just one
         // targeting the selected channel. Otherwise switching the

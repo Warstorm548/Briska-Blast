@@ -66,6 +66,14 @@ pub(crate) fn start_update_pressed(state: &mut AppState) -> Task<Message> {
     if state.game_running {
         tracing::warn!("refusing self-update: game is running");
         state.last_self_update_error = Some("Cannot update while the game is running.".into());
+    } else if state.install_in_progress.is_some() {
+        // The two jobs share `active_update`, so a self-update starting here
+        // would overwrite the install's plan and leave its phases resolving
+        // against the wrong step list. Worse, a successful self-update ends in
+        // `process::exit(0)`, which would kill the install mid staging-swap.
+        tracing::warn!("refusing self-update: a game install is in flight");
+        state.last_self_update_error =
+            Some("Cannot update the launcher while a game install is running.".into());
     } else if state.self_update_in_flight {
         tracing::debug!("self-update already in flight, ignoring");
     } else if state.update_check_in_flight {
@@ -158,7 +166,11 @@ pub(crate) fn self_update_done(state: &mut AppState, result: Result<(), String>)
         Err(e) => {
             tracing::error!(error = %e, "self-update failed");
             state.last_self_update_error = Some(format!("Update failed: {e}"));
-            state.active_update = None;
+            // Only clear the shared bar if it is still ours. The start guards
+            // make the two jobs mutually exclusive, so this is defence in depth.
+            if state.install_in_progress.is_none() {
+                state.active_update = None;
+            }
         }
     }
     Task::none()

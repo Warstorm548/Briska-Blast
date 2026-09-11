@@ -235,7 +235,10 @@ pub(crate) fn install_confirmed(state: &mut AppState) -> Task<Message> {
         }
         return Task::none();
     }
-    if state.install_in_progress.is_some() {
+    // `self_update_in_flight` is in the gate because a self-update shares the
+    // progress bar and ends in `process::exit(0)` — which would kill this
+    // install partway through its staging-swap.
+    if state.install_in_progress.is_some() || state.self_update_in_flight {
         return Task::none();
     }
     // Parse the expected version up front so the staleness check
@@ -433,7 +436,12 @@ pub(crate) fn install_complete(
     result: Result<crate::updater::branches::InstallResult, String>,
 ) -> Task<Message> {
     state.install_in_progress = None;
-    state.active_update = None;
+    // Only clear the shared bar if it is still ours. The start guards make the
+    // install and self-update jobs mutually exclusive, so this is defence in
+    // depth against a future path that lets them overlap.
+    if !state.self_update_in_flight {
+        state.active_update = None;
+    }
     match result {
         Ok(info) => {
             apply_install_success(state, channel, &info);
@@ -514,6 +522,9 @@ pub(crate) fn repair_confirmed(state: &mut AppState) -> Task<Message> {
         || state.uninstall_in_progress.is_some()
         || state.game_running
         || state.verify_in_progress.is_some()
+        // Same reason as `install_confirmed`: a self-update owns the shared
+        // progress bar and exits the process when it succeeds.
+        || state.self_update_in_flight
     {
         return Task::none();
     }
@@ -593,7 +604,12 @@ pub(crate) fn repair_complete(
     result: Result<crate::updater::branches::InstallResult, String>,
 ) -> Task<Message> {
     state.install_in_progress = None;
-    state.active_update = None;
+    // Only clear the shared bar if it is still ours. The start guards make the
+    // install and self-update jobs mutually exclusive, so this is defence in
+    // depth against a future path that lets them overlap.
+    if !state.self_update_in_flight {
+        state.active_update = None;
+    }
     match result {
         Ok(info) => {
             apply_install_success(state, channel, &info);

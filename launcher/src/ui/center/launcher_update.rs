@@ -75,7 +75,10 @@ pub fn content(state: &AppState) -> Element<'_, Message> {
         && !state.launcher_available_version.is_empty()
         && !state.game_running
         && !state.self_update_in_flight
-        && !state.update_check_in_flight;
+        && !state.update_check_in_flight
+        // A game install owns the shared progress bar, and a self-update ends
+        // by exiting the process — which would kill that install mid-swap.
+        && state.install_in_progress.is_none();
     let mut start_btn = button(text(if state.self_update_in_flight {
         "Updating…"
     } else {
