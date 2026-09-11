@@ -129,6 +129,59 @@ pub fn acquire_launcher() -> AcquireOutcome {
     acquire_in(&dir, ROLE_LAUNCHER, LAUNCHER_FILE)
 }
 
+/// [`acquire_launcher`], but retrying for up to `timeout` instead of conceding
+/// on the first live instance.
+///
+/// For the post-update relaunch only. The replacement launcher is started by
+/// the outgoing one, so for a few milliseconds two launchers genuinely exist
+/// and a plain `acquire_launcher` would see a live listener and exit — leaving
+/// the user with nothing running at all, which is worse than the problem the
+/// relaunch solves. The parent exits almost immediately; its listener dies with
+/// it; the next probe is refused and the existing stale-file reclaim runs.
+///
+/// A real second instance still outlives the timeout and still loses, so this
+/// does not weaken single-instance — it only declines to give up too early.
+pub fn acquire_launcher_waiting(timeout: Duration) -> AcquireOutcome {
+    let dir = match crate::paths::data_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(error = %e, "data dir unavailable; launcher single-instance disabled (fail-safe)");
+            return AcquireOutcome::Live(InstanceGuard::no_claim());
+        }
+    };
+    acquire_in_waiting(&dir, ROLE_LAUNCHER, LAUNCHER_FILE, timeout)
+}
+
+/// Retry wrapper around [`acquire_in`]. Split out from
+/// [`acquire_launcher_waiting`] for the same reason [`acquire_in`] is split out
+/// of [`acquire_launcher`]: so it can be tested against a temp dir.
+fn acquire_in_waiting(
+    dir: &Path,
+    role: &'static str,
+    file_name: &str,
+    timeout: Duration,
+) -> AcquireOutcome {
+    /// Short enough that the handover is imperceptible, long enough not to spin.
+    const RETRY_INTERVAL: Duration = Duration::from_millis(100);
+
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match acquire_in(dir, role, file_name) {
+            AcquireOutcome::Live(guard) => return AcquireOutcome::Live(guard),
+            AcquireOutcome::Duplicate => {
+                if std::time::Instant::now() >= deadline {
+                    tracing::info!(
+                        ?timeout,
+                        "another launcher still holds the slot after an update relaunch — exiting"
+                    );
+                    return AcquireOutcome::Duplicate;
+                }
+                std::thread::sleep(RETRY_INTERVAL);
+            }
+        }
+    }
+}
+
 /// Liveness probe of the game's discovery file (no bind, no claim — read +
 /// connect only). `true` only when a process answering the `GAME` banner is
 /// live. Runs on Iced's tokio runtime via `Task::perform`.
@@ -475,4 +528,76 @@ mod tests {
         let wins = results.iter().filter(|(live, _)| *live).count();
         assert_eq!(wins, 1, "exactly one acquirer must win the race");
     }
+
+    /// The relaunch handshake must still lose to a genuine second instance:
+    /// waiting is only meant to outlast a parent that is on its way out, never
+    /// to muscle past a launcher that is staying.
+    #[test]
+    fn waiting_acquire_still_concedes_to_a_live_instance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(LAUNCHER_FILE);
+        serve_banner(&path, ROLE_LAUNCHER);
+
+        let started = std::time::Instant::now();
+        let outcome = acquire_in_waiting(
+            tmp.path(),
+            ROLE_LAUNCHER,
+            LAUNCHER_FILE,
+            Duration::from_millis(250),
+        );
+        assert!(
+            matches!(outcome, AcquireOutcome::Duplicate),
+            "a live launcher must still win the slot"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(250),
+            "it should have waited out the timeout before conceding"
+        );
+    }
+
+    /// The case the relaunch actually depends on: the previous launcher's file
+    /// is still on disk but its listener is gone, exactly as it is a moment
+    /// after the outgoing process exits. The stale claim is reclaimed.
+    #[test]
+    fn waiting_acquire_reclaims_a_dead_holders_slot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(LAUNCHER_FILE);
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&Discovery {
+                port: dead_port(),
+                proto: RENDEZVOUS_PROTO,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let outcome = acquire_in_waiting(
+            tmp.path(),
+            ROLE_LAUNCHER,
+            LAUNCHER_FILE,
+            Duration::from_secs(2),
+        );
+        assert!(
+            matches!(outcome, AcquireOutcome::Live(_)),
+            "a stale slot must be reclaimed rather than waited out"
+        );
+    }
+
+    /// A free slot is taken immediately — the wait must not add latency to the
+    /// normal relaunch, which is the overwhelmingly common case.
+    #[test]
+    fn waiting_acquire_is_immediate_when_free() {
+        let tmp = tempfile::tempdir().unwrap();
+        let started = std::time::Instant::now();
+        let outcome = acquire_in_waiting(
+            tmp.path(),
+            ROLE_LAUNCHER,
+            LAUNCHER_FILE,
+            Duration::from_secs(5),
+        );
+        assert!(matches!(outcome, AcquireOutcome::Live(_)));
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
 }
+

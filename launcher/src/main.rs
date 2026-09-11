@@ -21,17 +21,38 @@ mod server_api;
 mod ui;
 mod updater;
 
+use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+/// How long a post-update relaunch waits for the outgoing launcher to release
+/// the single-instance slot. Generous: the parent exits within milliseconds,
+/// so reaching this means a genuinely separate instance is running and this
+/// process should stand down.
+const RELAUNCH_SLOT_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn main() -> iced::Result {
     init_tracing();
 
+    // A launcher started by an outgoing one after a self-update waits for the
+    // slot instead of conceding on the first live instance: for a few
+    // milliseconds both processes exist, and quitting there would leave the
+    // user with no launcher at all. See `updater::relaunch`.
+    let after_update = std::env::args().any(|a| a == updater::AFTER_UPDATE_ARG);
+
     // Single-instance gate (socket rendezvous): a second launcher detects the
     // first and exits cleanly. Run before cleanup_stale_update_artifacts so a
-    // duplicate never disturbs the live instance's in-flight update files. The
-    // guard holds the claim — and removes its discovery file on a clean exit —
-    // for as long as it is in scope, i.e. across the whole `.run()` below.
-    let _instance_guard = match rendezvous::acquire_launcher() {
+    // duplicate never disturbs the live instance's in-flight update files, and
+    // — on the relaunch path — so the Windows `.__relocated__.exe` left by the
+    // swap is only deleted once the process holding it has actually exited.
+    // The guard holds the claim — and removes its discovery file on a clean
+    // exit — for as long as it is in scope, i.e. across the whole `.run()`.
+    let acquired = if after_update {
+        tracing::info!("started as a post-update relaunch — waiting for the instance slot");
+        rendezvous::acquire_launcher_waiting(RELAUNCH_SLOT_TIMEOUT)
+    } else {
+        rendezvous::acquire_launcher()
+    };
+    let _instance_guard = match acquired {
         rendezvous::AcquireOutcome::Live(guard) => guard,
         rendezvous::AcquireOutcome::Duplicate => {
             tracing::info!("another launcher instance is already running — exiting");

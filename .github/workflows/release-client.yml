@@ -383,6 +383,25 @@ jobs:
             "../../../briskablast-client-${CHANNEL}-${VERSION}-macos.tar.gz" \
             BriskaBlast.app files.json
 
+      # The same files.json also ships *inside* each archive, which is where
+      # `verify_install` reads it from. This second, standalone copy exists so
+      # the launcher can learn a release's real uncompressed install size
+      # *before* it starts the download that size is meant to describe — which
+      # is what lets its update progress bar be weighted from the release rather
+      # than from a guess. A few KB each. Consumed by
+      # `installer::download::fetch_installed_bytes`; a release without it is
+      # handled by falling back to an estimate, so this is additive.
+      - name: Publish integrity manifests as standalone assets
+        env:
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          for plat in linux windows macos; do
+            cp "client/export/${plat}/files.json" \
+               "briskablast-client-${CHANNEL}-${VERSION}-${plat}-files.json"
+          done
+          ls -l briskablast-client-*-files.json
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: briskablast-client-${{ steps.channel.outputs.channel }}-${{ steps.version.outputs.version }}
@@ -390,6 +409,7 @@ jobs:
             briskablast-client-*-linux.tar.gz
             briskablast-client-*-windows.zip
             briskablast-client-*-macos.tar.gz
+            briskablast-client-*-files.json
 
   release:
     name: Publish GitHub Release
@@ -465,5 +485,6 @@ jobs:
             artifacts/**/briskablast-client-*-linux.tar.gz
             artifacts/**/briskablast-client-*-windows.zip
             artifacts/**/briskablast-client-*-macos.tar.gz
+            artifacts/**/briskablast-client-*-files.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

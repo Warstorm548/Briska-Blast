@@ -5,6 +5,76 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.22.0] — 2026-09-11
+
+**You can now see what an update is doing, and the launcher comes back on its own
+after updating itself.**
+
+### Added
+
+- **Stepped update progress.** The bar now says which stage an update is in,
+  which stage of how many that is, and how far into it you are:
+  `Downloading 1/3  47%`. The percentage measures the current stage only and
+  restarts at each boundary; the bar itself does not restart, because it
+  represents the whole job. The label is black text centred on the bar, which is
+  why the bar's track is now light — a dark track would swallow the text for as
+  long as the bar was near empty, which is exactly when it is most worth reading.
+- **The launcher's own update has a progress bar too.** It previously showed
+  nothing at all while it worked. A self-update is a two-stage job
+  (`Downloading 1/2`, then `Installing 2/2`); a game update is three, because
+  it ends with an integrity check.
+- **The launcher restarts itself after updating.** Previously a successful
+  self-update swapped the binary and exited, leaving you with no launcher
+  running and nothing saying to start one. It now launches the replacement
+  before it goes. Nothing about your data moves: identity, saves, the rate-limit
+  state, the release cache and the downloaded changelogs all live in the
+  per-user data directory, which a self-update never touches.
+- **Integrity is now checked as part of every install**, not only when you ask
+  for it from Settings. It runs against the staged copy *before* the swap, so a
+  corrupt or truncated download fails the update with your existing install
+  untouched, rather than being discovered after it had already replaced
+  something that worked.
+
+### Changed
+
+- **Update progress is weighted by real bytes rather than even thirds.**
+  Downloading takes most of the wall clock, so it owns most of the bar. The
+  download size comes from the releases API, which was already reporting it. The
+  install size comes from the release's integrity manifest, now published as a
+  standalone asset so it can be read *before* the download it describes. A
+  release without that asset falls back to an estimate.
+- **Extraction reports real progress** instead of sitting at "Extracting…".
+- **The launcher's binary swap no longer goes through `self_update`'s
+  `update()`.** That call is a single opaque operation with no progress
+  callback. The same work is now assembled from the streaming downloader the
+  macOS and Linux paths already used, plus `self_replace` — the crate
+  `self_update` was delegating the swap to anyway. The result on disk is
+  identical.
+
+### Fixed
+
+- A launcher self-update and a game install can no longer run at once. They share
+  one progress bar, and a finished self-update closes the launcher — which would
+  have killed an install partway through swapping the new files into place. Each
+  now refuses to start while the other is running, and the button that would have
+  started it is disabled rather than silently doing nothing.
+- The integrity check reports progress *through* the large game pack rather than
+  only when it finishes, so the Verifying stage no longer appears stuck at zero
+  for almost its whole duration.
+- An update whose download size is unknown — which happens on the first run after
+  upgrading the launcher, before the release list is refreshed — no longer leaves
+  the bar pinned at zero for the entire download and then jumping.
+
+### Notes for future work
+
+The step list is built per job from release data rather than compiled in, which
+is the groundwork for updates that need several stages applied in order, and for
+splitting the game into components that update independently. The label already
+knows how to show a component's own position (`Downloading 1/3  audio 3/10  47%`)
+and hides it while there is only one component.
+
+---
+
 ## [0.21.0] — 2026-09-10
 
 **Changelogs now live in the launcher, and update checks stopped costing so much.**

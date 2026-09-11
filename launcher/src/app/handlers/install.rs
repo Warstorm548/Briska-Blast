@@ -23,6 +23,10 @@ const INVALID_INSTALL_LOCATION_MSG: &str =
 /// because the variants here are mapped 1:1 onto two existing user-facing
 /// Messages (DownloadProgress, InstallComplete).
 enum InstallStreamEvent {
+    /// The job has been sized and its step list is known. Emitted once, before
+    /// any transfer starts, so the bar can show step one rather than "Idle"
+    /// while the first bytes are still in flight.
+    Planned(crate::updater::plan::UpdatePlan),
     Progress(crate::updater::branches::InstallProgress),
     Complete(Result<crate::updater::branches::InstallResult, String>),
 }
@@ -231,7 +235,10 @@ pub(crate) fn install_confirmed(state: &mut AppState) -> Task<Message> {
         }
         return Task::none();
     }
-    if state.install_in_progress.is_some() {
+    // `self_update_in_flight` is in the gate because a self-update shares the
+    // progress bar and ends in `process::exit(0)` — which would kill this
+    // install partway through its staging-swap.
+    if state.install_in_progress.is_some() || state.self_update_in_flight {
         return Task::none();
     }
     // Parse the expected version up front so the staleness check
@@ -252,7 +259,7 @@ pub(crate) fn install_confirmed(state: &mut AppState) -> Task<Message> {
         }
     };
     state.install_in_progress = Some(channel);
-    state.download_progress = None;
+    state.active_update = None;
     // Resolve the release at install time: re-fetch latest, guarding against it
     // vanishing or drifting version between the check and now. Then hand off to
     // the shared streamed-download helper (also used by Repair).
@@ -306,13 +313,38 @@ where
     const INSTALL_STREAM_CAPACITY: usize = 32;
     let (tx, rx) = tokio::sync::mpsc::channel::<InstallStreamEvent>(INSTALL_STREAM_CAPACITY);
     let tx_progress = tx.clone();
+    let tx_plan = tx.clone();
     tokio::spawn(async move {
         let result: Result<crate::updater::branches::InstallResult, String> = async {
             let release = resolve_release.await?;
+
+            // Size the job before starting it, so the bar is proportioned from
+            // this release rather than from constants. The download figure comes
+            // from the asset the releases API already reported; the install
+            // figure from the release's standalone `files.json`, falling back to
+            // a ratio of the compressed size for releases published before that
+            // asset existed.
+            let download_bytes = crate::updater::branches::select_platform_asset(&release)
+                .map(|a| a.size)
+                .unwrap_or(0);
+            let installed_bytes = crate::updater::branches::fetch_installed_bytes(&release)
+                .await
+                .unwrap_or_else(|| {
+                    tracing::info!(
+                        "no standalone files.json for this release — estimating install size"
+                    );
+                    crate::updater::plan::estimate_installed_bytes(download_bytes)
+                });
+            let plan = crate::updater::plan::UpdatePlan::game(download_bytes, installed_bytes);
+            // Hand the plan to the UI before any long work starts, so the first
+            // frame already reads "Downloading 1/3  0%" rather than "Idle".
+            let _ = tx_plan.send(InstallStreamEvent::Planned(plan)).await;
+
             crate::updater::branches::download_and_install(
                 channel,
                 release,
                 install_root,
+                installed_bytes,
                 move |progress| {
                     let _ = tx_progress.try_send(InstallStreamEvent::Progress(progress));
                 },
@@ -323,10 +355,24 @@ where
         let _ = tx.send(InstallStreamEvent::Complete(result)).await;
     });
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(move |ev| match ev {
+        InstallStreamEvent::Planned(plan) => Message::UpdatePlanned { channel, plan },
         InstallStreamEvent::Progress(progress) => Message::DownloadProgress { channel, progress },
         InstallStreamEvent::Complete(result) => make_complete(channel, result),
     });
     Task::stream(stream)
+}
+
+/// The install pipeline has sized the job. Seed the bar with its plan.
+pub(crate) fn update_planned(
+    state: &mut AppState,
+    channel: Channel,
+    plan: crate::updater::plan::UpdatePlan,
+) -> Task<Message> {
+    if state.install_in_progress != Some(channel) {
+        return Task::none();
+    }
+    state.active_update = Some(crate::app::ActiveUpdate::starting(plan));
+    Task::none()
 }
 
 pub(crate) fn download_progress(
@@ -340,8 +386,48 @@ pub(crate) fn download_progress(
     if state.install_in_progress != Some(channel) {
         return Task::none();
     }
-    state.download_progress = Some(progress);
+    apply_progress(state, progress);
     Task::none()
+}
+
+/// Fold one pipeline event into the active job's position.
+///
+/// Shared with the launcher self-update, which reports progress through the
+/// same `InstallProgress` shape. The phase is resolved to a step number against
+/// the plan, so the two never disagree about the ordering.
+pub(crate) fn apply_progress(
+    state: &mut AppState,
+    progress: crate::updater::branches::InstallProgress,
+) {
+    let Some(active) = state.active_update.as_mut() else {
+        // A progress event with no plan should not happen — the plan is always
+        // sent first — but dropping it is strictly better than inventing one.
+        tracing::debug!("progress event with no active plan — ignoring");
+        return;
+    };
+    match progress {
+        crate::updater::branches::InstallProgress::Phase {
+            phase,
+            fraction,
+            bytes_now,
+            bytes_total,
+        } => {
+            let Some(index) = active.plan.index_of_phase(phase) else {
+                tracing::warn!(?phase, "phase is not in the active plan — ignoring");
+                return;
+            };
+            active.step = index;
+            active.fraction = fraction;
+            active.bytes_now = bytes_now;
+            active.bytes_total = bytes_total;
+        }
+        crate::updater::branches::InstallProgress::Done => {
+            // Park on the last step, complete. The caller clears `active_update`
+            // once it has applied the result.
+            active.step = active.plan.len().saturating_sub(1);
+            active.fraction = 1.0;
+        }
+    }
 }
 
 pub(crate) fn install_complete(
@@ -350,7 +436,12 @@ pub(crate) fn install_complete(
     result: Result<crate::updater::branches::InstallResult, String>,
 ) -> Task<Message> {
     state.install_in_progress = None;
-    state.download_progress = None;
+    // Only clear the shared bar if it is still ours. The start guards make the
+    // install and self-update jobs mutually exclusive, so this is defence in
+    // depth against a future path that lets them overlap.
+    if !state.self_update_in_flight {
+        state.active_update = None;
+    }
     match result {
         Ok(info) => {
             apply_install_success(state, channel, &info);
@@ -431,6 +522,9 @@ pub(crate) fn repair_confirmed(state: &mut AppState) -> Task<Message> {
         || state.uninstall_in_progress.is_some()
         || state.game_running
         || state.verify_in_progress.is_some()
+        // Same reason as `install_confirmed`: a self-update owns the shared
+        // progress bar and exits the process when it succeeds.
+        || state.self_update_in_flight
     {
         return Task::none();
     }
@@ -475,7 +569,7 @@ pub(crate) fn repair_confirmed(state: &mut AppState) -> Task<Message> {
         }
     };
     state.install_in_progress = Some(channel);
-    state.download_progress = None;
+    state.active_update = None;
     tracing::info!(?channel, %version, "starting repair reinstall");
     let resolve = async move {
         match crate::updater::branches::release_for_version(channel, &target).await? {
@@ -510,7 +604,12 @@ pub(crate) fn repair_complete(
     result: Result<crate::updater::branches::InstallResult, String>,
 ) -> Task<Message> {
     state.install_in_progress = None;
-    state.download_progress = None;
+    // Only clear the shared bar if it is still ours. The start guards make the
+    // install and self-update jobs mutually exclusive, so this is defence in
+    // depth against a future path that lets them overlap.
+    if !state.self_update_in_flight {
+        state.active_update = None;
+    }
     match result {
         Ok(info) => {
             apply_install_success(state, channel, &info);

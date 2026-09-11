@@ -62,6 +62,21 @@ pub enum VerifyOutcome {
 /// exe-exists check when `files.json` is absent (installs packaged before
 /// per-file manifests).
 pub async fn verify_install(install_dir: PathBuf) -> VerifyOutcome {
+    verify_install_with_progress(install_dir, |_, _| {}).await
+}
+
+/// [`verify_install`], reporting how far the deep hash pass has got.
+///
+/// `on_progress` receives `(bytes_hashed_so_far, bytes_total)`, the total taken
+/// from the manifest's own sizes. It fires periodically *through* each file as
+/// well as at every file boundary, because one entry (the `.pck`) is normally
+/// most of the install and boundary-only reporting would leave the bar pinned
+/// near zero for almost the whole pass. The cheap presence/size pass reports
+/// nothing, because it reads no bytes and finishes instantly.
+pub async fn verify_install_with_progress<F>(install_dir: PathBuf, on_progress: F) -> VerifyOutcome
+where
+    F: Fn(u64, u64) + Send + 'static,
+{
     let manifest = match installed_manifest(&install_dir).await {
         Ok(Some(m)) => m,
         Ok(None) => return VerifyOutcome::ManifestMissing,
@@ -69,7 +84,9 @@ pub async fn verify_install(install_dir: PathBuf) -> VerifyOutcome {
     };
 
     match files_manifest(&install_dir).await {
-        Ok(Some(files)) => verify_files(&install_dir, &files, &manifest.version).await,
+        Ok(Some(files)) => {
+            verify_files(&install_dir, &files, &manifest.version, on_progress).await
+        }
         Ok(None) => {
             // Legacy install (no files.json) — fall back to the cheap exe check.
             let exe = install_dir.join(&manifest.executable);
@@ -97,7 +114,15 @@ pub async fn verify_install(install_dir: PathBuf) -> VerifyOutcome {
 /// chunked reads so a multi-hundred-MB `.pck` doesn't stall the async runtime.
 /// Files on disk that aren't in the manifest (e.g. `installed.json`, `saves/`)
 /// are ignored — verify only asserts the *manifest's* files.
-async fn verify_files(install_dir: &Path, files: &FilesManifest, version: &str) -> VerifyOutcome {
+async fn verify_files<F>(
+    install_dir: &Path,
+    files: &FilesManifest,
+    version: &str,
+    on_progress: F,
+) -> VerifyOutcome
+where
+    F: Fn(u64, u64) + Send + 'static,
+{
     /// How many failing relpaths to retain for diagnostics (the full count is
     /// always reported; the sample bounds the log/tooltip size).
     const SAMPLE_MAX: usize = 5;
@@ -129,19 +154,45 @@ async fn verify_files(install_dir: &Path, files: &FilesManifest, version: &str) 
     // Pass 2: sha256. Offloaded to a blocking thread (chunked I/O over GBs).
     let dir = install_dir.to_path_buf();
     let files = files.clone();
+    // Denominator for progress: the manifest's own recorded sizes, which pass 1
+    // has just confirmed match what is on disk.
+    let total_bytes: u64 = files.files.values().map(|e| e.size).sum();
     let corrupted = match tokio::task::spawn_blocking(move || {
         let mut bad: Vec<String> = Vec::new();
+        let mut hashed_bytes: u64 = 0;
+        let mut last_reported: u64 = 0;
         for (rel, entry) in &files.files {
             // Same containment guard as pass 1, applied before hashing.
             if !is_safe_relpath(rel) {
                 bad.push(rel.clone());
                 continue;
             }
-            let hashed = hash_file_blocking(&dir.join(rel));
+            // Report *within* a file, not just between files. A shipped
+            // manifest is only a handful of entries and the `.pck` is almost
+            // all of the bytes, so per-file reporting would leave the Verifying
+            // step pinned near zero for virtually the whole pass and then jump
+            // to done. Throttled by byte interval so a multi-hundred-MB file
+            // yields a readable trickle rather than flooding the bounded
+            // progress channel.
+            let mut file_bytes: u64 = 0;
+            let hashed = hash_file_blocking(&dir.join(rel), |n| {
+                file_bytes += n;
+                let so_far = hashed_bytes + file_bytes;
+                if so_far.saturating_sub(last_reported) >= HASH_PROGRESS_INTERVAL {
+                    last_reported = so_far;
+                    on_progress(so_far, total_bytes);
+                }
+            });
             let ok = matches!(hashed, Ok(ref hex) if hex.eq_ignore_ascii_case(&entry.sha256));
             if !ok {
                 bad.push(rel.clone());
             }
+            // Settle on the manifest's figure at each file boundary, so a short
+            // read or an unreadable file can't leave the running total adrift
+            // from the denominator.
+            hashed_bytes += entry.size;
+            last_reported = hashed_bytes;
+            on_progress(hashed_bytes, total_bytes);
         }
         bad
     })
@@ -168,10 +219,22 @@ async fn verify_files(install_dir: &Path, files: &FilesManifest, version: &str) 
     }
 }
 
+/// Emit at most one progress callback per this many bytes hashed. Chosen so a
+/// ~1 GB `.pck` produces a couple of hundred updates: enough for a bar that
+/// visibly moves, few enough that the bounded progress channel is never the
+/// bottleneck.
+const HASH_PROGRESS_INTERVAL: u64 = 8 * 1024 * 1024;
+
 /// SHA-256 a file with a fixed-size buffer (never reads the whole file into
 /// memory — the `.pck` can be ~1 GB). Returns lowercase hex. Blocking; call
 /// only inside `spawn_blocking`.
-fn hash_file_blocking(path: &Path) -> std::io::Result<String> {
+///
+/// `on_chunk` receives the size of each read as it happens, so a caller can
+/// report progress through a single large file rather than only at its end.
+fn hash_file_blocking(
+    path: &Path,
+    mut on_chunk: impl FnMut(u64),
+) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
     let mut file = std::fs::File::open(path)?;
@@ -183,6 +246,7 @@ fn hash_file_blocking(path: &Path) -> std::io::Result<String> {
             break;
         }
         hasher.update(&buf[..n]);
+        on_chunk(n as u64);
     }
     Ok(format!("{:x}", hasher.finalize()))
 }
@@ -194,6 +258,63 @@ mod tests {
         FileEntry, FilesManifest, InstalledManifest, FILES_MANIFEST_FILENAME, MANIFEST_FILENAME,
     };
     use std::collections::BTreeMap;
+
+    /// The hash pass must report progress *through* a large file, not only when
+    /// it finishes. A manifest is a handful of entries with one dominant file,
+    /// so boundary-only reporting leaves the Verifying step visually stuck.
+    #[tokio::test]
+    async fn hash_progress_reports_within_a_large_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // Comfortably more than one throttle interval, so several intermediate
+        // callbacks are expected before the file-boundary one.
+        let big = vec![7u8; (HASH_PROGRESS_INTERVAL * 3) as usize + 1024];
+        std::fs::write(dir.join("big.pck"), &big).unwrap();
+
+        let installed = InstalledManifest {
+            version: "0.22.0".into(),
+            channel: "dev".into(),
+            installed_at: "2026-09-11T00:00:00Z".into(),
+            executable: "big.pck".into(),
+        };
+        std::fs::write(
+            dir.join(MANIFEST_FILENAME),
+            serde_json::to_vec(&installed).unwrap(),
+        )
+        .unwrap();
+
+        let mut files = BTreeMap::new();
+        files.insert(
+            "big.pck".to_string(),
+            FileEntry {
+                size: big.len() as u64,
+                sha256: sha256_hex(&big),
+            },
+        );
+        std::fs::write(
+            dir.join(FILES_MANIFEST_FILENAME),
+            serde_json::to_vec(&FilesManifest { schema: 1, files }).unwrap(),
+        )
+        .unwrap();
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+        let sink = std::sync::Arc::clone(&seen);
+        let outcome = verify_install_with_progress(dir.to_path_buf(), move |now, _total| {
+            sink.lock().unwrap().push(now);
+        })
+        .await;
+
+        assert!(matches!(outcome, VerifyOutcome::Ok { .. }));
+        let seen = seen.lock().unwrap();
+        assert!(
+            seen.len() > 2,
+            "expected several in-file progress reports, got {seen:?}"
+        );
+        // Monotonic, and settling on the manifest's own total at the end.
+        assert!(seen.windows(2).all(|w| w[1] >= w[0]), "{seen:?}");
+        assert_eq!(*seen.last().unwrap(), big.len() as u64);
+    }
 
     /// Mirror of `hash_file_blocking` for computing the test's expected digests.
     fn sha256_hex(bytes: &[u8]) -> String {
