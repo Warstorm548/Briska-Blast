@@ -103,6 +103,31 @@ The dev flag is the access right to **launch + download + install** the dev bran
 
 The "dev-server unreachable" and "not dev-flagged" cases look identical in the UI (no dev row). The distinction surfaces only in the **Server status** panel of the left rail (see §6), so the dev team can see when their own dev server is down without leaking the existence of the channel to users.
 
+### Remembered channel selection
+
+The launcher remembers the last channel the user picked and comes up on it, rather
+than always starting on Stable. The value lives in `<data_dir>/preferences.json`
+(`launcher/src/preferences.rs`) next to `identity.json`, is read once at boot and
+rewritten on every pick, and is written temp-then-rename like every other file under
+the data root.
+
+**Fallback is Stable, always.** A file that is missing, unreadable, corrupt,
+truncated, or that names something which is not one of this build's channels resolves
+to Stable. `load_selected_channel` returns a bare `Channel` rather than a `Result`
+precisely so no caller can skip that. A file which is *present but unusable* is also
+rewritten clean on the spot, so a crash or a kill during a write self-heals on the
+next launch instead of failing the same way forever.
+
+**Interaction with the dev gate.** Dev is not in `visible_channels` at boot — it
+appears only once the dev server's `/register` reports `dev_flag = true`, which lands
+after the first paint. A remembered Dev therefore starts on Stable and is *parked*
+(`AppState::pending_channel_restore`); the dev handshake applies it if the flag
+confirms, and drops it if the flag is denied or the dev server is unreachable. There
+is a brief visible Stable → Dev switch on each launch as a result. A manual pick at
+any point cancels the park, so a restore can never overrule a choice the user made
+themselves. The restore applies the selection without rewriting the file, since it is
+only echoing back what the file already said.
+
 ### Update banner filtering
 
 The "Updates available: ..." banner lists only channels the user can currently see. An unflagged user with stable + ea installed sees "Updates available: stable, ea" — never "stable, ea, dev". Leaking `dev` here would defeat the visibility gate.

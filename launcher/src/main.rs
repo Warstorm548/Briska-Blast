@@ -15,6 +15,7 @@ mod firewall;
 mod game_launch;
 mod identity;
 mod paths;
+mod preferences;
 mod ratelimit;
 mod rendezvous;
 mod server_api;

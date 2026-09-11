@@ -2,8 +2,9 @@
 //! 401 self-heal re-register), and the first-launch welcome-screen confirm.
 
 use crate::app::{
-    latest_release_tasks, recompute_branch_updates_available, recompute_visible_channels,
-    register_request_for, register_tasks, AppState, CenterView, Message,
+    apply_pending_channel_restore, latest_release_tasks, recompute_branch_updates_available,
+    recompute_visible_channels, register_request_for, register_tasks, AppState, CenterView,
+    Message,
 };
 use crate::channel::Channel;
 use crate::identity::{self, ChannelCreds};
@@ -49,6 +50,10 @@ pub(crate) fn register_done(
                     // release now (boot's fan-out skipped Dev when
                     // visible_channels was Stable+Ea only).
                     recompute_branch_updates_available(state);
+                    // …and this is the moment a remembered Dev selection can
+                    // finally be honoured. Boot parked it because Dev was not
+                    // yet in `visible_channels`.
+                    apply_pending_channel_restore(state);
                     return Task::perform(
                         // Cached: this lands moments after boot's fan-out, so
                         // it reads the snapshot that already covers Dev rather
@@ -68,6 +73,9 @@ pub(crate) fn register_done(
                     // run; rebuild the derived banner.
                     state.available_versions.remove(&Channel::Dev);
                     recompute_branch_updates_available(state);
+                    // Not flagged: a remembered Dev can never apply on this
+                    // launch, so drop it rather than leave it armed.
+                    apply_pending_channel_restore(state);
                 }
             }
         }
@@ -82,6 +90,9 @@ pub(crate) fn register_done(
                 recompute_visible_channels(state);
                 state.available_versions.remove(&Channel::Dev);
                 recompute_branch_updates_available(state);
+                // Same as the unflagged case: the restore can't happen now, so
+                // it must not stay armed for a later handler to trip over.
+                apply_pending_channel_restore(state);
             }
         }
     }
