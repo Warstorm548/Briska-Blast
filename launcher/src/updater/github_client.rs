@@ -66,6 +66,17 @@ pub struct Asset {
     /// the CDN. Counts as one core-API request. (Matches what `self_update`'s own
     /// parser handed us — see installer.rs's asset-download comment.)
     pub url: String,
+    /// Asset size in bytes, as reported by the API. Feeds the download step's
+    /// weight in `updater::plan`, so the progress bar is proportioned from the
+    /// real release rather than a constant.
+    ///
+    /// `default` is load-bearing twice over: the field is absent from every
+    /// `releases-cache.json` written before it existed (a cold start must not
+    /// have to re-fetch 363 KB just to learn sizes), and a hypothetical API
+    /// response without it must not fail the whole parse. `0` is handled — the
+    /// plan degrades to evenly-weighted steps.
+    #[serde(default)]
+    pub size: u64,
 }
 
 /// Why a fetch did not return releases.

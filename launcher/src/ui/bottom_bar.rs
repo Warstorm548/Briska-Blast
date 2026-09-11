@@ -2,11 +2,10 @@
 //! Buttons drop their .on_press when game is running (Iced renders them
 //! non-pressable without a separate "disabled" state).
 
-use crate::app::{AppState, Message};
+use crate::app::{ActiveUpdate, AppState, Message};
 use crate::ui::theme::{self, BAR_HEIGHT, RAIL_WIDTH, ZONE_GAP};
-use crate::updater::branches::InstallProgress;
-use iced::widget::{button, column, container, progress_bar, row, text};
-use iced::{Alignment, Element, Length};
+use iced::widget::{button, container, progress_bar, row, stack, text};
+use iced::{Element, Length};
 
 pub fn view(state: &AppState) -> Element<'_, Message> {
     row![
@@ -91,57 +90,55 @@ fn update_cell(state: &AppState) -> Element<'_, Message> {
 }
 
 fn progress_cell(state: &AppState) -> Element<'_, Message> {
-    // Stage 6: driven from state.download_progress (last InstallProgress
-    // event from the active install pipeline). Renders an idle placeholder
-    // when no install is in flight.
-    let (fraction, label): (f32, String) = match &state.download_progress {
-        Some(InstallProgress::Downloading {
-            fraction,
-            bytes_now,
-            bytes_total,
-        }) => {
-            // When the server omits Content-Length, bytes_total is 0 and
-            // fraction is meaningless. Render an indeterminate bar (0)
-            // and drop the percent / total from the label rather than
-            // showing "0% (… / 0 B)".
-            if *bytes_total > 0 {
-                (
-                    (*fraction).clamp(0.0, 1.0),
-                    format!(
-                        "Downloading \u{2014} {:.0}% ({} / {})",
-                        fraction * 100.0,
-                        format_bytes(*bytes_now),
-                        format_bytes(*bytes_total),
-                    ),
-                )
-            } else {
-                (
-                    0.0,
-                    format!(
-                        "Downloading \u{2014} {} (unknown total)",
-                        format_bytes(*bytes_now)
-                    ),
-                )
-            }
-        }
-        Some(InstallProgress::Extracting) => (1.0, "Extracting\u{2026}".to_string()),
-        Some(InstallProgress::Done) => (1.0, "Done.".to_string()),
+    // Driven entirely by `state.active_update`: the plan decides both the text
+    // and the bar's position, so this function only draws what it is handed.
+    // Covers game installs and the launcher's own self-update alike.
+    let (fraction, label): (f32, String) = match &state.active_update {
+        Some(active) => (active.overall(), progress_label(active)),
         None => (0.0, "Idle".to_string()),
     };
-    container(
-        column![
-            progress_bar(0.0..=1.0, fraction),
-            text(label).size(12),
-        ]
-        .spacing(4)
-        .align_x(Alignment::Center),
-    )
-    .style(theme::bordered)
-    .width(Length::Fill)
-    .height(Length::Fixed(BAR_HEIGHT as f32))
-    .center_y(Length::Fill)
-    .padding(8)
-    .into()
+
+    // Text stacked over the bar rather than under it. The bar's track is light
+    // (see `theme::progress_track`) precisely so this black label stays
+    // readable across the whole fill range.
+    let bar = stack![
+        progress_bar(0.0..=1.0, fraction)
+            .girth(Length::Fixed(theme::PROGRESS_HEIGHT as f32))
+            .style(theme::progress_track),
+        container(text(label).size(13).color(theme::PROGRESS_TEXT))
+            .width(Length::Fill)
+            .height(Length::Fixed(theme::PROGRESS_HEIGHT as f32))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    ];
+
+    container(bar)
+        .style(theme::bordered)
+        .width(Length::Fill)
+        .height(Length::Fixed(BAR_HEIGHT as f32))
+        .center_y(Length::Fill)
+        .padding(8)
+        .into()
+}
+
+/// The bar's caption: the plan's `Phase n/total pct%`, with a byte readout
+/// appended while one is meaningful.
+///
+/// The byte counts are kept from the previous design because they are the only
+/// thing that distinguishes a slow download from a stalled one. They are
+/// dropped, rather than shown as a total of zero, when the server omitted
+/// `Content-Length` or the step has no byte measure.
+fn progress_label(active: &ActiveUpdate) -> String {
+    let base = active.label();
+    if active.bytes_total > 0 {
+        format!(
+            "{base}   {} / {}",
+            format_bytes(active.bytes_now),
+            format_bytes(active.bytes_total)
+        )
+    } else {
+        base
+    }
 }
 
 fn format_bytes(n: u64) -> String {

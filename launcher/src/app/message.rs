@@ -171,8 +171,14 @@ pub enum Message {
         channel: Channel,
         result: Result<crate::updater::branches::InstallResult, String>,
     },
-    /// Per-chunk download / extract progress event from the installer
-    /// pipeline (Stage 6). Drives the bottom-bar progress widget.
+    /// The installer has sized this job and knows its step list. Arrives once,
+    /// before any transfer, so the bar opens on step one instead of "Idle".
+    UpdatePlanned {
+        channel: Channel,
+        plan: crate::updater::plan::UpdatePlan,
+    },
+    /// Per-chunk download / extract / verify progress event from the installer
+    /// pipeline. Drives the bottom-bar progress widget.
     DownloadProgress {
         channel: Channel,
         progress: crate::updater::branches::InstallProgress,

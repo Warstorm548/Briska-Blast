@@ -36,6 +36,10 @@ mod github;
 /// entire bundle is replaced and re-verified instead.
 #[cfg(target_os = "macos")]
 mod macos_bundle;
+/// The step list one update job is made of, weighted by real release bytes.
+/// Drives both the bottom-bar text and the bar's position; the groundwork for
+/// phased and per-component updates.
+pub mod plan;
 /// Owned GitHub Releases list fetch (exposes status + rate-limit headers for the
 /// back-off safety net). Private to `updater`; reachable from `branches::github`
 /// (a descendant module) and `github` (a sibling).

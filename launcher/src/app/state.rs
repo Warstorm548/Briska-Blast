@@ -55,10 +55,13 @@ pub struct AppState {
     /// available + no installed; `Up to date — vX.Y.Z` when no available
     /// but an install is on disk).
     pub available_versions: BTreeMap<Channel, semver::Version>,
-    /// Latest InstallProgress event from the active download / extract.
-    /// Drives the bottom-bar progress widget (Stage 6). `None` between
-    /// installs; cleared on InstallComplete.
-    pub download_progress: Option<crate::updater::branches::InstallProgress>,
+    /// The update currently running, if any, and how far into it we are.
+    /// Drives the bottom-bar progress widget. `None` when idle; cleared when
+    /// the job completes or fails.
+    ///
+    /// Shared by game installs and the launcher's own self-update — one bar
+    /// shows whichever is running, because only one ever can be.
+    pub active_update: Option<ActiveUpdate>,
     /// Last Verify File Integrity outcome per channel (Stage 7). Drives
     /// the inline status cell in Settings → Game Channel Management. Not
     /// persisted — fresh on every launcher launch.
@@ -119,6 +122,45 @@ pub struct AppState {
     /// changelog has no section for the version being installed — which is what
     /// happens when the local changelog copy predates the pending release.
     pub available_notes: BTreeMap<Channel, String>,
+}
+
+/// An update job in flight: what it plans to do, and where it has got to.
+///
+/// The plan is fixed when the job starts (from the release's asset size and its
+/// integrity manifest) and only its *weights* are ever revised, so the step the
+/// user is reading never renumbers underneath them.
+pub struct ActiveUpdate {
+    pub plan: crate::updater::plan::UpdatePlan,
+    /// Index into the plan's steps.
+    pub step: usize,
+    /// Progress within `step` only, `0.0..=1.0`.
+    pub fraction: f32,
+    /// Bytes moved and expected for this step. Both `0` when not meaningful.
+    pub bytes_now: u64,
+    pub bytes_total: u64,
+}
+
+impl ActiveUpdate {
+    /// A job that has not reported anything yet — shown as step one at zero.
+    pub fn starting(plan: crate::updater::plan::UpdatePlan) -> Self {
+        Self {
+            plan,
+            step: 0,
+            fraction: 0.0,
+            bytes_now: 0,
+            bytes_total: 0,
+        }
+    }
+
+    /// Text for the bar: phase, step fraction, and percent within the step.
+    pub fn label(&self) -> String {
+        self.plan.label(self.step, self.fraction)
+    }
+
+    /// The bar's own position across the whole job, `0.0..=1.0`.
+    pub fn overall(&self) -> f32 {
+        self.plan.overall_fraction(self.step, self.fraction)
+    }
 }
 
 /// Result of a manual per-channel update check. The check refreshes
@@ -194,7 +236,7 @@ impl Default for AppState {
             center_view: CenterView::Default,
             install_in_progress: None,
             available_versions: BTreeMap::new(),
-            download_progress: None,
+            active_update: None,
             verify_results: BTreeMap::new(),
             verify_in_progress: None,
             reset_cache_in_progress: None,

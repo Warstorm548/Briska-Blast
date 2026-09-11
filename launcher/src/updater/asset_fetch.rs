@@ -184,6 +184,8 @@ mod tests {
         github_client::Asset {
             name: name.to_string(),
             url: format!("https://example.test/{name}"),
+            // Selection-only test; the size field plays no part in picking.
+            size: 0,
         }
     }
 

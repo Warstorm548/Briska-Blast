@@ -7,9 +7,11 @@
 
 use crate::channel::Channel;
 use crate::updater::branches::github::{GameRelease, ReleaseAsset};
+use crate::updater::plan::Phase;
 use chrono::Utc;
 use futures_util::StreamExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
@@ -23,20 +25,40 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// connection genuinely hangs rather than capping legitimate downloads.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Stream-of-progress emitted by `download_and_install`. The fraction is
-/// 0.0..=1.0; Extracting/Done are discrete states with no fraction. Stage 6
-/// routes these through `Message::DownloadProgress` into the bottom
-/// progress bar widget.
+/// Stream-of-progress emitted by `download_and_install`, routed through
+/// `Message::DownloadProgress` into the bottom progress bar.
+///
+/// Events name their [`Phase`] rather than a step number. The step *number* is a
+/// property of the [`crate::updater::plan::UpdatePlan`] the app built for this
+/// job, and having the installer also count steps would mean two places had to
+/// agree on the same ordering. The app resolves phase → index against the plan
+/// instead (`UpdatePlan::index_of_phase`).
+///
+/// When per-component updates arrive this gains a `component` field and the
+/// lookup becomes `index_of(phase, component)`; nothing else about the shape
+/// has to change.
 #[derive(Debug, Clone)]
 pub enum InstallProgress {
-    Downloading {
+    Phase {
+        phase: Phase,
+        /// Progress within this phase only, `0.0..=1.0`. Resets at each phase
+        /// boundary — the bar's continuity is the plan's job, not this event's.
         fraction: f32,
+        /// Bytes moved and the expected total for this phase. Both `0` when
+        /// unknown (a server that omitted `Content-Length`, or a phase with no
+        /// meaningful byte measure); the UI drops the byte readout rather than
+        /// printing a total of zero.
         bytes_now: u64,
         bytes_total: u64,
     },
-    Extracting,
     Done,
 }
+
+/// How often the extraction poller re-measures the staging tree. Extraction
+/// runs inside an opaque `tar.unpack` / `zip.extract` call with no callback of
+/// its own, so bytes-landed-on-disk is measured from outside instead. Frequent
+/// enough to look live, rare enough that the directory walk is free.
+const EXTRACT_POLL: Duration = Duration::from_millis(200);
 
 /// Successful install summary returned to the app.
 #[derive(Debug, Clone)]
@@ -44,6 +66,81 @@ pub struct InstallResult {
     pub install_dir: PathBuf,
     pub version: String,
     pub executable: String,
+}
+
+/// Suffix of the standalone integrity-manifest asset for this platform.
+///
+/// The same `files.json` also ships *inside* the archive, where `verify` reads
+/// it from. This second, standalone copy exists so the launcher can know the
+/// real uncompressed size of an install **before** starting the download the
+/// number is meant to describe. It is a few kilobytes.
+#[cfg(target_os = "linux")]
+const FILES_MANIFEST_ASSET_SUFFIX: &str = "-linux-files.json";
+#[cfg(target_os = "windows")]
+const FILES_MANIFEST_ASSET_SUFFIX: &str = "-windows-files.json";
+#[cfg(target_os = "macos")]
+const FILES_MANIFEST_ASSET_SUFFIX: &str = "-macos-files.json";
+
+/// Total uncompressed bytes this release installs, from its standalone
+/// `files.json` asset.
+///
+/// `None` when the release predates the standalone manifest, when the fetch
+/// fails, or when the manifest does not parse. Every one of those is a normal,
+/// non-fatal outcome: the caller falls back to estimating from the compressed
+/// size, and the only consequence is a slightly less evenly-paced progress bar.
+/// Nothing here may ever fail an install.
+pub async fn fetch_installed_bytes(release: &GameRelease) -> Option<u64> {
+    let asset = release
+        .assets
+        .iter()
+        .find(|a| a.name.ends_with(FILES_MANIFEST_ASSET_SUFFIX))?;
+
+    // Respect the back-off like any other counted request, but never surface it
+    // as an error — a closed gate just means we estimate instead.
+    if matches!(crate::ratelimit::gate(), crate::ratelimit::Gate::Blocked { .. }) {
+        tracing::debug!("rate-limit gate closed — estimating install size instead");
+        return None;
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent("briskablast-launcher")
+        .connect_timeout(CONNECT_TIMEOUT)
+        // A few KB: a short timeout keeps a hung CDN from delaying the install
+        // it is only meant to describe.
+        .timeout(Duration::from_secs(20))
+        .build()
+        .ok()?;
+
+    let resp = client
+        .get(&asset.download_url)
+        .header(reqwest::header::ACCEPT, "application/octet-stream")
+        .send()
+        .await
+        .ok()?;
+    if let crate::updater::github_client::RateSignal::Limited { reset } =
+        crate::updater::github_client::inspect(resp.status(), resp.headers())
+    {
+        // Still worth recording so the shared back-off learns about it.
+        crate::ratelimit::note_rate_limited(reset);
+        return None;
+    }
+    let body = resp.error_for_status().ok()?.text().await.ok()?;
+
+    let manifest: super::manifest::FilesManifest = serde_json::from_str(&body)
+        .map_err(|e| tracing::debug!(error = %e, "standalone files.json did not parse"))
+        .ok()?;
+    if manifest.schema != super::manifest::FILES_MANIFEST_SCHEMA {
+        tracing::debug!(schema = manifest.schema, "unsupported files.json schema in release asset");
+        return None;
+    }
+    let total: u64 = manifest.files.values().map(|e| e.size).sum();
+    tracing::info!(
+        asset = %asset.name,
+        files = manifest.files.len(),
+        installed_bytes = total,
+        "resolved real install size from the release manifest"
+    );
+    Some(total)
 }
 
 /// Pick the platform-appropriate asset from a release's asset list. The
@@ -76,11 +173,15 @@ pub async fn download_and_install<F>(
     channel: Channel,
     release: GameRelease,
     install_root: PathBuf,
+    expected_installed_bytes: u64,
     on_progress: F,
 ) -> Result<InstallResult, String>
 where
-    F: Fn(InstallProgress) + Send + 'static,
+    F: Fn(InstallProgress) + Send + Sync + 'static,
 {
+    // Shared with the extraction poller, which runs as its own task while the
+    // blocking extract occupies a worker thread.
+    let on_progress = Arc::new(on_progress);
     let asset = select_platform_asset(&release).ok_or_else(|| {
         format!(
             "no platform-matching asset (linux.tar.gz / windows.zip / macos.tar.gz) in release {}",
@@ -110,6 +211,7 @@ where
         &asset_name,
         &asset_url,
         &staging_dir,
+        expected_installed_bytes,
         &on_progress,
     )
     .await
@@ -199,10 +301,11 @@ async fn stage_install<F>(
     asset_name: &str,
     asset_url: &str,
     staging_dir: &Path,
-    on_progress: &F,
+    expected_installed_bytes: u64,
+    on_progress: &Arc<F>,
 ) -> Result<String, String>
 where
-    F: Fn(InstallProgress) + Send + 'static,
+    F: Fn(InstallProgress) + Send + Sync + 'static,
 {
     tokio::fs::create_dir_all(staging_dir)
         .await
@@ -279,7 +382,8 @@ where
         } else {
             0.0
         };
-        on_progress(InstallProgress::Downloading {
+        on_progress(InstallProgress::Phase {
+            phase: Phase::Downloading,
             fraction,
             bytes_now: downloaded,
             bytes_total: total,
@@ -373,16 +477,75 @@ where
         "download complete, magic bytes ok, handing off to extractor"
     );
 
-    on_progress(InstallProgress::Extracting);
+    on_progress(InstallProgress::Phase {
+        phase: Phase::Installing,
+        fraction: 0.0,
+        bytes_now: 0,
+        bytes_total: expected_installed_bytes,
+    });
+
+    // Extraction progress is measured from outside rather than from within.
+    // `tar.unpack` and `zip.extract` are single opaque calls with no callback,
+    // and re-implementing them entry-by-entry to get one would put the macOS
+    // bundle's symlinks and exec bits — which its ad-hoc signature depends on —
+    // at risk for a cosmetic gain. Polling how many bytes have landed in the
+    // staging tree gives the same number without touching the extractor at all,
+    // and the denominator is the manifest's real uncompressed total.
+    let extract_poller = {
+        let cb = Arc::clone(on_progress);
+        let dir = staging_dir.to_path_buf();
+        // The archive is still sitting inside the staging dir while it is being
+        // extracted; counting it would report progress before any file landed.
+        let skip = temp_archive
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(EXTRACT_POLL).await;
+                let dir = dir.clone();
+                let skip = skip.clone();
+                let Ok(written) =
+                    tokio::task::spawn_blocking(move || dir_size_blocking(&dir, &skip)).await
+                else {
+                    return;
+                };
+                let fraction = if expected_installed_bytes > 0 {
+                    (written as f32 / expected_installed_bytes as f32).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                cb(InstallProgress::Phase {
+                    phase: Phase::Installing,
+                    fraction,
+                    bytes_now: written,
+                    bytes_total: expected_installed_bytes,
+                });
+            }
+        })
+    };
 
     let staging_clone = staging_dir.to_path_buf();
     let temp_archive_clone = temp_archive.clone();
     let asset_name_clone = asset_name.to_string();
-    let executable = tokio::task::spawn_blocking(move || {
+    let extracted = tokio::task::spawn_blocking(move || {
         extract_archive_blocking(&temp_archive_clone, &staging_clone, &asset_name_clone)
     })
-    .await
-    .map_err(|e| format!("extract join: {e}"))??;
+    .await;
+
+    // Await the abort rather than just firing it, so the poller is provably
+    // stopped before the next phase begins. A stray late `Installing` event
+    // arriving after `Verifying` had started would make the bar jump backwards.
+    extract_poller.abort();
+    let _ = extract_poller.await;
+
+    let executable = extracted.map_err(|e| format!("extract join: {e}"))??;
+    on_progress(InstallProgress::Phase {
+        phase: Phase::Installing,
+        fraction: 1.0,
+        bytes_now: expected_installed_bytes,
+        bytes_total: expected_installed_bytes,
+    });
 
     if let Err(e) = tokio::fs::remove_file(&temp_archive).await {
         tracing::warn!(error = %e, "failed to remove temp archive (non-fatal)");
@@ -401,7 +564,128 @@ where
         .await
         .map_err(|e| format!("manifest write: {e}"))?;
 
+    verify_staged(staging_dir, expected_installed_bytes, on_progress).await?;
+
     Ok(executable)
+}
+
+/// Hash the staged tree against its own `files.json` before it is swapped in.
+///
+/// Deliberately runs on **staging**, not on the live install. Verifying after
+/// the swap would only tell the user that something broken had already replaced
+/// something that worked, and undoing that needs rollback machinery. Verifying
+/// here means a corrupt download fails the install through the caller's existing
+/// staging-cleanup path, with the previous version still in place and untouched.
+async fn verify_staged<F>(
+    staging_dir: &Path,
+    expected_installed_bytes: u64,
+    on_progress: &Arc<F>,
+) -> Result<(), String>
+where
+    F: Fn(InstallProgress) + Send + Sync + 'static,
+{
+    on_progress(InstallProgress::Phase {
+        phase: Phase::Verifying,
+        fraction: 0.0,
+        bytes_now: 0,
+        bytes_total: expected_installed_bytes,
+    });
+
+    let cb = Arc::clone(on_progress);
+    let outcome = super::verify::verify_install_with_progress(
+        staging_dir.to_path_buf(),
+        move |hashed, total| {
+            let fraction = if total > 0 {
+                (hashed as f32 / total as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            cb(InstallProgress::Phase {
+                phase: Phase::Verifying,
+                fraction,
+                bytes_now: hashed,
+                bytes_total: total,
+            });
+        },
+    )
+    .await;
+
+    match outcome {
+        super::VerifyOutcome::Ok { .. } => {
+            on_progress(InstallProgress::Phase {
+                phase: Phase::Verifying,
+                fraction: 1.0,
+                bytes_now: expected_installed_bytes,
+                bytes_total: expected_installed_bytes,
+            });
+            Ok(())
+        }
+        // A pre-manifest release has no `files.json` to check against. That is
+        // not a failure — it is an old archive — so the install proceeds, just
+        // as `Verify File Integrity` falls back to the exe-exists check for the
+        // same installs.
+        super::VerifyOutcome::ManifestMissing => {
+            tracing::info!("staged install has no files.json — skipping integrity check");
+            Ok(())
+        }
+        other => {
+            tracing::warn!(outcome = ?other, "staged install failed integrity check — aborting");
+            Err(format!(
+                "the downloaded files failed their integrity check ({}). \
+                 Your existing install has not been changed — try the update again.",
+                describe_verify_failure(&other)
+            ))
+        }
+    }
+}
+
+/// One short human phrase for a failed staging verify, for the error the user
+/// reads on the install prompt.
+fn describe_verify_failure(outcome: &super::VerifyOutcome) -> String {
+    match outcome {
+        super::VerifyOutcome::FilesMissing { count, .. } => {
+            format!("{count} file(s) missing from the download")
+        }
+        super::VerifyOutcome::FilesCorrupted { count, .. } => {
+            format!("{count} file(s) did not match their checksum")
+        }
+        super::VerifyOutcome::ExecutableMissing { .. } => {
+            "the game executable was not in the download".to_string()
+        }
+        super::VerifyOutcome::ManifestUnreadable(e) => format!("unreadable manifest: {e}"),
+        super::VerifyOutcome::ManifestMissing => "no manifest".to_string(),
+        super::VerifyOutcome::Ok { .. } => "ok".to_string(),
+    }
+}
+
+/// Total bytes of regular files under `dir`, skipping any top-level entry named
+/// `skip`. Blocking; called from `spawn_blocking`.
+///
+/// Errors are swallowed on purpose: this only feeds a progress percentage, and a
+/// directory being rewritten underneath the walk (which is exactly what is
+/// happening while it runs) must never fail an install.
+fn dir_size_blocking(dir: &Path, skip: &str) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut total = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.file_name().and_then(|n| n.to_str()) == Some(skip) {
+            continue;
+        }
+        // symlink_metadata, so a bundle's internal symlinks are counted as the
+        // few bytes they are rather than double-counting their targets.
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.is_dir() {
+            total += dir_size_blocking(&path, skip);
+        } else if meta.is_file() {
+            total += meta.len();
+        }
+    }
+    total
 }
 
 #[cfg(test)]
@@ -413,6 +697,9 @@ mod tests {
         ReleaseAsset {
             name: name.to_string(),
             download_url: format!("https://example.test/{name}"),
+            // These tests only exercise asset *selection*; size is irrelevant
+            // to which asset wins.
+            size: 0,
         }
     }
 

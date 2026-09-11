@@ -18,6 +18,6 @@ pub use github::{latest_release, release_for_version, GameRelease};
 /// back to the plain versions a channel actually shipped.
 pub(crate) use github::{all_releases, parse_for_channel, TAG_PREFIX as GAME_TAG_PREFIX};
 pub use installer::{
-    download_and_install, installed_manifest, uninstall_install, verify_install, InstallProgress,
-    InstallResult, VerifyOutcome,
+    download_and_install, fetch_installed_bytes, installed_manifest, select_platform_asset,
+    uninstall_install, verify_install, InstallProgress, InstallResult, VerifyOutcome,
 };

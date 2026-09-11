@@ -13,7 +13,7 @@ mod message;
 mod state;
 
 pub use message::{CenterView, Message, SettingsTab};
-pub use state::{AppState, ChannelUpdateStatus};
+pub use state::{ActiveUpdate, AppState, ChannelUpdateStatus};
 
 use handlers::{
     changelog, firewall, identity, install, launcher_update, maintenance, nav, play,
@@ -225,6 +225,9 @@ pub fn update(state: &mut AppState, message: Message) -> Task<Message> {
         Message::PickInstallLocation => install::pick_install_location(state),
         Message::InstallLocationPicked(picked) => install::install_location_picked(state, picked),
         Message::InstallConfirmed => install::install_confirmed(state),
+        Message::UpdatePlanned { channel, plan } => {
+            install::update_planned(state, channel, plan)
+        }
         Message::DownloadProgress { channel, progress } => {
             install::download_progress(state, channel, progress)
         }

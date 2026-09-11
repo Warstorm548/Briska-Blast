@@ -38,6 +38,10 @@ pub struct GameRelease {
 pub struct ReleaseAsset {
     pub name: String,
     pub download_url: String,
+    /// Size in bytes from the releases API. Weights the download step of the
+    /// install plan (`updater::plan`). `0` when the cached release list predates
+    /// the field; the plan handles that by falling back to even step weights.
+    pub size: u64,
 }
 
 /// Fetch the highest-version game release for `channel`. Returns `Ok(None)`
@@ -79,6 +83,7 @@ pub async fn latest_release(
                     .map(|a| ReleaseAsset {
                         name: a.name.clone(),
                         download_url: a.url.clone(),
+                        size: a.size,
                     })
                     .collect(),
             });
@@ -132,6 +137,7 @@ pub async fn release_for_version(
                     .map(|a| ReleaseAsset {
                         name: a.name.clone(),
                         download_url: a.url.clone(),
+                        size: a.size,
                     })
                     .collect(),
             }));

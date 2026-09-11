@@ -62,6 +62,19 @@ pub enum VerifyOutcome {
 /// exe-exists check when `files.json` is absent (installs packaged before
 /// per-file manifests).
 pub async fn verify_install(install_dir: PathBuf) -> VerifyOutcome {
+    verify_install_with_progress(install_dir, |_, _| {}).await
+}
+
+/// [`verify_install`], reporting how far the deep hash pass has got.
+///
+/// `on_progress` receives `(bytes_hashed_so_far, bytes_total)`, both counted
+/// from the manifest's own sizes, and is called once per file. It exists so the
+/// install pipeline can show a moving Verifying step; the cheap presence/size
+/// pass reports nothing because it does no reading and finishes instantly.
+pub async fn verify_install_with_progress<F>(install_dir: PathBuf, on_progress: F) -> VerifyOutcome
+where
+    F: Fn(u64, u64) + Send + 'static,
+{
     let manifest = match installed_manifest(&install_dir).await {
         Ok(Some(m)) => m,
         Ok(None) => return VerifyOutcome::ManifestMissing,
@@ -69,7 +82,9 @@ pub async fn verify_install(install_dir: PathBuf) -> VerifyOutcome {
     };
 
     match files_manifest(&install_dir).await {
-        Ok(Some(files)) => verify_files(&install_dir, &files, &manifest.version).await,
+        Ok(Some(files)) => {
+            verify_files(&install_dir, &files, &manifest.version, on_progress).await
+        }
         Ok(None) => {
             // Legacy install (no files.json) — fall back to the cheap exe check.
             let exe = install_dir.join(&manifest.executable);
@@ -97,7 +112,15 @@ pub async fn verify_install(install_dir: PathBuf) -> VerifyOutcome {
 /// chunked reads so a multi-hundred-MB `.pck` doesn't stall the async runtime.
 /// Files on disk that aren't in the manifest (e.g. `installed.json`, `saves/`)
 /// are ignored — verify only asserts the *manifest's* files.
-async fn verify_files(install_dir: &Path, files: &FilesManifest, version: &str) -> VerifyOutcome {
+async fn verify_files<F>(
+    install_dir: &Path,
+    files: &FilesManifest,
+    version: &str,
+    on_progress: F,
+) -> VerifyOutcome
+where
+    F: Fn(u64, u64) + Send + 'static,
+{
     /// How many failing relpaths to retain for diagnostics (the full count is
     /// always reported; the sample bounds the log/tooltip size).
     const SAMPLE_MAX: usize = 5;
@@ -129,8 +152,12 @@ async fn verify_files(install_dir: &Path, files: &FilesManifest, version: &str) 
     // Pass 2: sha256. Offloaded to a blocking thread (chunked I/O over GBs).
     let dir = install_dir.to_path_buf();
     let files = files.clone();
+    // Denominator for progress: the manifest's own recorded sizes, which pass 1
+    // has just confirmed match what is on disk.
+    let total_bytes: u64 = files.files.values().map(|e| e.size).sum();
     let corrupted = match tokio::task::spawn_blocking(move || {
         let mut bad: Vec<String> = Vec::new();
+        let mut hashed_bytes: u64 = 0;
         for (rel, entry) in &files.files {
             // Same containment guard as pass 1, applied before hashing.
             if !is_safe_relpath(rel) {
@@ -142,6 +169,11 @@ async fn verify_files(install_dir: &Path, files: &FilesManifest, version: &str) 
             if !ok {
                 bad.push(rel.clone());
             }
+            // Per file, not per chunk: a few hundred events over a whole verify
+            // is enough to keep a bar moving, and the `.pck` dominating the
+            // total is exactly the case where per-chunk would flood the channel.
+            hashed_bytes += entry.size;
+            on_progress(hashed_bytes, total_bytes);
         }
         bad
     })
