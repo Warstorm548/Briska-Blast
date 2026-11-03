@@ -356,9 +356,6 @@ async fn validate_id_token(
     id_token: &str,
     expected_nonce: &str,
 ) -> Result<IdClaims, String> {
-    let header = decode_header(id_token).map_err(|e| format!("bad header: {e}"))?;
-    let kid = header.kid.ok_or("id_token missing kid")?;
-
     let jwks: JwkSet = client()
         .get(&disc.jwks_uri)
         .send()
@@ -367,12 +364,33 @@ async fn validate_id_token(
         .json()
         .await
         .map_err(|e| format!("bad jwks: {e}"))?;
+    verify_id_token(
+        &jwks,
+        id_token,
+        state.config.oidc_client_id.as_str(),
+        state.config.oidc_issuer_url.trim_end_matches('/'),
+        expected_nonce,
+    )
+}
+
+/// The offline half of [`validate_id_token`]: everything after the JWKS fetch.
+/// Split out so the signature / claim / nonce checks are unit-testable without
+/// a live Pocket ID.
+fn verify_id_token(
+    jwks: &JwkSet,
+    id_token: &str,
+    client_id: &str,
+    issuer: &str,
+    expected_nonce: &str,
+) -> Result<IdClaims, String> {
+    let header = decode_header(id_token).map_err(|e| format!("bad header: {e}"))?;
+    let kid = header.kid.ok_or("id_token missing kid")?;
     let jwk = jwks.find(&kid).ok_or("no jwk matches id_token kid")?;
     let key = DecodingKey::from_jwk(jwk).map_err(|e| format!("bad jwk: {e}"))?;
 
     let mut validation = Validation::new(header.alg);
-    validation.set_audience(&[state.config.oidc_client_id.as_str()]);
-    validation.set_issuer(&[state.config.oidc_issuer_url.trim_end_matches('/')]);
+    validation.set_audience(&[client_id]);
+    validation.set_issuer(&[issuer]);
 
     let data =
         decode::<IdClaims>(id_token, &key, &validation).map_err(|e| format!("verify error: {e}"))?;
@@ -380,5 +398,132 @@ async fn validate_id_token(
     match &data.claims.nonce {
         Some(n) if n == expected_nonce => Ok(data.claims),
         _ => Err("nonce mismatch".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Offline id_token verification tests. The RSA key below is a throwaway
+    //! generated solely for these tests — it signs nothing outside them.
+    use super::*;
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    use serde_json::{json, Value};
+
+    const TEST_KEY_PEM: &str = include_str!("testdata/oidc_test_rsa.pem");
+    const TEST_N: &str = "pFQI4AGtP7hjZ0w8PAdMNs5pgq-OGKePOwdOT8LI3ukGLw1O0rQBA0BHaSkgRLd_cBcssKZrkvXhenMVR8_bD7hLcg8mo47HZwKNt0DV-AryCXXr4G_KN3LaoYw91c41Ga23TpBZ3glHUzAv0Bz65gWGe0qwKJ0MmFlRQI4k4hQbNheFoQmCQTa98R5cBWgtqqx-CA7WthnKgHMPE_PoFG10mHL1ki9Nz_pYM1zptXNy-1-7aGVlvsrKjDXAxli7K1bbLcagOzW4Von_c_-9fNnCD4JK9wCVborqxP0lKm2Uw8dXyOyVgkTGtOmBb4RBLcpSZrkfdywUR0K6lNHvnQ";
+    const KID: &str = "test-kid";
+    const ISS: &str = "https://id.example.test";
+    const AUD: &str = "briska-admin";
+    const NONCE: &str = "n-123";
+
+    fn jwks() -> JwkSet {
+        serde_json::from_value(json!({ "keys": [{
+            "kty": "RSA", "use": "sig", "alg": "RS256", "kid": KID,
+            "n": TEST_N, "e": "AQAB"
+        }]}))
+        .unwrap()
+    }
+
+    fn now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    fn good_claims() -> Value {
+        json!({
+            "sub": "user-1", "iss": ISS, "aud": AUD,
+            "exp": now() + 300, "iat": now(),
+            "nonce": NONCE, "groups": ["admins"], "preferred_username": "alice"
+        })
+    }
+
+    fn sign(claims: &Value, kid: Option<&str>) -> String {
+        let mut h = Header::new(Algorithm::RS256);
+        h.kid = kid.map(str::to_string);
+        encode(&h, claims, &EncodingKey::from_rsa_pem(TEST_KEY_PEM.as_bytes()).unwrap()).unwrap()
+    }
+
+    fn verify(token: &str) -> Result<IdClaims, String> {
+        verify_id_token(&jwks(), token, AUD, ISS, NONCE)
+    }
+
+    #[test]
+    fn valid_token_verifies_and_carries_claims() {
+        let c = verify(&sign(&good_claims(), Some(KID))).expect("valid token");
+        assert_eq!(c.sub, "user-1");
+        assert_eq!(c.groups, vec!["admins".to_string()]);
+        assert_eq!(c.preferred_username.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn wrong_nonce_is_rejected() {
+        let mut c = good_claims();
+        c["nonce"] = json!("other");
+        assert_eq!(verify(&sign(&c, Some(KID))).err().as_deref(), Some("nonce mismatch"));
+    }
+
+    #[test]
+    fn expired_token_is_rejected() {
+        let mut c = good_claims();
+        c["exp"] = json!(now() - 3600);
+        assert!(verify(&sign(&c, Some(KID))).is_err());
+    }
+
+    #[test]
+    fn wrong_audience_is_rejected() {
+        let mut c = good_claims();
+        c["aud"] = json!("someone-else");
+        assert!(verify(&sign(&c, Some(KID))).is_err());
+    }
+
+    #[test]
+    fn wrong_issuer_is_rejected() {
+        let mut c = good_claims();
+        c["iss"] = json!("https://evil.example.test");
+        assert!(verify(&sign(&c, Some(KID))).is_err());
+    }
+
+    #[test]
+    fn missing_or_unknown_kid_is_rejected() {
+        assert!(verify(&sign(&good_claims(), None)).is_err());
+        assert!(verify(&sign(&good_claims(), Some("other-kid"))).is_err());
+    }
+
+    #[test]
+    fn tampered_payload_fails_signature() {
+        let token = sign(&good_claims(), Some(KID));
+        let mut parts: Vec<&str> = token.split('.').collect();
+        let mut forged = good_claims();
+        forged["sub"] = json!("attacker");
+        let forged_b64 = base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            serde_json::to_vec(&forged).unwrap(),
+        );
+        parts[1] = &forged_b64;
+        assert!(verify(&parts.join(".")).is_err());
+    }
+
+    #[test]
+    fn hs256_header_against_rsa_jwk_is_rejected() {
+        // Algorithm-confusion: an attacker picks HS256 and signs with the
+        // public modulus as the HMAC secret.
+        let mut h = Header::new(Algorithm::HS256);
+        h.kid = Some(KID.into());
+        let token = encode(&h, &good_claims(), &EncodingKey::from_secret(TEST_N.as_bytes())).unwrap();
+        assert!(verify(&token).is_err());
+    }
+
+    /// Guard for Dependabot #13/#14 (jsonwebtoken < 10.3): a claim of the wrong
+    /// JSON type was treated as "not present", skipping its check unless the
+    /// claim was also in `required_spec_claims`. `exp` is required by default,
+    /// so this config was not exposed even on 9.x (this test passes there too);
+    /// it pins that an expired token can never slip through as a string.
+    #[test]
+    fn exp_with_wrong_json_type_is_rejected() {
+        let mut c = good_claims();
+        c["exp"] = json!("1");
+        assert!(verify(&sign(&c, Some(KID))).is_err());
     }
 }
