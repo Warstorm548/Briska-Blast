@@ -5,13 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [0.23.1] — 2026-11-02
 
-**Game installs and launcher updates now unpack zip archives with a patched zip
-library, closing three reported vulnerabilities.**
+**Security patch: game installs and launcher updates now unpack zip archives with
+a patched zip library, and the TLS stack is updated. No visible change.**
 
 ### Security
 
+- **rustls 0.23.40 → 0.23.46.** This is the TLS stack for every HTTPS call the
+  launcher makes (GitHub release downloads, update checks, `/register`). Fixes
+  Dependabot #3–#6; see the server 0.36.2 entry for details.
 - **Zip extraction upgraded from `zip` 2.4 to 9.2.** Fixes Dependabot alerts
   #10 (critical — a crafted archive whose two copies of an entry's header disagree
   could slip files past checks and overwrite arbitrary paths), #11 (high —

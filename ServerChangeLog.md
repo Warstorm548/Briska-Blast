@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.36.2] — 2026-11-02
+
+**Security patch: TLS and dependency fixes. No behaviour or protocol change.**
+
+### Security
+
+- **rustls 0.23.40 → 0.23.46** (with rustls-webpki 0.103.13 → 0.103.16). This is
+  the TLS stack behind the server's outbound HTTPS calls (GitHub update check,
+  OIDC). Fixes Dependabot #3 (TLS 1.3 handshake messages accepted across
+  encryption-level boundaries), #4 (brotli certificate decompression could
+  allocate up to 1 GiB before authentication), #5 (a session's `Debug` output
+  exposed TLS master secrets and resumption PSKs) and #6 (an unauthenticated
+  ServerHello could make later handshakes offer only a classical X25519 share).
+- **serde_with 3.20.0 → 3.21.0** (via bollard, the Docker client used by the
+  admin Logs tab). Fixes Dependabot #2, a panic when serializing an empty
+  `KeyValueMap` entry.
+- **quinn-proto 0.11.14 → 0.11.15** in the lockfile, closing Dependabot #1. It
+  is only reachable through reqwest's optional HTTP/3 support, which is not
+  enabled, so no running code changes.
+
+**No `min_game_version` / `min_launcher_version` change.** Wire behaviour is
+identical, so every current client and launcher interoperates.
+
+---
+
 ## [0.36.1] — 2026-09-08
 
 Picks up shared 0.7.1: the Full Barrier's default duration drops from **30s to 5s**.

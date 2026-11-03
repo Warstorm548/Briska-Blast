@@ -2333,7 +2333,7 @@ dependencies = [
 
 [[package]]
 name = "launcher"
-version = "0.23.0"
+version = "0.23.1"
 dependencies = [
  "chrono",
  "directories",
@@ -4095,7 +4095,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.36.1"
+version = "0.36.2"
 dependencies = [
  "axum",
  "base64",
