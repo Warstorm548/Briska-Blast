@@ -125,7 +125,7 @@ where
     // puts the new one in its place, leaving a `.__relocated__.exe` that
     // `cleanup_stale_update_artifacts` mops up on the next launch — which is
     // why the relaunched process must wait for this one to exit first.
-    tokio::task::spawn_blocking(move || self_update::self_replace::self_replace(&new_exe))
+    tokio::task::spawn_blocking(move || self_replace::self_replace(&new_exe))
         .await
         .map_err(|e| format!("self-replace join: {e}"))?
         .map_err(|e| format!("replace running executable: {e}"))?;
