@@ -124,4 +124,79 @@ mod tests {
         std::fs::write(tmp.path().join("BriskaBlast.x86_64"), b"elf").unwrap();
         assert!(find_app_executable(tmp.path()).is_none());
     }
+
+    /// Build a deflate-compressed zip at `path` from `(entry_name, bytes)` pairs.
+    fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        use std::io::Write;
+        let f = std::fs::File::create(path).unwrap();
+        let mut w = zip::ZipWriter::new(f);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, bytes) in entries {
+            w.start_file(*name, opts).unwrap();
+            w.write_all(bytes).unwrap();
+        }
+        w.finish().unwrap();
+    }
+
+    /// Windows game-files path: a deflated .zip wrapping everything in one
+    /// top-level dir (the Godot export quirk) extracts and resolves the exe.
+    /// Regression cover for the zip 2 → 9 bump (Dependabot #10–#12).
+    #[test]
+    fn zip_archive_extracts_and_resolves_nested_exe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = tmp.path().join("game.zip");
+        write_zip(
+            &archive,
+            &[
+                ("BriskaBlast/BriskaBlast.exe", b"MZ-fake-exe"),
+                ("BriskaBlast/BriskaBlast.pck", b"pck-bytes"),
+            ],
+        );
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        let rel = extract_archive_blocking(&archive, &dest, "game-windows.zip").unwrap();
+        assert_eq!(Path::new(&rel), Path::new("BriskaBlast").join("BriskaBlast.exe"));
+        assert_eq!(std::fs::read(dest.join(&rel)).unwrap(), b"MZ-fake-exe");
+        assert_eq!(
+            std::fs::read(dest.join("BriskaBlast").join("BriskaBlast.pck")).unwrap(),
+            b"pck-bytes"
+        );
+    }
+
+    /// A zip whose entry tries to escape the install dir via `..` must never
+    /// write outside `dest`, whatever the extractor decides to do with it.
+    #[test]
+    fn zip_archive_cannot_write_outside_dest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = tmp.path().join("evil.zip");
+        write_zip(
+            &archive,
+            &[
+                ("../escaped.txt", b"pwned"),
+                ("BriskaBlast.exe", b"MZ"),
+            ],
+        );
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        let _ = extract_archive_blocking(&archive, &dest, "evil.zip");
+        assert!(
+            !tmp.path().join("escaped.txt").exists(),
+            "zip entry escaped the install directory"
+        );
+    }
+
+    #[test]
+    fn zip_archive_without_exe_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = tmp.path().join("noexe.zip");
+        write_zip(&archive, &[("readme.txt", b"hi")]);
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        let err = extract_archive_blocking(&archive, &dest, "noexe.zip").unwrap_err();
+        assert!(err.contains("BriskaBlast.exe"), "unexpected error: {err}");
+    }
 }

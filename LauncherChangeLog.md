@@ -5,6 +5,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+**Game installs and launcher updates now unpack zip archives with a patched zip
+library, closing three reported vulnerabilities.**
+
+### Security
+
+- **Zip extraction upgraded from `zip` 2.4 to 9.2.** Fixes Dependabot alerts
+  #10 (critical — a crafted archive whose two copies of an entry's header disagree
+  could slip files past checks and overwrite arbitrary paths), #11 (high —
+  unbounded symlink targets could crash or exhaust memory during extraction) and
+  #12 (medium — AES-encrypted entries could pass their integrity check on a
+  truncated stream). This is the code path that unpacks the Windows game files and
+  the Windows launcher self-update.
+
+### Changed
+
+- **`self_update` dependency removed.** The launcher already did its own download
+  and extraction and only used `self_update` for the final swap of the running
+  executable, which that crate delegated to `self-replace` anyway. Depending on
+  `self-replace` directly drops the second, vulnerable copy of `zip` it pulled in,
+  along with 17 other crates the launcher never used. Self-update behaves exactly
+  as before.
+
+### Tests
+
+- Zip extraction is now covered: a Windows-style game archive wrapped in one
+  top-level folder extracts and resolves its `.exe`, an entry using `../` cannot
+  write outside the install folder, and an archive with no executable is an error.
+
+---
+
 ## [0.23.0] — 2026-09-11
 
 **The launcher now starts on the channel you last played, instead of dropping you

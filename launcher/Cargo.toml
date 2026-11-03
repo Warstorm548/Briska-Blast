@@ -20,12 +20,12 @@ tracing            = "0.1"
 tracing-subscriber = { version = "0.3",  features = ["env-filter"] }
 dotenvy            = "0.15"
 shared             = { path = "../shared" }
-# Self-update: rename-trick binary swap via GitHub Releases. rustls keeps us
-# off the OpenSSL build path on Linux. self_update transitively pulls reqwest.
-# tar features: the Linux/macOS self-update assets are .tar.gz — without
-# archive-tar + compression-flate2 the swap fails at extraction on both
-# (the original "self-update broken off-Windows" bug). Windows stays on zip.
-self_update        = { version = "0.41", default-features = false, features = ["rustls", "compression-zip-deflate", "archive-zip", "archive-tar", "compression-flate2"] }
+# Self-update: rename-trick binary swap of the running executable (see
+# updater/binary_swap.rs). Download/extract is done in-house; only the swap
+# itself comes from this crate. Previously pulled in via `self_update`'s
+# re-export, which was dropped because it pinned the vulnerable zip 2.x
+# (GHSA: zip cloaking / symlink / AES HMAC — Dependabot #10–#12).
+self-replace       = "1"
 # Direct HTTP client for /register and /me/username, and for streaming
 # downloads of per-channel game-files archives from GitHub Releases.
 # `stream` feature lets the downloader emit chunked progress updates so
@@ -48,7 +48,8 @@ tokio-stream       = "0.1"
 open               = "5"
 tar                = "0.4"
 flate2             = "1"
-zip                = { version = "2", default-features = false, features = ["deflate"] }
+# >= 9.0.5 required: earlier versions are affected by Dependabot alerts #10–#12.
+zip                = { version = "9.0.5", default-features = false, features = ["deflate"] }
 rfd                = "0.15"
 chrono             = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 # Random handoff-file names for the Play → spawn-game flow (Stage 5).
