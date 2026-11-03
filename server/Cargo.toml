@@ -20,7 +20,11 @@ hmac            = "0.12"
 hex             = "0.4"
 regex           = "1"
 base64          = "0.22"
-jsonwebtoken    = "9"
+# OIDC id_token verification (admin/oidc.rs). >= 10.3 required for the
+# claim type-confusion fix (Dependabot #13/#14). 10.x makes the crypto backend
+# explicit: aws_lc_rs, not rust_crypto, because rust_crypto pulls the `rsa`
+# crate and its unpatched Marvin timing advisory.
+jsonwebtoken    = { version = "10.3", features = ["aws_lc_rs"] }
 tower           = "0.4"
 tower-http      = { version = "0.5", features = ["trace"] }
 tracing         = "0.1"

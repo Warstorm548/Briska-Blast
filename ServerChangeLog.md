@@ -24,6 +24,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **quinn-proto 0.11.14 → 0.11.15** in the lockfile, closing Dependabot #1. It
   is only reachable through reqwest's optional HTTP/3 support, which is not
   enabled, so no running code changes.
+- **jsonwebtoken 9.3.1 → 10.4.0** (admin OIDC sign-in), closing Dependabot
+  #13/#14: a claim of the wrong JSON type was treated as absent, skipping its
+  check unless the claim was also required. The admin sign-in was not exposed,
+  because `exp` is required by default and `nbf` is not checked, but the upgrade
+  removes the flaw. 10.x requires choosing a crypto backend: it uses `aws_lc_rs`,
+  not `rust_crypto`, because `rust_crypto` pulls in the `rsa` crate and its
+  unpatched Marvin timing advisory.
+
+### Tests
+
+- id_token verification is now unit-tested offline: the checks after fetching
+  the signing keys (JWKS) are split into `verify_id_token`, covering a valid
+  token plus rejection of a wrong nonce, expiry, audience or issuer, a missing
+  or unknown `kid`, a tampered payload, HS256-vs-RSA algorithm confusion, and
+  `exp` sent as a string.
 
 **No `min_game_version` / `min_launcher_version` change.** Wire behaviour is
 identical, so every current client and launcher interoperates.
